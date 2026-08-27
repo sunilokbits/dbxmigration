@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Token Optimisation Architecture — DBX Migration Studio (Genie Chat + Claude)</title>
+    <style>
+        :root {
+            --bg: #0F172A;
+            --surface: #1E293B;
+            --surface2: #334155;
+            --accent: #6366F1;
+            --accent-light: #A5B4FC;
+            --text: #E2E8F0;
+            --text-muted: #94A3B8;
+            --success: #34D399;
+            --warn: #F59E0B;
+            --danger: #F87171;
+            --border: #475569;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.7;
+            padding: 40px 20px;
+        }
+        .container { max-width: 1100px; margin: 0 auto; }
+        h1 {
+            font-size: 2.2rem;
+            background: linear-gradient(135deg, var(--accent-light), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+        .subtitle { color: var(--text-muted); font-size: 1rem; margin-bottom: 40px; }
+        h2 {
+            font-size: 1.4rem;
+            color: var(--accent-light);
+            margin: 40px 0 16px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--surface2);
+        }
+        h3 { font-size: 1.1rem; color: var(--text); margin: 24px 0 12px; }
+        p, li { color: var(--text-muted); font-size: 0.95rem; }
+        p { margin-bottom: 12px; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; }
+        li { margin-bottom: 8px; }
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 24px;
+            margin: 16px 0;
+        }
+        .card-title {
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--accent-light);
+            margin-bottom: 12px;
+        }
+        .metric {
+            display: inline-block;
+            background: var(--surface2);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-right: 8px;
+            margin-bottom: 6px;
+        }
+        .metric.save { color: var(--success); border: 1px solid var(--success); }
+        .metric.cost { color: var(--warn); border: 1px solid var(--warn); }
+        .metric.risk { color: var(--danger); border: 1px solid var(--danger); }
+        code {
+            background: var(--surface2);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+        }
+        pre {
+            background: #0B1120;
+            border: 1px solid var(--surface2);
+            border-radius: 8px;
+            padding: 16px;
+            overflow-x: auto;
+            font-size: 0.82rem;
+            line-height: 1.6;
+            margin: 12px 0;
+        }
+        pre code { background: none; padding: 0; }
+        .arch-diagram {
+            background: var(--surface);
+            border: 1px solid var(--accent);
+            border-radius: 10px;
+            padding: 24px;
+            font-family: monospace;
+            font-size: 0.8rem;
+            line-height: 1.8;
+            color: var(--accent-light);
+            overflow-x: auto;
+            white-space: pre;
+        }
+        .phase {
+            display: flex;
+            align-items: flex-start;
+            gap: 16px;
+            margin: 16px 0;
+        }
+        .phase-num {
+            flex-shrink: 0;
+            width: 32px;
+            height: 32px;
+            background: var(--accent);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 0.85rem;
+        }
+        .phase-content { flex: 1; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 16px 0;
+            font-size: 0.85rem;
+        }
+        th {
+            background: var(--surface2);
+            color: var(--accent-light);
+            padding: 10px 14px;
+            text-align: left;
+            border-bottom: 2px solid var(--accent);
+        }
+        td {
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--surface2);
+            color: var(--text-muted);
+        }
+        tr:hover td { background: var(--surface); }
+        .tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .tag-high { background: #991B1B; color: #FCA5A5; }
+        .tag-medium { background: #92400E; color: #FCD34D; }
+        .tag-low { background: #065F46; color: #6EE7B7; }
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin: 20px 0;
+        }
+        .summary-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            text-align: center;
+        }
+        .summary-card .value {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: var(--success);
+        }
+        .summary-card .label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+
+<h1>Token Optimisation Architecture</h1>
+<p class="subtitle">DBX Migration Studio — Genie Chat + Claude FM Endpoint Integration</p>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>1. Executive Summary</h2>
+
+<p>This document outlines a comprehensive architecture to <strong>minimise token consumption</strong> when routing user queries through Claude (via Databricks Model Serving) in the Genie Chat panel of DBX Migration Studio. The goal is to deliver Playground-quality responses while reducing cost by <strong>60-80%</strong>.</p>
+
+<div class="summary-grid">
+    <div class="summary-card">
+        <div class="value">~70%</div>
+        <div class="label">Token Reduction Target</div>
+    </div>
+    <div class="summary-card">
+        <div class="value">3-Layer</div>
+        <div class="label">Routing Architecture</div>
+    </div>
+    <div class="summary-card">
+        <div class="value">&lt;2s</div>
+        <div class="label">P95 Response Latency</div>
+    </div>
+    <div class="summary-card">
+        <div class="value">Zero</div>
+        <div class="label">Quality Degradation</div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>2. Current State Analysis</h2>
+
+<div class="card">
+    <div class="card-title">Current Token Usage per FM Chat Request</div>
+    <table>
+        <tr><th>Component</th><th>Tokens (approx)</th><th>% of Total</th><th>Optimisable?</th></tr>
+        <tr><td>System Prompt (hardcoded schema)</td><td>~1,200</td><td>40%</td><td><span class="tag tag-high">HIGH</span></td></tr>
+        <tr><td>Conversation History (last 10 msgs)</td><td>~800</td><td>27%</td><td><span class="tag tag-medium">MEDIUM</span></td></tr>
+        <tr><td>User Message</td><td>~50</td><td>2%</td><td><span class="tag tag-low">LOW</span></td></tr>
+        <tr><td>Output (Claude response)</td><td>~900</td><td>31%</td><td><span class="tag tag-medium">MEDIUM</span></td></tr>
+        <tr><td><strong>Total per request</strong></td><td><strong>~3,000</strong></td><td><strong>100%</strong></td><td></td></tr>
+    </table>
+    <p><span class="metric cost">Cost: ~$0.045/request (Opus)</span> <span class="metric cost">$0.009/request (Haiku)</span></p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>3. Target Architecture — 3-Layer Intelligent Routing</h2>
+
+<div class="arch-diagram">
+┌─────────────────────────────────────────────────────────────────────┐
+│                     USER QUESTION (Genie Chat)                       │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │
+                    ┌───────────▼───────────┐
+                    │   LAYER 1: CLASSIFIER  │  (~50 tokens, Haiku)
+                    │   ┌─────────────────┐  │
+                    │   │ data_query?      │  │
+                    │   │ how_to?          │  │
+                    │   │ general_chat?    │  │
+                    │   └────────┬────────┘  │
+                    └────────────┼────────────┘
+             ┌───────────────────┼───────────────────┐
+             ▼                   ▼                   ▼
+┌────────────────────┐ ┌─────────────────┐ ┌─────────────────────┐
+│ LAYER 2A: GENIE    │ │ LAYER 2B: CLAUDE│ │ LAYER 2C: FAQ CACHE │
+│ SPACE API          │ │ (Slim Context)  │ │ (Zero Tokens)       │
+│                    │ │                 │ │                     │
+│ • SQL generation   │ │ • How-to answers│ │ • Instant response  │
+│ • Table detection  │ │ • Explanations  │ │ • No API call       │
+│ • Query execution  │ │ • Migration help│ │ • Pattern match     │
+│                    │ │                 │ │                     │
+│ Cost: 0 tokens     │ │ Cost: ~800 tkns │ │ Cost: 0 tokens      │
+└────────┬───────────┘ └────────┬────────┘ └──────────┬──────────┘
+         │                      │                     │
+         └──────────────────────┼─────────────────────┘
+                                ▼
+                    ┌────────────────────────┐
+                    │   LAYER 3: RESPONSE    │
+                    │   FORMATTER + CACHE    │
+                    │                        │
+                    │ • Render SQL blocks     │
+                    │ • Add Run buttons       │
+                    │ • Cache for repeats     │
+                    │ • Stream to frontend    │
+                    └────────────────────────┘
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>4. Implementation Plan — Phase by Phase</h2>
+
+<!-- Phase 1 -->
+<div class="card">
+    <div class="phase">
+        <div class="phase-num">1</div>
+        <div class="phase-content">
+            <h3>Phase 1: Intent Classification (Token Gate)</h3>
+            <p><strong>Goal:</strong> Avoid sending expensive Claude Opus calls for questions that can be answered for free (Genie Space or FAQ cache).</p>
+            <span class="metric save">Saves: 40-60% of requests from hitting Opus</span>
+        </div>
+    </div>
+
+    <h3>Implementation</h3>
+    <pre><code># intent_classifier.py — Lightweight classification (runs BEFORE any LLM call)
+
+import re
+
+# Pattern-based classifier (zero tokens)
+_DATA_PATTERNS = [
+    r'\b(show|list|count|how many|get|find|select|query|fetch)\b',
+    r'\b(table|column|row|record|data|job|pipeline|run|migration)\b',
+    r'\b(last|recent|today|yesterday|this week|failed|success)\b',
+    r'\b(average|sum|total|max|min|group by|order by)\b',
+]
+
+_HOWTO_PATTERNS = [
+    r'\b(how to|how do i|what is|explain|help|guide|steps|tutorial)\b',
+    r'\b(configure|setup|install|create|build|deploy|connect)\b',
+]
+
+def classify_intent(question: str) -> str:
+    """Classify user intent without any LLM call.
+    Returns: 'data_query' | 'how_to' | 'general'
+    """
+    q = question.lower().strip()
+
+    # Check FAQ cache first (instant, zero tokens)
+    if _matches_faq(q):
+        return 'faq'
+
+    # Score data-query likelihood
+    data_score = sum(1 for p in _DATA_PATTERNS if re.search(p, q))
+    howto_score = sum(1 for p in _HOWTO_PATTERNS if re.search(p, q))
+
+    if data_score >= 2:
+        return 'data_query'  # Route to Genie Space (0 tokens)
+    elif howto_score >= 2:
+        return 'how_to'      # Route to Claude with SLIM context
+    else:
+        return 'general'     # Route to Claude with FULL context
+
+def _matches_faq(q: str) -> bool:
+    """Check if question matches pre-cached FAQ patterns."""
+    # Reuse existing FAQ from genie.py
+    from routes.genie import _check_faq
+    return _check_faq(q) is not None</code></pre>
+
+    <h3>Token Savings</h3>
+    <table>
+        <tr><th>Query Type</th><th>% of Traffic</th><th>Current Cost</th><th>After Phase 1</th><th>Saving</th></tr>
+        <tr><td>Data queries (SQL)</td><td>50%</td><td>3,000 tkns</td><td>0 tkns (Genie)</td><td><strong>100%</strong></td></tr>
+        <tr><td>FAQ / App questions</td><td>20%</td><td>3,000 tkns</td><td>0 tkns (cache)</td><td><strong>100%</strong></td></tr>
+        <tr><td>How-to / Docs</td><td>20%</td><td>3,000 tkns</td><td>800 tkns (slim)</td><td><strong>73%</strong></td></tr>
+        <tr><td>General chat</td><td>10%</td><td>3,000 tkns</td><td>2,000 tkns</td><td><strong>33%</strong></td></tr>
+    </table>
+</div>
+
+<!-- Phase 2 -->
+<div class="card">
+    <div class="phase">
+        <div class="phase-num">2</div>
+        <div class="phase-content">
+            <h3>Phase 2: Context Compression — Tiered System Prompts</h3>
+            <p><strong>Goal:</strong> Reduce the 1,200-token system prompt to the minimum needed per query type.</p>
+            <span class="metric save">Saves: 400-1,000 tokens per Claude call</span>
+        </div>
+    </div>
+
+    <h3>Tiered Prompt Strategy</h3>
+    <pre><code># Tier 1: MINIMAL (for how-to questions) — ~200 tokens
+_PROMPT_MINIMAL = (
+    "You are the AI assistant for DBX Migration Studio. "
+    "Answer concisely about SQL-to-Databricks migration workflows."
+)
+
+# Tier 2: DATA-AWARE (for data questions that Genie rejected) — ~600 tokens
+_PROMPT_DATA = (
+    "You are the AI assistant for DBX Migration Studio.\n"
+    "Key tables: admin_source.configtables.wf_run_history (job_name, status, started_at), "
+    "admin_source.configtables.wf_job_metadata (job_name, last_status, enabled).\n"
+    "Always use 3-part names. Wrap SQL in ```sql blocks."
+)
+
+# Tier 3: FULL (only for complex multi-table queries) — ~1,200 tokens
+_PROMPT_FULL = _sys  # Current hardcoded schema (used as last resort)</code></pre>
+
+    <h3>Selection Logic</h3>
+    <pre><code>def _select_prompt(intent: str, genie_failed: bool) -> str:
+    if intent == 'how_to':
+        return _PROMPT_MINIMAL          # 200 tokens
+    elif intent == 'data_query' and genie_failed:
+        return _PROMPT_DATA             # 600 tokens
+    else:
+        return _PROMPT_FULL             # 1,200 tokens (rare)</code></pre>
+</div>
+
+<!-- Phase 3 -->
+<div class="card">
+    <div class="phase">
+        <div class="phase-num">3</div>
+        <div class="phase-content">
+            <h3>Phase 3: Conversation History Windowing</h3>
+            <p><strong>Goal:</strong> Reduce history from 10 messages to a smart sliding window.</p>
+            <span class="metric save">Saves: 200-600 tokens per multi-turn conversation</span>
+        </div>
+    </div>
+
+    <h3>Strategy: Recency + Relevance Hybrid</h3>
+    <pre><code>def _compress_history(messages: list, current_question: str, max_tokens: int = 500) -> list:
+    """
+    Smart history compression:
+    1. Always keep last 2 messages (immediate context)
+    2. Summarise older messages into a single system note
+    3. Drop messages that exceed token budget
+    """
+    if len(messages) <= 2:
+        return messages
+
+    recent = messages[-2:]         # ~200 tokens (keep verbatim)
+    older = messages[:-2]          # Candidates for compression
+
+    # Summarise older context into 1 line
+    topics = set()
+    for msg in older:
+        content = msg.get("content", "").lower()
+        if "sql" in content or "query" in content:
+            topics.add("SQL queries")
+        if "migration" in content:
+            topics.add("migration")
+        if "pipeline" in content:
+            topics.add("pipelines")
+
+    summary = f"[Prior conversation covered: {', '.join(topics) or 'general discussion'}]"
+    compressed = [{"role": "system", "content": summary}] + recent
+    return compressed  # ~250 tokens instead of ~800</code></pre>
+</div>
+
+<!-- Phase 4 -->
+<div class="card">
+    <div class="phase">
+        <div class="phase-num">4</div>
+        <div class="phase-content">
+            <h3>Phase 4: Response Caching (Semantic Deduplication)</h3>
+            <p><strong>Goal:</strong> Cache responses for similar/repeated queries. Avoid re-calling Claude for the same question.</p>
+            <span class="metric save">Saves: 100% tokens on cache hits (~30% hit rate expected)</span>
+        </div>
+    </div>
+
+    <h3>Implementation: LRU Cache with Fuzzy Matching</h3>
+    <pre><code>import hashlib
+from collections import OrderedDict
+
+class ResponseCache:
+    """LRU cache for FM responses. Fuzzy-matches similar questions."""
+
+    def __init__(self, max_size: int = 100, ttl_seconds: int = 3600):
+        self._cache = OrderedDict()  # key -> {response, timestamp}
+        self._max_size = max_size
+        self._ttl = ttl_seconds
+
+    def _normalise(self, question: str) -> str:
+        """Normalise question for fuzzy matching."""
+        q = question.lower().strip()
+        # Remove filler words
+        for w in ['please', 'can you', 'show me', 'i want to', 'give me']:
+            q = q.replace(w, '')
+        # Normalise whitespace
+        q = ' '.join(q.split())
+        return q
+
+    def _key(self, question: str) -> str:
+        normalised = self._normalise(question)
+        return hashlib.md5(normalised.encode()).hexdigest()
+
+    def get(self, question: str) -> dict | None:
+        key = self._key(question)
+        if key in self._cache:
+            entry = self._cache[key]
+            age = time.time() - entry['timestamp']
+            if age < self._ttl:
+                self._cache.move_to_end(key)  # LRU refresh
+                return entry['response']
+            else:
+                del self._cache[key]  # Expired
+        return None
+
+    def put(self, question: str, response: dict):
+        key = self._key(question)
+        self._cache[key] = {'response': response, 'timestamp': time.time()}
+        if len(self._cache) > self._max_size:
+            self._cache.popitem(last=False)  # Evict oldest
+
+# Global instance
+_fm_cache = ResponseCache(max_size=200, ttl_seconds=1800)  # 30 min TTL</code></pre>
+</div>
+
+<!-- Phase 5 -->
+<div class="card">
+    <div class="phase">
+        <div class="phase-num">5</div>
+        <div class="phase-content">
+            <h3>Phase 5: Model Tiering — Route by Complexity</h3>
+            <p><strong>Goal:</strong> Use cheaper models (Haiku/Sonnet) for simple questions, reserve Opus for complex ones.</p>
+            <span class="metric save">Saves: 80% cost on simple questions (Haiku is 10x cheaper than Opus)</span>
+        </div>
+    </div>
+
+    <h3>Cost Comparison (Databricks Model Serving)</h3>
+    <table>
+        <tr><th>Model</th><th>Input $/1M tokens</th><th>Output $/1M tokens</th><th>Best For</th></tr>
+        <tr><td>Claude Haiku 4.5</td><td>$0.80</td><td>$4.00</td><td>Classification, simple Q&A, short answers</td></tr>
+        <tr><td>Claude Sonnet 5</td><td>$3.00</td><td>$15.00</td><td>How-to, explanations, moderate complexity</td></tr>
+        <tr><td>Claude Opus 4.7</td><td>$15.00</td><td>$75.00</td><td>Complex reasoning, multi-step SQL, debugging</td></tr>
+    </table>
+
+    <h3>Auto-Routing Logic</h3>
+    <pre><code>def _select_model(intent: str, question: str, user_selection: str) -> str:
+    """
+    Intelligently select model based on complexity.
+    User can override by explicitly selecting from dropdown.
+    """
+    # If user explicitly selected a model, respect it
+    if user_selection and user_selection != 'auto':
+        return user_selection
+
+    # Auto-route based on complexity
+    q_len = len(question.split())
+
+    if intent == 'faq':
+        return None  # No model needed (cached response)
+    elif intent == 'data_query':
+        return None  # Genie Space handles it (0 tokens)
+    elif intent == 'how_to' and q_len < 15:
+        return 'databricks-claude-haiku-4-5'      # Simple how-to
+    elif intent == 'how_to':
+        return 'databricks-claude-sonnet-5'       # Complex how-to
+    else:
+        return 'databricks-claude-opus-4-7'       # Complex reasoning</code></pre>
+
+    <h3>Expected Cost Impact</h3>
+    <table>
+        <tr><th>Scenario</th><th>Before (all Opus)</th><th>After (tiered)</th><th>Savings</th></tr>
+        <tr><td>100 queries/day</td><td>$4.50/day</td><td>$0.90/day</td><td><strong>80%</strong></td></tr>
+        <tr><td>1,000 queries/day</td><td>$45/day</td><td>$9/day</td><td><strong>80%</strong></td></tr>
+        <tr><td>Monthly (30d × 500q)</td><td>$675/mo</td><td>$135/mo</td><td><strong>$540 saved</strong></td></tr>
+    </table>
+</div>
+
+<!-- Phase 6 -->
+<div class="card">
+    <div class="phase">
+        <div class="phase-num">6</div>
+        <div class="phase-content">
+            <h3>Phase 6: Streaming Responses + Early Termination</h3>
+            <p><strong>Goal:</strong> Stream responses to improve UX and enable early stop if user navigates away.</p>
+            <span class="metric save">Saves: 10-20% output tokens (user-abandoned responses)</span>
+        </div>
+    </div>
+
+    <h3>Implementation</h3>
+    <pre><code># Backend: Server-Sent Events (SSE) streaming
+@app.route("/api/v1/genie/fm/chat-stream", methods=["POST"])
+@_login_req
+def _fm_chat_stream():
+    """Stream Claude response via SSE for real-time display."""
+    from flask import Response, stream_with_context
+
+    def generate():
+        # ... (build payload same as before)
+        payload["stream"] = True
+        raw = w.api_client.do("POST",
+            f"/serving-endpoints/{endpoint_name}/invocations",
+            body=payload, stream=True)
+
+        for chunk in raw.iter_lines():
+            if chunk:
+                # Parse SSE chunk, extract delta content
+                data = json.loads(chunk.decode())
+                delta = data["choices"][0]["delta"].get("content", "")
+                if delta:
+                    yield f"data: {json.dumps({'text': delta})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return Response(stream_with_context(generate()),
+                    mimetype='text/event-stream')
+
+# Frontend: EventSource with early abort
+function streamFmChat(bid, question) {
+    const es = new EventSource('/api/v1/genie/fm/chat-stream?' + params);
+    let fullText = '';
+    es.onmessage = function(e) {
+        if (e.data === '[DONE]') { es.close(); return; }
+        const chunk = JSON.parse(e.data);
+        fullText += chunk.text;
+        updateUI(bid, fullText);  // Real-time render
+    };
+    // User navigates away → abort (saves output tokens)
+    window.addEventListener('beforeunload', () => es.close());
+}</code></pre>
+</div>
+
+<!-- Phase 7 -->
+<div class="card">
+    <div class="phase">
+        <div class="phase-num">7</div>
+        <div class="phase-content">
+            <h3>Phase 7: Token Budget Controller</h3>
+            <p><strong>Goal:</strong> Enforce per-user, per-session, and per-day token limits.</p>
+            <span class="metric save">Prevents runaway costs from loops or abuse</span>
+        </div>
+    </div>
+
+    <h3>Implementation</h3>
+    <pre><code>class TokenBudget:
+    """Per-user token budget with soft/hard limits."""
+
+    LIMITS = {
+        'per_request': 4096,       # Max output tokens per request
+        'per_session': 50_000,     # Soft limit per session (warn user)
+        'per_day': 200_000,        # Hard limit per user per day
+    }
+
+    def __init__(self):
+        self._usage = {}  # user_email -> {today: int, session: int}
+
+    def check(self, user_email: str, estimated_tokens: int) -> tuple[bool, str]:
+        usage = self._usage.setdefault(user_email, {'today': 0, 'session': 0})
+
+        if usage['today'] + estimated_tokens > self.LIMITS['per_day']:
+            return False, "Daily token limit reached. Resets at midnight."
+        if usage['session'] > self.LIMITS['per_session']:
+            return True, "⚠️ High token usage this session. Consider shorter questions."
+        return True, ""
+
+    def record(self, user_email: str, tokens_used: int):
+        usage = self._usage.setdefault(user_email, {'today': 0, 'session': 0})
+        usage['today'] += tokens_used
+        usage['session'] += tokens_used</code></pre>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>5. Complete Optimised Flow</h2>
+
+<div class="arch-diagram">
+USER: "show jobs that failed in last 3 days"
+    │
+    ▼
+┌──────────────────────────────┐
+│ 1. CACHE CHECK               │  ⏱ 0ms, 0 tokens
+│    Key: md5("show jobs        │
+│    failed last 3 days")      │
+│    Result: MISS              │
+└──────────────┬───────────────┘
+               ▼
+┌──────────────────────────────┐
+│ 2. INTENT CLASSIFIER         │  ⏱ 0ms, 0 tokens
+│    Pattern match:            │
+│    • "show" + "jobs" → data  │
+│    • "failed" → data         │
+│    Score: data_query (3/4)   │
+└──────────────┬───────────────┘
+               ▼
+┌──────────────────────────────┐
+│ 3. GENIE SPACE API           │  ⏱ 3-8s, 0 LLM tokens
+│    → start-conversation      │
+│    → poll (COMPLETED)        │
+│    → SQL + results returned  │
+│                              │
+│    SQL: SELECT job_name...   │
+│    FROM admin_source.config  │
+│    tables.wf_run_history...  │
+└──────────────┬───────────────┘
+               ▼
+┌──────────────────────────────┐
+│ 4. CACHE STORE               │  ⏱ 0ms
+│    Store response for 30min  │
+└──────────────┬───────────────┘
+               ▼
+┌──────────────────────────────┐
+│ 5. RESPONSE + RUN BUTTON     │  ⏱ 0ms
+│    Render SQL block + ▶ Run  │
+│    Display results table     │
+└──────────────────────────────┘
+
+TOTAL: 0 Claude tokens used! (Genie Space handled it)
+──────────────────────────────────────────────────────
+
+USER: "how do I configure incremental loads?"
+    │
+    ▼
+┌──────────────────────────────┐
+│ 1. CACHE CHECK → MISS        │  0 tokens
+│ 2. INTENT: how_to (score 3)  │  0 tokens
+│ 3. MODEL: Haiku (simple)     │  ~400 tokens total
+│ 4. PROMPT: _PROMPT_MINIMAL   │  200 tokens (not 1,200!)
+│ 5. CACHE STORE               │  0 tokens
+└──────────────────────────────┘
+
+TOTAL: ~400 tokens (vs 3,000 before) = 87% savings!
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>6. Implementation Priority & Timeline</h2>
+
+<table>
+    <tr><th>Phase</th><th>Effort</th><th>Impact</th><th>Priority</th><th>Timeline</th></tr>
+    <tr>
+        <td>Phase 1: Intent Classification</td>
+        <td>2-3 hours</td>
+        <td>60% token reduction</td>
+        <td><span class="tag tag-high">P0</span></td>
+        <td>Day 1</td>
+    </tr>
+    <tr>
+        <td>Phase 2: Tiered Prompts</td>
+        <td>1-2 hours</td>
+        <td>30% per-call reduction</td>
+        <td><span class="tag tag-high">P0</span></td>
+        <td>Day 1</td>
+    </tr>
+    <tr>
+        <td>Phase 4: Response Cache</td>
+        <td>2-3 hours</td>
+        <td>30% hit rate → 30% savings</td>
+        <td><span class="tag tag-medium">P1</span></td>
+        <td>Day 2</td>
+    </tr>
+    <tr>
+        <td>Phase 5: Model Tiering</td>
+        <td>1 hour</td>
+        <td>80% cost reduction</td>
+        <td><span class="tag tag-medium">P1</span></td>
+        <td>Day 2</td>
+    </tr>
+    <tr>
+        <td>Phase 3: History Compression</td>
+        <td>2 hours</td>
+        <td>25% per-call on multi-turn</td>
+        <td><span class="tag tag-low">P2</span></td>
+        <td>Day 3</td>
+    </tr>
+    <tr>
+        <td>Phase 6: Streaming</td>
+        <td>3-4 hours</td>
+        <td>UX improvement + 10% savings</td>
+        <td><span class="tag tag-low">P2</span></td>
+        <td>Week 2</td>
+    </tr>
+    <tr>
+        <td>Phase 7: Budget Controller</td>
+        <td>2 hours</td>
+        <td>Cost guardrail</td>
+        <td><span class="tag tag-low">P2</span></td>
+        <td>Week 2</td>
+    </tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>7. Key Metrics & Monitoring</h2>
+
+<div class="card">
+    <div class="card-title">Dashboard Metrics to Track</div>
+    <ul>
+        <li><strong>Token Usage / Request</strong> — Track P50, P95, P99 (target: P50 &lt; 500)</li>
+        <li><strong>Genie Hit Rate</strong> — % of data queries handled by Genie Space (target: &gt;80%)</li>
+        <li><strong>Cache Hit Rate</strong> — % of responses served from cache (target: &gt;25%)</li>
+        <li><strong>Model Tier Distribution</strong> — % routed to Haiku/Sonnet/Opus (target: &gt;60% Haiku)</li>
+        <li><strong>Cost per User per Day</strong> — $/user/day (target: &lt;$0.50)</li>
+        <li><strong>Response Latency</strong> — P95 time-to-first-token (target: &lt;2s)</li>
+        <li><strong>Error Rate</strong> — % of failed FM calls (target: &lt;1%)</li>
+    </ul>
+
+    <h3>Logging Schema (append to existing audit_log)</h3>
+    <pre><code>{
+    "event": "fm_chat_request",
+    "user_email": "sunil.kumar@insight.com",
+    "timestamp": "2026-07-30T14:30:00Z",
+    "intent": "data_query",
+    "route": "genie_space",         // genie_space | claude_haiku | claude_sonnet | claude_opus | faq_cache | response_cache
+    "model_used": null,              // null if Genie/cache handled it
+    "tokens_input": 0,
+    "tokens_output": 0,
+    "tokens_saved": 3000,            // vs naive all-Opus approach
+    "latency_ms": 4200,
+    "cache_hit": false,
+    "genie_success": true,
+    "error": null
+}</code></pre>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>8. Files to Modify</h2>
+
+<table>
+    <tr><th>File</th><th>Changes</th><th>Phase</th></tr>
+    <tr><td><code>app.py</code></td><td>Replace _fm_chat_sdk_override with optimised routing logic</td><td>1, 2, 3, 5</td></tr>
+    <tr><td><code>routes/intent_classifier.py</code> (new)</td><td>Pattern-based + optional LLM intent classification</td><td>1</td></tr>
+    <tr><td><code>routes/fm_cache.py</code> (new)</td><td>Response cache with fuzzy matching</td><td>4</td></tr>
+    <tr><td><code>routes/token_budget.py</code> (new)</td><td>Per-user token budget controller</td><td>7</td></tr>
+    <tr><td><code>supplementary.js</code></td><td>Add streaming support, token usage dashboard widget</td><td>6</td></tr>
+    <tr><td><code>genie.py</code></td><td>Add /api/v1/genie/fm/usage endpoint for metrics</td><td>7</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>9. Risk Mitigation</h2>
+
+<table>
+    <tr><th>Risk</th><th>Impact</th><th>Mitigation</th></tr>
+    <tr>
+        <td>Intent classifier misroutes a data query to Claude</td>
+        <td>Slightly higher tokens (not a failure)</td>
+        <td>Claude still has schema context as fallback; add telemetry to tune patterns</td>
+    </tr>
+    <tr>
+        <td>Genie Space API timeout/failure</td>
+        <td>User waits then gets Claude response</td>
+        <td>3s timeout on Genie; parallel fire both in Phase 2+</td>
+    </tr>
+    <tr>
+        <td>Cache serves stale data</td>
+        <td>User sees outdated query results</td>
+        <td>30min TTL; invalidate on new pipeline runs; add "Refresh" button</td>
+    </tr>
+    <tr>
+        <td>Model tiering gives worse quality</td>
+        <td>Haiku answer less detailed than Opus</td>
+        <td>Only use Haiku for simple Q&A; user can always override via dropdown</td>
+    </tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>10. Summary — Expected Outcomes</h2>
+
+<div class="summary-grid">
+    <div class="summary-card">
+        <div class="value" style="color: var(--success);">70-80%</div>
+        <div class="label">Token Reduction</div>
+    </div>
+    <div class="summary-card">
+        <div class="value" style="color: var(--success);">$540/mo</div>
+        <div class="label">Estimated Savings (500q/day)</div>
+    </div>
+    <div class="summary-card">
+        <div class="value" style="color: var(--accent-light);">2-3 days</div>
+        <div class="label">Implementation (P0+P1)</div>
+    </div>
+    <div class="summary-card">
+        <div class="value" style="color: var(--accent-light);">Zero</div>
+        <div class="label">Quality Impact</div>
+    </div>
+</div>
+
+<div class="card" style="border-color: var(--accent); margin-top: 30px;">
+    <div class="card-title" style="font-size: 1.1rem;">Key Principle</div>
+    <p style="color: var(--text); font-size: 1rem;">The fastest, cheapest token is the one you never send. Route data queries to the Genie Space (0 tokens), cache repeated answers (0 tokens), and only invoke Claude when genuine reasoning is needed — using the cheapest model that can handle the complexity.</p>
+</div>
+
+<p style="margin-top: 40px; text-align: center; color: var(--text-muted); font-size: 0.8rem;">
+    Document Version: 1.0 | Created: July 2026 | Author: DBX Migration Studio Team
+</p>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,37 @@
+# Databricks App resource — Migration Studio
+# ============================================
+# Deploys the Flask app as a Databricks Native App (App Spaces).
+
+resources:
+  apps:
+    migration_studio:
+      name: "dbxmigrator"
+      description: "SQL to Databricks Migration Studio — end-to-end migration orchestration platform"
+      source_code_path: .
+      config:
+        command:
+          - gunicorn
+          - "--bind=0.0.0.0:8000"
+          - "--workers=2"
+          - "--threads=8"
+          - "--timeout=180"
+          - "--chdir=/app/migration_utility"
+          - "app:app"
+        env:
+          - name: DATABRICKS_SQL_WAREHOUSE_ID
+            value: ${var.sql_warehouse_id}
+          - name: DATABRICKS_CATALOG
+            value: ${var.catalog_admin}
+          - name: DATABRICKS_SCHEMA
+            value: ${var.app_schema}
+          - name: DATABRICKS_SECRET_SCOPE
+            value: migration-studio
+          - name: CLOUD_PROVIDER
+            value: ${var.cloud_provider}
+          - name: FLASK_SECRET_KEY
+            value: ${var.flask_secret_key}
+          - name: GENIE_SPACE_ID
+            value: ${var.genie_space_id}
+      permissions:
+        - level: CAN_USE
+          group_name: users

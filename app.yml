@@ -1,0 +1,62 @@
+command:
+  - gunicorn
+  - --bind=0.0.0.0:8000
+  - --workers=2
+  - --threads=8
+  - --timeout=180
+  - --chdir=migration_utility
+  - app:app
+
+resources:
+  - name: fm-endpoint
+    serving_endpoint:
+      name: "databricks-claude-opus-4-8"
+      permission: CAN_QUERY
+  - name: fm-endpoint-sonnet
+    serving_endpoint:
+      name: "databricks-claude-sonnet-5"
+      permission: CAN_QUERY
+  - name: fm-endpoint-haiku
+    serving_endpoint:
+      name: "databricks-claude-haiku-4-5"
+      permission: CAN_QUERY
+
+env:
+  - name: DATABRICKS_CATALOG
+    value: "admin_source"
+
+  - name: DATABRICKS_SCHEMA
+    value: "migration_app"
+
+  - name: DATABRICKS_SECRET_SCOPE
+    value: "migration-studio"
+
+  - name: CLOUD_PROVIDER
+    value: "azure"
+
+  - name: FLASK_SECRET_KEY
+    value: "dbx-migration-studio-secret-key-2026"
+
+  - name: DATABRICKS_SERVER_HOSTNAME
+    value: "adb-7405613585789005.5.azuredatabricks.net"
+
+  - name: DATABRICKS_HTTP_PATH
+    value: "/sql/1.0/warehouses/d01073f7104f07ff"
+
+  - name: DATABRICKS_SQL_WAREHOUSE_ID
+    value: "d01073f7104f07ff"
+
+  - name: DATABRICKS_HOST
+    value: "https://adb-7405613585789005.5.azuredatabricks.net"
+
+  - name: RUNNING_ON_DBX_APPS
+    value: "true"
+
+  - name: GENIE_SPACE_ID
+    value: ""
+
+  - name: CATALOG_CACHE_TTL
+    value: "300"
+
+  - name: MAX_TABLES_PER_SCHEMA
+    value: "500"

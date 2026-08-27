@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Token Optimiser Architecture — DBX Migration Studio</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0f172a;--surface:#1e293b;--card:#334155;--border:#475569;
+  --primary:#3b82f6;--accent:#10b981;--warning:#f59e0b;--danger:#ef4444;
+  --text:#f1f5f9;--muted:#94a3b8;--glow:rgba(59,130,246,0.15);
+  --gradient-blue:linear-gradient(135deg,#3b82f6,#6366f1);
+  --gradient-green:linear-gradient(135deg,#10b981,#059669);
+  --gradient-orange:linear-gradient(135deg,#f59e0b,#d97706);
+  --gradient-red:linear-gradient(135deg,#ef4444,#dc2626);
+}
+body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;overflow-x:hidden}
+
+/* Header */
+.header{background:linear-gradient(180deg,rgba(59,130,246,0.08) 0%,transparent 100%);border-bottom:1px solid var(--border);padding:32px 48px;text-align:center}
+.header h1{font-size:2.2rem;font-weight:800;background:var(--gradient-blue);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-0.5px}
+.header .subtitle{color:var(--muted);font-size:0.95rem;margin-top:8px}
+.header .badge{display:inline-block;margin-top:12px;padding:4px 14px;background:rgba(16,185,129,0.15);border:1px solid rgba(16,185,129,0.3);border-radius:20px;font-size:0.8rem;color:#10b981;font-weight:600}
+
+/* Layout */
+.container{max-width:1400px;margin:0 auto;padding:40px 32px}
+.section-title{font-size:1.4rem;font-weight:700;margin-bottom:24px;display:flex;align-items:center;gap:10px}
+.section-title .icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1.1rem}
+
+/* Comparison Grid */
+.compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:32px;margin-bottom:48px}
+.compare-card{background:var(--surface);border-radius:16px;border:1px solid var(--border);overflow:hidden;position:relative}
+.compare-card.standard{border-top:3px solid var(--warning)}
+.compare-card.optimised{border-top:3px solid var(--accent)}
+.compare-header{padding:24px 28px 16px;display:flex;align-items:center;gap:12px}
+.compare-header .dot{width:12px;height:12px;border-radius:50%}
+.compare-card.standard .dot{background:var(--warning)}
+.compare-card.optimised .dot{background:var(--accent)}
+.compare-header h2{font-size:1.15rem;font-weight:700}
+.compare-header .tag{margin-left:auto;font-size:0.7rem;padding:3px 10px;border-radius:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px}
+.compare-card.standard .tag{background:rgba(245,158,11,0.15);color:#f59e0b}
+.compare-card.optimised .tag{background:rgba(16,185,129,0.15);color:#10b981}
+.compare-body{padding:0 28px 28px}
+
+/* Flow Diagram */
+.flow{display:flex;flex-direction:column;gap:0}
+.flow-step{display:flex;align-items:stretch;gap:14px;position:relative}
+.flow-line{width:2px;min-height:100%;position:relative}
+.compare-card.standard .flow-line{background:linear-gradient(180deg,#f59e0b,#d97706)}
+.compare-card.optimised .flow-line{background:linear-gradient(180deg,#10b981,#059669)}
+.flow-node{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700;flex-shrink:0;z-index:1;position:relative}
+.compare-card.standard .flow-node{background:var(--gradient-orange);color:#fff}
+.compare-card.optimised .flow-node{background:var(--gradient-green);color:#fff}
+.flow-content{flex:1;padding:6px 0 20px}
+.flow-content h4{font-size:0.85rem;font-weight:600;margin-bottom:2px}
+.flow-content p{font-size:0.78rem;color:var(--muted)}
+.flow-content .tokens{font-size:0.72rem;margin-top:4px;padding:2px 8px;border-radius:4px;display:inline-block;font-weight:600}
+.compare-card.standard .tokens{background:rgba(245,158,11,0.12);color:#fbbf24}
+.compare-card.optimised .tokens{background:rgba(16,185,129,0.12);color:#34d399}
+
+/* Stats Bar */
+.stats-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:48px}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;text-align:center;position:relative;overflow:hidden}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+.stat-card:nth-child(1)::before{background:var(--gradient-blue)}
+.stat-card:nth-child(2)::before{background:var(--gradient-green)}
+.stat-card:nth-child(3)::before{background:var(--gradient-orange)}
+.stat-card:nth-child(4)::before{background:linear-gradient(135deg,#8b5cf6,#6d28d9)}
+.stat-value{font-size:2rem;font-weight:800;margin-bottom:4px}
+.stat-card:nth-child(1) .stat-value{color:#3b82f6}
+.stat-card:nth-child(2) .stat-value{color:#10b981}
+.stat-card:nth-child(3) .stat-value{color:#f59e0b}
+.stat-card:nth-child(4) .stat-value{color:#8b5cf6}
+.stat-label{font-size:0.78rem;color:var(--muted);font-weight:500}
+
+/* Architecture Diagram */
+.arch-diagram{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:40px;margin-bottom:48px;position:relative}
+.arch-row{display:flex;align-items:center;justify-content:center;gap:16px;margin-bottom:24px;flex-wrap:wrap}
+.arch-box{padding:12px 20px;border-radius:10px;font-size:0.8rem;font-weight:600;text-align:center;min-width:140px;position:relative;border:1px solid}
+.arch-box.user{background:rgba(99,102,241,0.12);border-color:rgba(99,102,241,0.3);color:#a5b4fc}
+.arch-box.router{background:rgba(59,130,246,0.12);border-color:rgba(59,130,246,0.3);color:#93c5fd}
+.arch-box.cache{background:rgba(168,85,247,0.12);border-color:rgba(168,85,247,0.3);color:#c4b5fd}
+.arch-box.intent{background:rgba(236,72,153,0.12);border-color:rgba(236,72,153,0.3);color:#f9a8d4}
+.arch-box.genie{background:rgba(16,185,129,0.12);border-color:rgba(16,185,129,0.3);color:#6ee7b7}
+.arch-box.claude{background:rgba(245,158,11,0.12);border-color:rgba(245,158,11,0.3);color:#fcd34d}
+.arch-box.prompt{background:rgba(14,165,233,0.12);border-color:rgba(14,165,233,0.3);color:#7dd3fc}
+.arch-box.history{background:rgba(20,184,166,0.12);border-color:rgba(20,184,166,0.3);color:#5eead4}
+.arch-box .sub{font-size:0.65rem;color:var(--muted);font-weight:400;margin-top:2px}
+.arch-arrow{color:var(--muted);font-size:1.2rem}
+.arch-arrow.down{display:block;text-align:center;margin:8px 0;font-size:1.4rem}
+.arch-label{position:absolute;top:-10px;right:-8px;font-size:0.6rem;padding:1px 6px;border-radius:8px;font-weight:700}
+.arch-box.genie .arch-label{background:#10b981;color:#fff}
+.arch-box.cache .arch-label{background:#8b5cf6;color:#fff}
+
+/* Decision Diamond */
+.diamond-row{display:flex;align-items:center;justify-content:center;gap:24px;margin:20px 0}
+.diamond{width:80px;height:80px;background:rgba(59,130,246,0.1);border:2px solid rgba(59,130,246,0.4);transform:rotate(45deg);display:flex;align-items:center;justify-content:center}
+.diamond span{transform:rotate(-45deg);font-size:0.7rem;font-weight:700;color:#93c5fd;text-align:center}
+.branch{display:flex;flex-direction:column;align-items:center;gap:6px}
+.branch-label{font-size:0.68rem;color:var(--muted);font-weight:500}
+.branch-box{padding:8px 16px;border-radius:8px;font-size:0.75rem;font-weight:600}
+.branch-box.green{background:rgba(16,185,129,0.15);color:#6ee7b7;border:1px solid rgba(16,185,129,0.3)}
+.branch-box.blue{background:rgba(59,130,246,0.15);color:#93c5fd;border:1px solid rgba(59,130,246,0.3)}
+.branch-box.yellow{background:rgba(245,158,11,0.15);color:#fcd34d;border:1px solid rgba(245,158,11,0.3)}
+
+/* Savings Table */
+.savings-table{width:100%;border-collapse:separate;border-spacing:0;margin-top:16px}
+.savings-table th{background:rgba(59,130,246,0.1);padding:12px 16px;font-size:0.75rem;font-weight:600;text-align:left;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border)}
+.savings-table th:first-child{border-radius:8px 0 0 0}
+.savings-table th:last-child{border-radius:0 8px 0 0}
+.savings-table td{padding:12px 16px;font-size:0.82rem;border-bottom:1px solid rgba(71,85,105,0.3)}
+.savings-table tr:last-child td{border-bottom:none}
+.savings-table .scenario{font-weight:600}
+.savings-table .pct{font-weight:700;font-size:0.9rem}
+.savings-table .pct.high{color:#10b981}
+.savings-table .pct.med{color:#3b82f6}
+.savings-table .pct.low{color:#f59e0b}
+.bar{height:6px;border-radius:3px;background:var(--card);overflow:hidden;width:120px;display:inline-block;vertical-align:middle;margin-left:8px}
+.bar-fill{height:100%;border-radius:3px;transition:width 1s ease}
+.bar-fill.high{background:var(--gradient-green)}
+.bar-fill.med{background:var(--gradient-blue)}
+.bar-fill.low{background:var(--gradient-orange)}
+
+/* Phases section */
+.phases{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:48px}
+.phase-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;position:relative;overflow:hidden}
+.phase-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
+.phase-card:nth-child(1)::before{background:var(--gradient-green)}
+.phase-card:nth-child(2)::before{background:var(--gradient-blue)}
+.phase-card:nth-child(3)::before{background:linear-gradient(135deg,#8b5cf6,#6d28d9)}
+.phase-card:nth-child(4)::before{background:linear-gradient(135deg,#ec4899,#db2777)}
+.phase-card:nth-child(5)::before{background:var(--gradient-orange)}
+.phase-card:nth-child(6)::before{background:linear-gradient(135deg,#14b8a6,#0d9488)}
+.phase-num{width:24px;height:24px;border-radius:6px;background:var(--card);display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700;margin-bottom:10px;color:var(--muted)}
+.phase-card h4{font-size:0.88rem;font-weight:600;margin-bottom:6px}
+.phase-card p{font-size:0.75rem;color:var(--muted);line-height:1.5}
+.phase-card .impact{margin-top:10px;font-size:0.7rem;padding:3px 8px;border-radius:4px;display:inline-block;font-weight:600}
+.impact.high{background:rgba(16,185,129,0.12);color:#34d399}
+.impact.med{background:rgba(59,130,246,0.12);color:#93c5fd}
+
+/* Footer */
+.footer{text-align:center;padding:32px;border-top:1px solid var(--border);color:var(--muted);font-size:0.75rem}
+.footer a{color:var(--primary);text-decoration:none}
+
+/* Animations */
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+.pulse{animation:pulse 2s infinite}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+.animate{animation:slideUp 0.6s ease forwards;opacity:0}
+.animate:nth-child(2){animation-delay:0.1s}
+.animate:nth-child(3){animation-delay:0.2s}
+.animate:nth-child(4){animation-delay:0.3s}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Token Optimiser Architecture</h1>
+  <div class="subtitle">DBX Migration Studio — Intelligent Token Management System</div>
+  <div class="badge">v2.0 — Genie Space Routing + Multi-Phase Optimization</div>
+</div>
+
+<div class="container">
+
+<!-- Stats -->
+<div class="stats-bar">
+  <div class="stat-card animate"><div class="stat-value">100%</div><div class="stat-label">Savings on Cache Hits</div></div>
+  <div class="stat-card animate"><div class="stat-value">100%</div><div class="stat-label">Savings via Genie Routing</div></div>
+  <div class="stat-card animate"><div class="stat-value">50-60%</div><div class="stat-label">Prompt Compression</div></div>
+  <div class="stat-card animate"><div class="stat-value">6</div><div class="stat-label">Optimization Phases</div></div>
+</div>
+
+<!-- Architecture Diagram -->
+<div class="section-title"><div class="icon" style="background:var(--gradient-blue)">&#9783;</div> System Architecture — Token Optimiser Flow</div>
+<div class="arch-diagram">
+  <div class="arch-row">
+    <div class="arch-box user">&#128100; User Query<div class="sub">"Show failed jobs today"</div></div>
+    <span class="arch-arrow">&#10230;</span>
+    <div class="arch-box router">&#9881; Token Optimiser Router<div class="sub">optimize_tokens: ON/OFF</div></div>
+  </div>
+  <div class="arch-arrow down">&#8595;</div>
+  <div class="arch-row">
+    <div class="arch-box cache">&#9889; Response Cache<span class="arch-label">HIT=0 tkns</span><div class="sub">LRU | 100 entries | 30min TTL | Fuzzy match</div></div>
+    <span class="arch-arrow">&#10230;</span>
+    <div class="arch-box intent">&#127919; Intent Classifier<div class="sub">Pattern-based (0 tokens)</div></div>
+  </div>
+  <div class="arch-arrow down">&#8595;</div>
+
+  <!-- Decision branches -->
+  <div class="diamond-row">
+    <div class="branch">
+      <div class="branch-label">data_query</div>
+      <div class="branch-box green">&#10003; Genie Space</div>
+      <div class="branch-label" style="color:#6ee7b7;font-weight:700">0 tokens!</div>
+    </div>
+    <div class="diamond"><span>Intent?</span></div>
+    <div class="branch">
+      <div class="branch-label">how_to</div>
+      <div class="branch-box blue">Minimal Prompt</div>
+      <div class="branch-label">~150 tokens</div>
+    </div>
+    <div class="branch">
+      <div class="branch-label">general</div>
+      <div class="branch-box yellow">Slim Prompt</div>
+      <div class="branch-label">~400 tokens</div>
+    </div>
+  </div>
+  <div class="arch-arrow down">&#8595;</div>
+
+  <div class="arch-row">
+    <div class="arch-box history">&#128218; History Compressor<div class="sub">data:1msg | howto:2msg | general:3msg</div></div>
+    <span class="arch-arrow">&#10230;</span>
+    <div class="arch-box prompt">&#128196; Max Tokens Limiter<div class="sub">1024 | 2048 | 4096</div></div>
+    <span class="arch-arrow">&#10230;</span>
+    <div class="arch-box claude">&#9889; Claude API<span class="arch-label" style="background:#f59e0b;color:#000">CALL</span><div class="sub">Serving Endpoint (Opus/Sonnet/Haiku)</div></div>
+  </div>
+  <div class="arch-arrow down">&#8595;</div>
+  <div class="arch-row">
+    <div class="arch-box genie" style="min-width:300px">&#128202; Response + Token Comparison<span class="arch-label">RESULT</span><div class="sub">Standard vs Optimised | savings_pct | cached for reuse</div></div>
+  </div>
+</div>
+
+<!-- Comparison -->
+<div class="section-title"><div class="icon" style="background:var(--gradient-orange)">&#9878;</div> Standard Mode vs Token Optimiser — Side by Side</div>
+<div class="compare-grid">
+
+  <!-- Standard Mode -->
+  <div class="compare-card standard">
+    <div class="compare-header">
+      <div class="dot"></div>
+      <h2>Standard Mode</h2>
+      <span class="tag">No Optimization</span>
+    </div>
+    <div class="compare-body">
+      <div class="flow">
+        <div class="flow-step">
+          <div class="flow-node">1</div>
+          <div class="flow-content">
+            <h4>Full System Prompt</h4>
+            <p>Complete schema + all rules + all tables (~1,200 tokens)</p>
+            <span class="tokens">~1,200 tokens input</span>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-node">2</div>
+          <div class="flow-content">
+            <h4>Full History (last 10 messages)</h4>
+            <p>All prior messages sent uncompressed</p>
+            <span class="tokens">~500-2,000 tokens input</span>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-node">3</div>
+          <div class="flow-content">
+            <h4>User Question</h4>
+            <p>Sent as-is to Claude</p>
+            <span class="tokens">~20-100 tokens input</span>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-node">4</div>
+          <div class="flow-content">
+            <h4>Claude API Call</h4>
+            <p>max_tokens: 4096 (always maximum)</p>
+            <span class="tokens">~300-2,000 tokens output</span>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-node">5</div>
+          <div class="flow-content">
+            <h4>Response Returned</h4>
+            <p>No caching, no comparison, no savings tracking</p>
+            <span class="tokens">Total: 2,000-5,000 tokens/query</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Optimised Mode -->
+  <div class="compare-card optimised">
+    <div class="compare-header">
+      <div class="dot pulse"></div>
+      <h2>Token Optimiser Mode</h2>
+      <span class="tag">6-Phase Optimization</span>
+    </div>
+    <div class="compare-body">
+      <div class="flow">
+        <div class="flow-step">
+          <div class="flow-node">1</div>
+          <div class="flow-content">
+            <h4>&#9889; Response Cache Check</h4>
+            <p>LRU cache with fuzzy matching (normalized query key)</p>
+            <span class="tokens">HIT = 0 tokens (100% saved)</span>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-node">2</div>
+          <div class="flow-content">
+            <h4>&#127919; Intent Classification</h4>
+            <p>Regex patterns → data_query | how_to | general (0 API cost)</p>
+            <span class="tokens">0 tokens (local compute)</span>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-node">3</div>
+          <div class="flow-content">
+            <h4>&#128640; Genie Space Routing (data queries)</h4>
+            <p>SQL queries routed to Genie — bypasses Claude entirely!</p>
+            <span class="tokens">SUCCESS = 0 tokens (100% saved)</span>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-node">4</div>
+          <div class="flow-content">
+            <h4>&#128196; Tiered Prompt Selection</h4>
+            <p>Ultra-slim (~100) | Minimal (~150) | Slim (~400) vs Full (~1,200)</p>
+            <span class="tokens">Saves 800-1,100 tokens/query</span>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-node">5</div>
+          <div class="flow-content">
+            <h4>&#128218; Aggressive History Compression</h4>
+            <p>data:1msg | howto:2msg | general:3msg + topic summary</p>
+            <span class="tokens">Saves 200-1,500 tokens</span>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-node">6</div>
+          <div class="flow-content">
+            <h4>&#127918; Smart Output Limiting</h4>
+            <p>max_tokens: 1024/2048/4096 by intent + cache result</p>
+            <span class="tokens">Total: 0-1,500 tokens/query</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 6 Phases Detail -->
+<div class="section-title"><div class="icon" style="background:linear-gradient(135deg,#8b5cf6,#6d28d9)">&#9733;</div> Six Optimization Phases</div>
+<div class="phases">
+  <div class="phase-card">
+    <div class="phase-num">1</div>
+    <h4>Response Cache</h4>
+    <p>LRU cache (100 entries, 30min TTL). Normalizes queries (removes "please", "show me"). MD5 key for fuzzy matching.</p>
+    <span class="impact high">100% savings on hit</span>
+  </div>
+  <div class="phase-card">
+    <div class="phase-num">2</div>
+    <h4>Intent Classification</h4>
+    <p>4 data patterns + 2 howto patterns scored locally. Zero API calls. Routes to optimal path instantly.</p>
+    <span class="impact med">0 token cost</span>
+  </div>
+  <div class="phase-card">
+    <div class="phase-num">3</div>
+    <h4>Genie Space Routing</h4>
+    <p>Data queries → Genie Space API (free!). SQL auto-generated from natural language. Falls back to Claude if Genie fails.</p>
+    <span class="impact high">100% savings when routed</span>
+  </div>
+  <div class="phase-card">
+    <div class="phase-num">4</div>
+    <h4>Tiered Prompts</h4>
+    <p>Ultra-slim: ~100 tokens (data fallback). Minimal: ~150 (how-to). Slim: ~400 (general). Full: ~1,200 (standard).</p>
+    <span class="impact high">50-90% prompt reduction</span>
+  </div>
+  <div class="phase-card">
+    <div class="phase-num">5</div>
+    <h4>History Compression</h4>
+    <p>Keeps only last 1-3 messages by intent. Older messages condensed to topic summary. Eliminates redundant context.</p>
+    <span class="impact med">30-70% history reduction</span>
+  </div>
+  <div class="phase-card">
+    <div class="phase-num">6</div>
+    <h4>Output Limiting</h4>
+    <p>Dynamic max_tokens: 1024 (data) | 2048 (how-to) | 4096 (general). Prevents unnecessarily verbose responses.</p>
+    <span class="impact med">Controls output cost</span>
+  </div>
+</div>
+
+<!-- Savings Table -->
+<div class="section-title"><div class="icon" style="background:var(--gradient-green)">&#128200;</div> Expected Savings by Scenario</div>
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:48px">
+<table class="savings-table">
+<thead>
+<tr><th>Scenario</th><th>Standard (tokens)</th><th>Optimised (tokens)</th><th>Savings</th><th>Visual</th></tr>
+</thead>
+<tbody>
+<tr><td class="scenario">"Show failed jobs" (Genie routed)</td><td>1,400</td><td>0</td><td class="pct high">100%</td><td><div class="bar"><div class="bar-fill high" style="width:100%"></div></div></td></tr>
+<tr><td class="scenario">"List all catalogs" (Genie routed)</td><td>1,400</td><td>0</td><td class="pct high">100%</td><td><div class="bar"><div class="bar-fill high" style="width:100%"></div></div></td></tr>
+<tr><td class="scenario">Repeat question (Cache hit)</td><td>1,500</td><td>0</td><td class="pct high">100%</td><td><div class="bar"><div class="bar-fill high" style="width:100%"></div></div></td></tr>
+<tr><td class="scenario">"How to configure watermarks?"</td><td>2,800</td><td>800</td><td class="pct high">71%</td><td><div class="bar"><div class="bar-fill high" style="width:71%"></div></div></td></tr>
+<tr><td class="scenario">Data query (Genie fails, Claude fallback)</td><td>2,200</td><td>900</td><td class="pct high">59%</td><td><div class="bar"><div class="bar-fill high" style="width:59%"></div></div></td></tr>
+<tr><td class="scenario">General question (slim prompt)</td><td>3,500</td><td>2,200</td><td class="pct med">37%</td><td><div class="bar"><div class="bar-fill med" style="width:37%"></div></div></td></tr>
+<tr><td class="scenario">Long conversation (10+ msgs)</td><td>5,000</td><td>2,000</td><td class="pct high">60%</td><td><div class="bar"><div class="bar-fill high" style="width:60%"></div></div></td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- How It Works Summary -->
+<div class="section-title"><div class="icon" style="background:linear-gradient(135deg,#ec4899,#db2777)">&#128161;</div> How It Works — Decision Tree</div>
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:32px;margin-bottom:32px">
+  <pre style="font-family:'JetBrains Mono','Fira Code',monospace;font-size:0.78rem;color:var(--muted);line-height:1.8;overflow-x:auto">
+  User sends message with Token Optimiser: ON
+          |
+   [1] Cache lookup (normalized key)
+          |--- HIT -----> Return cached response  <span style="color:#10b981;font-weight:700">[100% SAVED]</span>
+          |--- MISS
+          v
+   [2] Classify intent (regex, 0 cost)
+          |--- data_query -----+
+          |--- how_to ------+  |
+          |--- general ---+ |  |
+          v               v v  v
+   [3] Genie Routing   (skip)  Try Genie Space API
+          |                     |--- SUCCESS --> Return SQL result  <span style="color:#10b981;font-weight:700">[100% SAVED]</span>
+          |                     |--- FAILED
+          v                     v
+   [4] Select Prompt:  full(\~1200) | slim(\~400) | minimal(\~150) | ultra(\~100)
+          |
+   [5] Compress History: keep last 3 | 2 | 1 messages + topic summary
+          |
+   [6] Set max_tokens: 4096 | 2048 | 1024
+          |
+          v
+   Call Claude API (compressed payload)
+          |
+   Return response + token_comparison + cache result
+          |--- Standard estimate: actual_tokens + tokens_saved_delta
+          |--- Optimised: actual_tokens
+          |--- savings_pct: (saved / standard) * 100
+  </pre>
+</div>
+
+</div>
+
+<div class="footer">
+  <p>DBX Migration Studio &mdash; Token Optimiser v2.0 &mdash; Built for cost-efficient AI interactions</p>
+  <p style="margin-top:6px"><a href="/static/tokenoptimisationdoc.html">&#8592; Full Documentation</a> &nbsp;|&nbsp; <a href="/#wf-discovery">Back to App</a></p>
+</div>
+
+</body>
+</html>

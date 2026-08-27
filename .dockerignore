@@ -1,0 +1,15 @@
+__pycache__
+*.pyc
+*.pyo
+.venv
+.git
+.gitignore
+*.md
+docs/
+migration_utility/logs/
+migration_utility/__pycache__/
+migration_utility/routes/__pycache__/
+migration_utility/tests/
+.vscode
+*.yml
+!resources/migration_jobs.yml

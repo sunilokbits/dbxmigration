@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SQL → Databricks Migration Studio — Brickbuilder Accelerator BOM</title>
+<style>
+  :root{
+    --orange:#FF3621; --navy:#0B2026; --oat:#F9F7F4; --oat2:#EEEDE9;
+    --maroon:#98102A; --yellow:#FFAB00; --green:#00A972; --blue:#2272B4;
+    --gray-nav:#303F47; --gray-text:#5A6F77; --gray-line:#DCE0E2;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  @page{size:338.7mm 190.5mm;margin:0}  /* 13.33in × 7.5in — 16:9 slide */
+  body{font-family:'Segoe UI',system-ui,Arial,sans-serif;color:var(--navy);font-size:13px}
+  .slide{width:1280px;height:720px;position:relative;overflow:hidden;page-break-after:always;background:var(--oat);display:flex;flex-direction:column;padding:52px 64px}
+  .slide:last-child{page-break-after:auto}
+
+  /* header strip on content slides */
+  .hd{display:flex;align-items:center;gap:14px;margin-bottom:26px;flex-shrink:0}
+  .hd .bar{width:8px;height:40px;background:var(--orange);border-radius:3px}
+  .hd h1{font-size:31px;font-weight:800;letter-spacing:-.01em;color:var(--navy)}
+  .hd .pg{margin-left:auto;font-size:13px;color:var(--gray-text);font-weight:600}
+  .brand{position:absolute;right:64px;top:56px;display:flex;align-items:center;gap:9px;font-weight:800;font-size:13px;color:var(--gray-nav)}
+  .brand .mark{width:22px;height:22px;background:var(--orange);border-radius:5px;position:relative}
+  .brand .mark::after{content:"";position:absolute;left:4px;top:4px;width:14px;height:14px;background:var(--navy);border-radius:3px;clip-path:polygon(0 0,100% 0,100% 100%)}
+
+  /* ── Slide 1 · Title ── */
+  .title-slide{background:var(--navy);color:#fff;justify-content:center;padding:0 96px}
+  .title-slide .accent{position:absolute;right:-140px;top:-140px;width:520px;height:520px;border-radius:50%;background:radial-gradient(circle,rgba(255,54,33,.28),transparent 68%)}
+  .title-slide .accent2{position:absolute;left:-120px;bottom:-160px;width:460px;height:460px;border-radius:50%;background:radial-gradient(circle,rgba(34,114,180,.25),transparent 70%)}
+  .kicker{display:inline-flex;align-items:center;gap:10px;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.25);color:#FFD9D2;padding:8px 20px;border-radius:99px;font-size:13px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;width:max-content}
+  .title-slide h1{font-size:64px;font-weight:800;line-height:1.08;margin:30px 0 18px;letter-spacing:-.02em}
+  .title-slide h1 em{font-style:normal;color:var(--orange)}
+  .title-slide .sub{font-size:21px;color:#B8C7CC;max-width:860px;line-height:1.5}
+  .title-meta{display:flex;gap:44px;margin-top:52px}
+  .title-meta .m{border-left:3px solid var(--orange);padding-left:14px}
+  .title-meta .m small{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:#8FA6AD;font-weight:700;margin-bottom:4px}
+  .title-meta .m b{font-size:15.5px;font-weight:700;color:#fff}
+
+  /* ── generic grids/cards ── */
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;flex:1;align-content:start}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:22px;flex:1;align-content:start}
+  .card{background:#fff;border:1px solid var(--gray-line);border-radius:14px;padding:24px 26px;box-shadow:0 2px 10px rgba(11,32,38,.05)}
+  .card h3{font-size:17px;font-weight:800;margin-bottom:8px;display:flex;align-items:center;gap:10px}
+  .card p{font-size:13.5px;color:var(--gray-text);line-height:1.6}
+  .num{width:34px;height:34px;border-radius:9px;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;flex-shrink:0}
+  .stat{font-size:30px;font-weight:800;margin-bottom:4px}
+  ul.ticks{list-style:none;margin-top:10px}
+  ul.ticks li{padding:4px 0 4px 24px;position:relative;font-size:13px;color:var(--gray-text);line-height:1.5}
+  ul.ticks li::before{content:"";position:absolute;left:0;top:9px;width:13px;height:13px;border-radius:4px;background:var(--green);clip-path:polygon(0 0,100% 0,100% 100%,0 100%)}
+  ul.ticks li::after{content:"✓";position:absolute;left:3px;top:5px;color:#fff;font-size:9px;font-weight:900}
+
+  /* flow diagram */
+  .flow{display:flex;align-items:stretch;gap:0;flex:1;align-items:center}
+  .fstep{flex:1;background:#fff;border:1px solid var(--gray-line);border-radius:14px;padding:20px 16px;text-align:center;box-shadow:0 2px 10px rgba(11,32,38,.05)}
+  .fstep .ic{width:52px;height:52px;margin:0 auto 12px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:24px}
+  .fstep h4{font-size:15px;font-weight:800;margin-bottom:6px}
+  .fstep p{font-size:11.5px;color:var(--gray-text);line-height:1.5}
+  .farrow{width:34px;text-align:center;color:var(--orange);font-size:22px;font-weight:800;flex-shrink:0}
+  .flow2{display:flex;gap:14px;margin-top:16px}
+  .flow2 .pill{flex:1;background:var(--navy);color:#DDE7EA;border-radius:10px;padding:9px 12px;font-size:11.5px;font-weight:700;text-align:center}
+  .flow2 .pill b{color:var(--yellow)}
+
+  /* arch boxes */
+  .arch{flex:1;display:flex;flex-direction:column;gap:14px}
+  .arch-row{display:flex;gap:14px;align-items:stretch}
+  .abox{background:#fff;border:1px solid var(--gray-line);border-radius:12px;padding:12px 14px;text-align:center;flex:1;box-shadow:0 2px 8px rgba(11,32,38,.04)}
+  .abox h5{font-size:12.5px;font-weight:800;margin-bottom:3px}
+  .abox p{font-size:10.5px;color:var(--gray-text);line-height:1.4}
+  .abox.src{border-top:4px solid var(--blue)}
+  .abox.app{border-top:4px solid var(--orange)}
+  .abox.dbr{border-top:4px solid var(--green);background:var(--green);color:#fff;border-color:var(--green)}
+  .abox.dbr p{color:#E2F7EF}
+  .abox.gov{border-top:4px solid var(--navy);background:var(--navy);color:#fff;border-color:var(--navy)}
+  .abox.gov p{color:#B8C7CC}
+  .albl{width:118px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:var(--oat2);border-radius:12px;font-size:11px;font-weight:800;color:var(--gray-nav);letter-spacing:.06em;text-transform:uppercase;text-align:center;line-height:1.35}
+
+  /* BOM table */
+  table.bom{width:100%;border-collapse:collapse;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(11,32,38,.05)}
+  table.bom th{background:var(--navy);color:#fff;text-align:left;font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;padding:10px 14px}
+  table.bom td{padding:8.5px 14px;border-bottom:1px solid var(--gray-line);font-size:12px;color:var(--gray-text);vertical-align:top;line-height:1.45}
+  table.bom td b{color:var(--navy)}
+  table.bom tr:last-child td{border-bottom:none}
+  .pill{display:inline-block;font-size:10px;font-weight:800;padding:2px 10px;border-radius:99px}
+  .p-notebook{background:#FFF3E0;color:#B26A00}.p-app{background:#FFE5E1;color:var(--maroon)}
+  .p-doc{background:#E3F2FD;color:#1565C0}.p-dq{background:#E6F7F0;color:#00795C}
+
+  /* contact */
+  .contact{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:8px}
+  .ccard{background:#fff;border:1px solid var(--gray-line);border-radius:14px;padding:26px;text-align:center}
+  .avatar{width:64px;height:64px;border-radius:50%;margin:0 auto 12px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:22px}
+  .ccard h4{font-size:16px;font-weight:800}
+  .ccard .role{font-size:12px;color:var(--gray-text);font-weight:700;margin:3px 0 8px}
+  .ccard a{font-size:12.5px;color:var(--blue);text-decoration:none;font-weight:600}
+  .foot{position:absolute;bottom:22px;left:64px;right:64px;display:flex;justify-content:space-between;font-size:10.5px;color:var(--gray-text);border-top:1px solid var(--gray-line);padding-top:10px}
+</style>
+</head>
+<body>
+
+<!-- ═══════════ SLIDE 1 · TITLE ═══════════ -->
+<div class="slide title-slide">
+  <div class="accent"></div><div class="accent2"></div>
+  <span class="kicker">Brickbuilder Accelerator · Bill of Materials</span>
+  <h1>SQL <em>→</em> Databricks<br>Migration Studio</h1>
+  <p class="sub">A single, governed workspace that discovers, converts, migrates and validates legacy SQL Server, Snowflake, Redshift, SharePoint and REST API estates onto the Databricks Lakehouse — with metadata-driven pipelines and built-in data quality.</p>
+  <div class="title-meta">
+    <div class="m"><small>Product</small><b>Databricks Platform | Data Migration</b></div>
+    <div class="m"><small>Partner</small><b>Insight Enterprises</b></div>
+    <div class="m"><small>Business Objective</small><b>Cut migration effort &amp; risk by 60–70%</b></div>
+    <div class="m"><small>Version</small><b>v1.0 · August 2026</b></div>
+  </div>
+</div>
+
+<!-- ═══════════ SLIDE 2 · CUSTOMER CHALLENGE ═══════════ -->
+<div class="slide">
+  <div class="hd"><div class="bar"></div><h1>Customer Challenge</h1><span class="pg">02</span></div>
+  <div class="brand"><span>Databricks</span><div class="mark"></div></div>
+  <p style="font-size:15px;color:var(--gray-text);max-width:1050px;margin-bottom:26px;line-height:1.6">
+    Enterprises running mission-critical workloads on legacy SQL Server, Azure Synapse, Snowflake and Redshift face a hard deadline: aging infrastructure, rising licence costs, and the need for unified AI-ready governance on the Lakehouse. But migration programmes stall in manual, error-prone, hard-to-govern processes.</p>
+  <div class="grid3">
+    <div class="card"><div class="stat" style="color:var(--maroon)">60%+</div><h3>Manual Effort &amp; Slow Delivery</h3><p>Object-by-object conversion of stored procedures, views and UDFs to PySpark consumes engineer-months; schema and data movement are hand-built per table, with no repeatable pipeline factory.</p></div>
+    <div class="card"><div class="stat" style="color:var(--maroon)">Multi-Source</div><h3>Fragmented Source Landscape</h3><p>Estates span SQL Server, Azure SQL/Synapse, Snowflake, Redshift, SharePoint and REST APIs — each needing different connectors, discovery methods and validation logic, with no single control plane.</p></div>
+    <div class="card"><div class="stat" style="color:var(--maroon)">No Proof</div><h3>Unproven Data Quality &amp; Reconciliation</h3><p>After cutover, teams struggle to prove completeness, accuracy and freshness to the business — quality checks are ad-hoc scripts, and reconciliation is manual spreadsheet work.</p></div>
+  </div>
+  <div class="foot"><span>SQL → Databricks Migration Studio · Accelerator BOM</span><span>Insight Enterprises × Databricks</span></div>
+</div>
+
+<!-- ═══════════ SLIDE 3 · ACCELERATOR OVERVIEW ═══════════ -->
+<div class="slide">
+  <div class="hd"><div class="bar"></div><h1>Accelerator Overview</h1><span class="pg">03</span></div>
+  <div class="brand"><span>Databricks</span><div class="mark"></div></div>
+  <p style="font-size:14px;color:var(--gray-text);margin-bottom:20px;line-height:1.55">A <b style="color:var(--navy)">single Databricks App</b> that walks a migration team through the full journey — <b style="color:var(--navy)">Discover → Convert → Deploy → Migrate → Validate</b> — on native Databricks services with Unity Catalog governance end-to-end.</p>
+  <div class="grid3" style="grid-template-rows:1fr 1fr;gap:16px">
+    <div class="card" style="padding:16px 20px"><h3><span class="num" style="background:var(--blue)">1</span>Discovery &amp; Complexity Engine</h3><p>Live scans of source objects with automated complexity scoring, effort points, dependency graphs and BOM / HTML reports.</p></div>
+    <div class="card" style="padding:16px 20px"><h3><span class="num" style="background:var(--blue)">2</span>AI Convert to PySpark</h3><p>LLM-powered conversion of stored procedures, views and UDFs to validated PySpark, with human-in-the-loop review.</p></div>
+    <div class="card" style="padding:16px 20px"><h3><span class="num" style="background:var(--blue)">3</span>MetadataFlow &amp; Pipeline Studio</h3><p>Configures metadata-driven Delta tables and auto-generates Extract / Bronze / Silver / Orchestrator notebooks — deploy once, run many.</p></div>
+    <div class="card" style="padding:16px 20px"><h3><span class="num" style="background:var(--green)">4</span>Data Quality &amp; Reconciliation</h3><p>12 embedded DQ checks per pipeline run with quarantine, restore points, auto-rollback and <b>__dq_metrics</b> scoring; source-vs-target reconciliation reports.</p></div>
+    <div class="card" style="padding:16px 20px"><h3><span class="num" style="background:var(--green)">5</span>Operations: Scheduler &amp; Self-Healing</h3><p>Job scheduling with watermark-based incremental loads, run history, and an automated health-check &amp; self-healing bot.</p></div>
+    <div class="card" style="padding:16px 20px"><h3><span class="num" style="background:var(--maroon)">6</span>Genie AI Assistant</h3><p>Native chat over the migration workspace — asks questions of your metadata, pipelines and run history in plain English.</p></div>
+  </div>
+  <div class="foot"><span>SQL → Databricks Migration Studio · Accelerator BOM</span><span>Insight Enterprises × Databricks</span></div>
+</div>
+
+<!-- ═══════════ SLIDE 4 · UNIQUE TECHNICAL CAPABILITIES ═══════════ -->
+<div class="slide">
+  <div class="hd"><div class="bar"></div><h1>Unique Technical Capabilities</h1><span class="pg">04</span></div>
+  <div class="brand"><span>Databricks</span><div class="mark"></div></div>
+  <div class="grid3">
+    <div class="card">
+      <h3><span class="num" style="background:var(--orange)">A</span>Metadata-Driven Pipeline Factory</h3>
+      <p style="margin-bottom:8px"><b style="color:var(--navy)">Feature:</b> Pipeline definitions live in Delta metadata tables (<code>wf_pipeline_metadata</code>, <code>wf_job_metadata</code>, <code>wf_run_history</code>). Generated notebooks read the metadata — one notebook serves every table.</p>
+      <p><b style="color:var(--navy)">Benefit:</b> Onboard a new table in minutes, not days. Zero notebook sprawl; full audit trail in Unity Catalog.</p>
+    </div>
+    <div class="card">
+      <h3><span class="num" style="background:var(--orange)">B</span>Built-in DQ Framework with Quarantine</h3>
+      <p style="margin-bottom:8px"><b style="color:var(--navy)">Feature:</b> 5 Bronze + 7 Silver checks — empty-file skip, null-key detection, dedup, schema-drift detection, quarantine flags, per-column null %, row-count anomaly alerts — scored per run into <code>__dq_metrics</code>, with restore points and auto-rollback.</p>
+      <p><b style="color:var(--navy)">Benefit:</b> Bad rows never reach Silver silently. Every run ships with defensible, per-table quality evidence for cutover sign-off.</p>
+    </div>
+    <div class="card">
+      <h3><span class="num" style="background:var(--orange)">C</span>Multi-Source, Multi-Cloud by Design</h3>
+      <p style="margin-bottom:8px"><b style="color:var(--navy)">Feature:</b> Pluggable connectors for Azure SQL, SQL Server, Synapse, Snowflake, Redshift, SharePoint (Entra ID app-only) and REST APIs with OpenAPI discovery — all configured from one Settings pane.</p>
+      <p><b style="color:var(--navy)">Benefit:</b> One accelerator covers the whole estate; clients avoid buying point tools per source.</p>
+    </div>
+  </div>
+  <div style="margin-top:20px;background:var(--navy);border-radius:14px;padding:16px 26px;color:#fff;display:flex;align-items:center;gap:26px">
+    <b style="font-size:13px;letter-spacing:.08em;color:var(--yellow);text-transform:uppercase;flex-shrink:0">Customer Outcome</b>
+    <span style="font-size:13.5px;color:#DDE7EA;line-height:1.5">Migration teams move from spreadsheet-tracked, hand-coded projects to a governed factory: discovery-backed estimates, automated pipelines with embedded quality gates, and leadership dashboards showing live progress — typically eliminating the majority of manual build effort per table.</span>
+  </div>
+  <div class="foot"><span>SQL → Databricks Migration Studio · Accelerator BOM</span><span>Insight Enterprises × Databricks</span></div>
+</div>
+
+<!-- ═══════════ SLIDE 5 · USE CASES & PERSONAS ═══════════ -->
+<div class="slide">
+  <div class="hd"><div class="bar"></div><h1>Scenario / Use Cases and Personas</h1><span class="pg">05</span></div>
+  <div class="brand"><span>Databricks</span><div class="mark"></div></div>
+  <div class="grid3">
+    <div class="card">
+      <h3 style="color:var(--blue)">Legacy SQL Estate Modernisation</h3>
+      <ul class="ticks">
+        <li><b>Azure SQL / SQL Server / Synapse:</b> auto-discover objects, AI-convert T-SQL to PySpark, migrate via medallion pipelines.</li>
+        <li><b>Snowflake &amp; Redshift:</b> connect with native credentials, inventory tables &amp; objects, lift to Delta with reconciliation.</li>
+        <li><b>Assessment-first programmes:</b> complexity-scored BOM &amp; effort estimates to scope and price the migration.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3 style="color:var(--green)">Unstructured &amp; API Data Onboarding</h3>
+      <ul class="ticks">
+        <li><b>SharePoint lists &amp; libraries:</b> Entra app-only auth; lists surfaced as first-class migration tables.</li>
+        <li><b>REST APIs:</b> OpenAPI/Swagger auto-discovery; GET endpoints onboarded as governed Delta sources.</li>
+        <li><b>Landing zone:</b> UC Volumes staging with watermark-based incremental refresh.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3 style="color:var(--maroon)">Governed Run &amp; Cutover Assurance</h3>
+      <ul class="ticks">
+        <li><b>Quality-gated pipelines:</b> quarantine + DQ scores per run for sign-off evidence.</li>
+        <li><b>Reconciliation:</b> automated source-vs-target row/aggregate checks.</li>
+        <li><b>Operations:</b> schedules, watermarks, run history and self-healing for steady-state.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="flow2" style="margin-top:22px">
+    <div class="pill"><b>AUDIENCE</b> · CIO / Data Platform Lead</div>
+    <div class="pill"><b>AUDIENCE</b> · Migration Programme Manager</div>
+    <div class="pill"><b>AUDIENCE</b> · Data Engineer</div>
+    <div class="pill"><b>AUDIENCE</b> · Platform Architect</div>
+    <div class="pill"><b>AUDIENCE</b> · QA / Data Quality Lead</div>
+  </div>
+  <div class="foot"><span>SQL → Databricks Migration Studio · Accelerator BOM</span><span>Insight Enterprises × Databricks</span></div>
+</div>
+
+<!-- ═══════════ SLIDE 6 · PROCESS FLOW ═══════════ -->
+<div class="slide">
+  <div class="hd"><div class="bar"></div><h1>Process Flow</h1><span class="pg">06</span></div>
+  <div class="brand"><span>Databricks</span><div class="mark"></div></div>
+  <div class="flow">
+    <div class="fstep"><div class="ic" style="background:#E3F2FD">🔍</div><h4>1 · Discover</h4><p>Connect source; live scan scores every object for complexity, effort &amp; risk; BOM generated.</p></div>
+    <div class="farrow">→</div>
+    <div class="fstep"><div class="ic" style="background:#FFF3E0">⚡</div><h4>2 · Convert</h4><p>T-SQL objects AI-converted to PySpark with validation &amp; human review.</p></div>
+    <div class="farrow">→</div>
+    <div class="fstep"><div class="ic" style="background:#E6F7F0">🏗️</div><h4>3 · Deploy</h4><p>Infra auto-provisioning; metadata tables initialised; Extract/Bronze/Silver/Orchestrator notebooks deployed.</p></div>
+    <div class="farrow">→</div>
+    <div class="fstep"><div class="ic" style="background:#F5E6FF">🚚</div><h4>4 · Migrate</h4><p>Watermarked full/incremental loads land data through Bronze → Silver with quarantine &amp; DQ gates.</p></div>
+    <div class="farrow">→</div>
+    <div class="fstep"><div class="ic" style="background:#FFE5E1">✅</div><h4>5 · Validate</h4><p>__dq_metrics scores, schema comparison and source-vs-target reconciliation evidence cutover.</p></div>
+    <div class="farrow">→</div>
+    <div class="fstep"><div class="ic" style="background:#EEF2F7">📈</div><h4>6 · Operate</h4><p>Schedules, run history, dashboards, self-healing bot and Genie AI keep the estate healthy.</p></div>
+  </div>
+  <div class="flow2">
+    <div class="pill"><b>Orchestration</b> — Databricks Workflows + Orchestrator notebook</div>
+    <div class="pill"><b>Governance</b> — Unity Catalog on every catalog, schema &amp; volume</div>
+    <div class="pill"><b>Observability</b> — wf_run_history + __dq_metrics + dashboards</div>
+  </div>
+  <div class="foot"><span>SQL → Databricks Migration Studio · Accelerator BOM</span><span>Insight Enterprises × Databricks</span></div>
+</div>
+
+<!-- ═══════════ SLIDE 7 · COMPONENT ARCHITECTURE ═══════════ -->
+<div class="slide">
+  <div class="hd"><div class="bar"></div><h1>Component Architecture</h1><span class="pg">07</span></div>
+  <div class="brand"><span>Databricks</span><div class="mark"></div></div>
+  <div class="arch">
+    <div class="arch-row">
+      <div class="albl">Source<br>Systems</div>
+      <div class="abox src"><h5>SQL Server / Azure SQL / Synapse</h5><p>procedures · views · UDFs · tables</p></div>
+      <div class="abox src"><h5>Snowflake / Redshift</h5><p>native connectors</p></div>
+      <div class="abox src"><h5>SharePoint Online</h5><p>Entra ID app-only REST</p></div>
+      <div class="abox src"><h5>REST APIs</h5><p>OpenAPI discovery</p></div>
+    </div>
+    <div class="arch-row">
+      <div class="albl">Migration<br>Studio App<br>(Databricks Apps)</div>
+      <div class="abox app"><h5>Discovery &amp; BOM</h5><p>complexity engine · reports</p></div>
+      <div class="abox app"><h5>AI Converter</h5><p>T-SQL → PySpark</p></div>
+      <div class="abox app"><h5>Pipeline Studio</h5><p>medallion factory · scheduler</p></div>
+      <div class="abox app"><h5>DQ &amp; Reconciliation</h5><p>quality gates · evidence</p></div>
+      <div class="abox app"><h5>Genie AI</h5><p>chat over the workspace</p></div>
+    </div>
+    <div class="arch-row">
+      <div class="albl">Databricks<br>Lakehouse</div>
+      <div class="abox dbr"><h5>SQL Warehouse (Serverless)</h5><p>app queries · metadata ops</p></div>
+      <div class="abox dbr"><h5>Jobs &amp; DLT Pipelines</h5><p>generated notebooks</p></div>
+      <div class="abox dbr"><h5>Model Serving</h5><p>LLM endpoints for AI features</p></div>
+      <div class="abox dbr"><h5>UC Volumes</h5><p>landing zone (ADLS Gen2)</p></div>
+      <div class="abox dbr"><h5>Delta: Bronze → Silver</h5><p>medallion data + recon + logging</p></div>
+    </div>
+    <div class="arch-row">
+      <div class="albl">Governance<br>&amp; Metadata</div>
+      <div class="abox gov"><h5>Unity Catalog</h5><p>catalogs: admin_source · bronze · silver · volumes · reconciliation · logging</p></div>
+      <div class="abox gov"><h5>Metadata Delta Tables</h5><p>wf_pipeline_metadata · wf_job_metadata · wf_run_history · wf_source_tables · __dq_metrics</p></div>
+      <div class="abox gov"><h5>Secrets &amp; Identity</h5><p>secret scope · service principal · Entra ID</p></div>
+    </div>
+  </div>
+  <div class="foot"><span>SQL → Databricks Migration Studio · Accelerator BOM</span><span>Insight Enterprises × Databricks</span></div>
+</div>
+
+<!-- ═══════════ SLIDE 8 · ACCELERATOR ARCHITECTURE ═══════════ -->
+<div class="slide">
+  <div class="hd"><div class="bar"></div><h1>Accelerator Architecture</h1><span class="pg">08</span></div>
+  <div class="brand"><span>Databricks</span><div class="mark"></div></div>
+  <div class="arch">
+    <div class="arch-row">
+      <div class="albl">Ingest</div>
+      <div class="abox"><h5>JDBC / native connectors</h5><p>watermark-based full &amp; incremental extract to UC Volumes (Parquet)</p></div>
+      <div class="abox"><h5>SharePoint / API connectors</h5><p>REST pulls normalised into the same landing pattern</p></div>
+      <div class="abox"><h5>Auto Loader / COPY-ready landing</h5><p>schema-on-read with drift detection at Bronze</p></div>
+    </div>
+    <div class="arch-row">
+      <div class="albl">Medallion</div>
+      <div class="abox" style="border-top:4px solid var(--yellow)"><h5>BRONZE — raw, audited</h5><p>__bronze_ts · __source_table · __is_quarantined · DQ-01…05 gates</p></div>
+      <div class="abox" style="border-top:4px solid var(--green)"><h5>SILVER — cleansed, deduplicated</h5><p>quarantine filter · trim/empty-to-NULL · dedup · __dq_status · DQ-01…07</p></div>
+      <div class="abox"><h5>Reconciliation &amp; Logging catalogs</h5><p>row/aggregate checks · execution log for every run</p></div>
+    </div>
+    <div class="arch-row">
+      <div class="albl">Consume</div>
+      <div class="abox"><h5>Migration dashboards</h5><p>progress · quality trend · reports · audit</p></div>
+      <div class="abox"><h5>Downstream Gold / BI / AI</h5><p>governed Delta tables ready for the client's consumers</p></div>
+    </div>
+    <div class="arch-row">
+      <div class="albl">Platform<br>Guardrails</div>
+      <div class="abox gov"><h5>Unity Catalog</h5><p>single governance plane — required by the reference architecture (Databricks Well-Architected)</p></div>
+      <div class="abox gov"><h5>Delta Lake</h5><p>restore points · auto-rollback · time travel on every write</p></div>
+      <div class="abox gov"><h5>Workflows</h5><p>orchestrator fans out per-table jobs with retries &amp; alerts</p></div>
+      <div class="abox gov"><h5>Observability</h5><p>__dq_metrics + wf_run_history + ExecutionLog</p></div>
+    </div>
+  </div>
+  <div class="foot"><span>SQL → Databricks Migration Studio · Accelerator BOM</span><span>Insight Enterprises × Databricks</span></div>
+</div>
+
+<!-- ═══════════ SLIDE 9 · BILL OF MATERIALS ═══════════ -->
+<div class="slide">
+  <div class="hd"><div class="bar"></div><h1>Bill of Materials — Deliverable Assets</h1><span class="pg">09</span></div>
+  <div class="brand"><span>Databricks</span><div class="mark"></div></div>
+  <table class="bom">
+    <tr><th style="width:24%">Asset</th><th style="width:44%">Description</th><th style="width:16%">Format</th><th style="width:16%">Audience</th></tr>
+    <tr><td><b>Migration Studio App</b></td><td>Databricks Apps–hosted Flask application: Discovery, Convert, MetadataFlow, Pipeline Studio, Job Manager/Scheduler, Reports, Progress, Schema Compare, Reconciliation, Data Quality, Data Modeling, Health Check, Audit, Settings</td><td><span class="pill p-app">Databricks App</span></td><td>Migration team</td></tr>
+    <tr><td><b>Metadata Notebooks ×4</b></td><td>01_Meta_Extract, 02_Meta_Bronze, 03_Meta_Silver, 00_Meta_Orchestrator — metadata-driven, DQ-gated, restore-point protected; DLT/SDP variants included</td><td><span class="pill p-notebook">Notebooks + DLT</span></td><td>Platform / Data Eng</td></tr>
+    <tr><td><b>Data Quality Framework</b></td><td>12 checks (Bronze 5 / Silver 7), quarantine pattern, __dq_metrics scoring table, restore points &amp; auto-rollback</td><td><span class="pill p-dq">Framework</span></td><td>QA / Data Governance</td></tr>
+    <tr><td><b>Source Connectors</b></td><td>Azure SQL / SQL Server / Synapse / Snowflake / Redshift / SharePoint (Entra ID) / REST API (OpenAPI discovery)</td><td><span class="pill p-app">Modules</span></td><td>Data Eng</td></tr>
+    <tr><td><b>Analytics Dashboards</b></td><td>Progress funnel, quality trend &amp; radar from __dq_metrics, reconciliation report, schema comparison, audit &amp; compliance</td><td><span class="pill p-app">Dashboards</span></td><td>PMO / Leadership</td></tr>
+    <tr><td><b>Self-Healing Bot</b></td><td>Automated health checks with healing rules and restore-point recovery</td><td><span class="pill p-dq">Automation</span></td><td>Operations</td></tr>
+    <tr><td><b>Genie AI Integration</b></td><td>Natural-language assistant over workspace metadata &amp; run history via Model Serving endpoints</td><td><span class="pill p-app">AI Feature</span></td><td>All users</td></tr>
+    <tr><td><b>Enablement Pack</b></td><td>Deployment runbook, interactive Prerequisites &amp; Go-Live checklist, admin/user guide, architecture deck</td><td><span class="pill p-doc">Docs</span></td><td>Client team</td></tr>
+  </table>
+  <div class="foot"><span>SQL → Databricks Migration Studio · Accelerator BOM</span><span>Insight Enterprises × Databricks</span></div>
+</div>
+
+<!-- ═══════════ SLIDE 10 · SOLUTION DESCRIPTION ═══════════ -->
+<div class="slide">
+  <div class="hd"><div class="bar"></div><h1>Solution Description</h1><span class="pg">10</span></div>
+  <div class="brand"><span>Databricks</span><div class="mark"></div></div>
+  <div class="grid2" style="grid-template-columns:1.15fr 1fr">
+    <div class="card">
+      <h3 style="color:var(--orange)">Solution Summary</h3>
+      <p style="margin-bottom:12px">Deployment of Migration Studio into the client's Azure Databricks workspace, configuration against up to two source systems, pilot migration of a representative table group through the full DQ-gated medallion flow, and handover with enablement.</p>
+      <ul class="ticks">
+        <li>App deployment + environment configuration (catalogs, warehouse, secrets, storage)</li>
+        <li>Discovery assessment with complexity-scored BOM for the pilot scope</li>
+        <li>Pilot: source → Bronze → Silver with DQ metrics &amp; reconciliation evidence</li>
+        <li>Hypercare + admin/developer enablement sessions</li>
+      </ul>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <div class="card" style="display:flex;gap:20px;align-items:center">
+        <div style="flex:1"><div class="stat" style="color:var(--blue)">2–4 wks</div><p><b>Typical timeline</b> — deploy to validated pilot handover (per source system pair)</p></div>
+      </div>
+      <div class="card" style="display:flex;gap:20px;align-items:center">
+        <div style="flex:1"><div class="stat" style="color:var(--green)">60–70%</div><p><b>Manual effort reduction</b> vs hand-coded object-by-object migration</p></div>
+      </div>
+      <div class="card">
+        <h3 style="font-size:14px">This Solution Unlocks</h3>
+        <ul class="ticks" style="margin-top:6px">
+          <li>Board-level, live view of migration progress &amp; quality</li>
+          <li>Repeatable factory for every remaining wave</li>
+          <li>Governed, AI-ready Delta estate on Unity Catalog</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>SQL → Databricks Migration Studio · Accelerator BOM</span><span>Insight Enterprises × Databricks</span></div>
+</div>
+
+<!-- ═══════════ SLIDE 11 · CONTACT ═══════════ -->
+<div class="slide">
+  <div class="hd"><div class="bar"></div><h1>Contact Us</h1><span class="pg">11</span></div>
+  <div class="brand"><span>Databricks</span><div class="mark"></div></div>
+  <div class="contact">
+    <div class="ccard">
+      <div class="avatar" style="background:linear-gradient(135deg,var(--orange),var(--maroon))">SK</div>
+      <h4>Sunil Kumar</h4>
+      <div class="role">Technical Sponsor · Migration Studio Lead</div>
+      <a href="mailto:sunil.kumar@insight.com">sunil.kumar@insight.com</a>
+    </div>
+    <div class="ccard">
+      <div class="avatar" style="background:linear-gradient(135deg,var(--blue),var(--navy))">—</div>
+      <h4>Business Sponsor</h4>
+      <div class="role">Name · Title</div>
+      <a href="#">email@insight.com</a>
+    </div>
+    <div class="ccard">
+      <div class="avatar" style="background:linear-gradient(135deg,var(--green),var(--blue))">—</div>
+      <h4>Alliance Leader</h4>
+      <div class="role">Name · Title</div>
+      <a href="#">email@insight.com</a>
+    </div>
+  </div>
+  <p style="text-align:center;margin-top:34px;color:var(--gray-text);font-size:13px">Let's Partner — bring Migration Studio to your next SQL modernisation pursuit.</p>
+  <div class="foot"><span>SQL → Databricks Migration Studio · Accelerator BOM</span><span>Insight Enterprises × Databricks</span></div>
+</div>
+
+</body>
+</html>

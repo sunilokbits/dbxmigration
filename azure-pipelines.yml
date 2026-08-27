@@ -1,0 +1,214 @@
+# =============================================================================
+# DBX Migration Studio — CI/CD pipeline (Azure DevOps)
+# =============================================================================
+# Mirrors the flow in Migration_Studio deployment guide:
+#   feature/* -> PR (validate)              -> nothing deployed
+#   main      -> merge                      -> auto-deploy: dev
+#   main      -> after dev succeeds         -> auto-deploy: staging + integration tests
+#   release/* -> tag pushed                 -> manual approval -> deploy to every client workspace
+#
+# Setup required once, in Azure DevOps (see deploy/pipeline/README.md):
+#   1. Service connections / variable groups per client, each linked to that
+#      client's Azure Key Vault (workload-identity federation — no PATs stored
+#      in ADO). Group naming convention: kv-<clientName>
+#   2. An Environment named "clients-prod" with a manual approval check —
+#      this is what gates the DeployClients stage below.
+#   3. Update the `clients` parameter with the list of onboarded client names.
+# =============================================================================
+
+trigger:
+  branches:
+    include:
+      - main
+  tags:
+    include:
+      - release/*
+
+pr:
+  branches:
+    include:
+      - main
+
+parameters:
+  - name: clients
+    displayName: Client workspaces to deploy (production)
+    type: object
+    default:
+      - insight
+      - test-client
+
+variables:
+  - name: pythonVersion
+    value: "3.11"
+  - name: isMain
+    value: $[eq(variables['Build.SourceBranch'], 'refs/heads/main')]
+  - name: isReleaseTag
+    value: $[startsWith(variables['Build.SourceBranch'], 'refs/tags/release/')]
+
+stages:
+  # ---------------------------------------------------------------------------
+  - stage: Validate
+    displayName: "01 · Validate bundle & unit tests"
+    jobs:
+      - job: Validate
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: $(pythonVersion)
+
+          - bash: |
+              curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+            displayName: Install Databricks CLI
+
+          - bash: |
+              python -m pip install --upgrade pip
+              pip install -r requirements.txt
+              pip install pytest
+            displayName: Install Python dependencies
+
+          - bash: |
+              set -e
+              databricks bundle validate -t dev
+              databricks bundle validate -t staging
+              databricks bundle validate -t client --var="client_name=ci-validate"
+            displayName: databricks bundle validate (all targets)
+            env:
+              DATABRICKS_HOST: $(DEV_DATABRICKS_HOST)
+              DATABRICKS_TOKEN: $(DEV_DATABRICKS_TOKEN)
+
+          - bash: |
+              pytest migration_utility/tests -v
+            displayName: Run unit tests
+
+  # ---------------------------------------------------------------------------
+  - stage: DeployDev
+    displayName: "02 · Deploy to Dev"
+    dependsOn: Validate
+    condition: and(succeeded(), eq(variables.isMain, 'true'))
+    variables:
+      - group: kv-dev
+    jobs:
+      - deployment: DeployDev
+        pool:
+          vmImage: ubuntu-latest
+        environment: dev
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - task: UsePythonVersion@0
+                  inputs:
+                    versionSpec: $(pythonVersion)
+                - bash: |
+                    curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+                  displayName: Install Databricks CLI
+                - bash: |
+                    set -e
+                    databricks bundle deploy -t dev
+                    databricks bundle run -t dev sql_to_databricks_migration_app || true
+                  displayName: databricks bundle deploy -t dev
+                  env:
+                    DATABRICKS_HOST: $(DATABRICKS_HOST)
+                    DATABRICKS_CLIENT_ID: $(DATABRICKS_CLIENT_ID)
+                    DATABRICKS_CLIENT_SECRET: $(DATABRICKS_CLIENT_SECRET)
+
+  # ---------------------------------------------------------------------------
+  - stage: DeployStaging
+    displayName: "03 · Deploy to Staging + integration tests"
+    dependsOn: DeployDev
+    condition: succeeded()
+    variables:
+      - group: kv-staging
+    jobs:
+      - deployment: DeployStaging
+        pool:
+          vmImage: ubuntu-latest
+        environment: staging
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - task: UsePythonVersion@0
+                  inputs:
+                    versionSpec: $(pythonVersion)
+                - bash: |
+                    curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+                  displayName: Install Databricks CLI
+                - bash: |
+                    set -e
+                    databricks bundle deploy -t staging
+                  displayName: databricks bundle deploy -t staging
+                  env:
+                    DATABRICKS_HOST: $(DATABRICKS_HOST)
+                    DATABRICKS_CLIENT_ID: $(DATABRICKS_CLIENT_ID)
+                    DATABRICKS_CLIENT_SECRET: $(DATABRICKS_CLIENT_SECRET)
+                - bash: |
+                    pip install -r requirements.txt
+                    pytest migration_utility/tests -v -m integration || true
+                  displayName: Run integration tests against staging
+                  env:
+                    DATABRICKS_HOST: $(DATABRICKS_HOST)
+                    DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
+
+  # ---------------------------------------------------------------------------
+  # Deploys the bundle + Unity Catalog infra + secrets into every onboarded
+  # client's own workspace, one job per client, fully in parallel. Each job
+  # only runs after a human approves the "clients-prod" Environment check —
+  # configure that approval once in Project Settings > Environments.
+  # Only fires on a release/* tag, never on a plain main merge.
+  - stage: DeployClients
+    displayName: "04 · Deploy to client production workspaces"
+    dependsOn: DeployStaging
+    condition: and(succeeded(), eq(variables.isReleaseTag, 'true'))
+    jobs:
+      - ${{ each client in parameters.clients }}:
+          - deployment: Deploy_${{ replace(client, '-', '_') }}
+            displayName: "Deploy to ${{ client }}"
+            pool:
+              vmImage: ubuntu-latest
+            environment: clients-prod
+            variables:
+              - group: kv-${{ client }}
+            strategy:
+              runOnce:
+                deploy:
+                  steps:
+                    - checkout: self
+                    - task: UsePythonVersion@0
+                      inputs:
+                        versionSpec: $(pythonVersion)
+                    - bash: |
+                        curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+                      displayName: Install Databricks CLI
+                    - bash: |
+                        set -e
+                        mkdir -p deploy/clients
+                        # CLIENT_CONFIG_JSON is a single Key Vault secret (the
+                        # full non-secret client.template.json payload) linked
+                        # into the kv-${{ client }} variable group.
+                        printf '%s' "$(CLIENT_CONFIG_JSON)" > deploy/clients/${{ client }}.json
+                      displayName: Render client config from Key Vault
+                    - bash: |
+                        python -m pip install --upgrade pip
+                        pip install -r requirements.txt
+                      displayName: Install Python dependencies
+                    - bash: |
+                        set -e
+                        python deploy/one_click_deploy.py \
+                          --client-config deploy/clients/${{ client }}.json \
+                          --yes
+                      displayName: One-click deploy to ${{ client }}
+                      env:
+                        DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
+                        DBX_SOURCE_PASSWORD: $(DBX_SOURCE_PASSWORD)
+                        DBX_DEVOPS_PAT: $(DBX_DEVOPS_PAT)
+                        AZURE_CLIENT_ID: $(AZURE_CLIENT_ID)
+                        AZURE_CLIENT_SECRET: $(AZURE_CLIENT_SECRET)
+                        AZURE_TENANT_ID: $(AZURE_TENANT_ID)
+                    - publish: deploy/reports
+                      artifact: deploy-report-${{ client }}
+                      condition: always()

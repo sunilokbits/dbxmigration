@@ -1,0 +1,51 @@
+{
+  "_comment": "Copy this file to deploy/clients/<client_name>.json and fill in real values. NEVER put passwords/tokens/secrets in this file — those are supplied via environment variables (see deploy/README.md).",
+
+  "client_name": "acme-corp",
+  "bundle_target": "prod",
+
+  "databricks_host": "https://adb-XXXXXXXXXXXXXXXX.XX.azuredatabricks.net",
+  "sql_warehouse_id": "",
+  "cloud_provider": "azure",
+
+  "catalog_admin": "admin_source",
+  "app_schema": "migration_app",
+  "catalog_bronze": "bronze",
+  "catalog_silver": "silver",
+  "catalog_volumes": "dev_volumes",
+  "catalog_recon": "reconciliation",
+  "catalog_logging": "loggingdetails",
+  "default_schema": "hr",
+  "notebook_root": "/Shared/MetadataPipeline",
+  "landing_path": "/Volumes/dev_volumes/hr/landing",
+
+  "genie_space_id": "",
+
+  "with_infra": true,
+  "azure": {
+    "subscription_id": "",
+    "resource_group": "",
+    "region": "eastus2",
+    "storage_account": "",
+    "container": "datalake",
+    "folders": [],
+    "access_connector": "",
+    "storage_credential_name": "",
+    "external_locations": {},
+    "catalogs": {},
+    "volume_name": "landing",
+    "volume_catalog": "dev_volumes",
+    "volume_schema": "default",
+    "volume_path": ""
+  },
+
+  "reconciliation": { "catalog": "reconciliation", "schema": "hr", "table": "ReconcilationDetails", "location": "" },
+  "logging": { "catalog": "loggingdetails", "schema": "hr", "table": "ExecutionLog", "location": "" },
+
+  "source": {
+    "source_type": "sqlserver",
+    "server": "",
+    "database": "",
+    "username": ""
+  }
+}

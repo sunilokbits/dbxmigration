@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Solution Bill-of-Material (BOM) — SQL → Databricks Migration Accelerator</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --font:'DM Sans',system-ui,-apple-system,sans-serif;
+  --bg:#F9FAFB;--surface:#FFFFFF;--border:#E5E7EB;--border-2:#D1D5DB;
+  --t1:#1B1F2E;--t2:#374151;--t3:#5F6B7A;--t4:#9CA3AF;
+  --accent:#6366F1;--accent-light:#EEF2FF;--accent-border:rgba(99,102,241,.2);
+  --green:#10B981;--orange:#F59E0B;--red:#EF4444;--blue:#2563EB;
+  --radius:16px;--shadow:0 1px 3px rgba(0,0,0,.04);--shadow-md:0 4px 16px rgba(0,0,0,.08);
+}
+body{font-family:var(--font);background:var(--bg);color:var(--t1);line-height:1.7;font-size:15px}
+
+/* ── HERO ── */
+.bom-hero{
+  background:linear-gradient(135deg,#4F46E5 0%,#7C3AED 50%,#9333EA 100%);
+  padding:60px 40px 50px;color:#fff;position:relative;overflow:hidden;
+}
+.bom-hero::before{content:'';position:absolute;top:-50%;right:-20%;width:600px;height:600px;border-radius:50%;background:rgba(255,255,255,.04)}
+.bom-hero::after{content:'';position:absolute;bottom:-30%;left:-10%;width:400px;height:400px;border-radius:50%;background:rgba(255,255,255,.03)}
+.bom-hero-inner{max-width:1100px;margin:0 auto;position:relative;z-index:1}
+.bom-hero h1{font-size:2.2rem;font-weight:800;letter-spacing:-.03em;margin-bottom:8px}
+.bom-hero p{font-size:1.05rem;color:rgba(255,255,255,.75);max-width:700px}
+.bom-hero-badge{display:inline-flex;align-items:center;gap:6px;margin-bottom:18px;padding:6px 16px;border-radius:99px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.15);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.9)}
+.bom-hero-badge svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2}
+
+/* ── NAV ── */
+.bom-nav{background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100;box-shadow:var(--shadow)}
+.bom-nav-inner{max-width:1100px;margin:0 auto;display:flex;gap:4px;padding:10px 40px;overflow-x:auto}
+.bom-nav a{
+  padding:8px 16px;border-radius:10px;font-size:12px;font-weight:600;color:var(--t3);
+  text-decoration:none;white-space:nowrap;transition:all .2s;border:1px solid transparent;
+}
+.bom-nav a:hover{background:var(--accent-light);color:var(--accent);border-color:var(--accent-border)}
+.bom-nav a.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+
+/* ── CONTENT ── */
+.bom-body{max-width:1100px;margin:0 auto;padding:32px 40px 80px}
+
+/* ── SECTION CARDS ── */
+.bom-section{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:0;margin-bottom:24px;overflow:hidden;box-shadow:var(--shadow);
+  transition:all .28s ease;
+}
+.bom-section:hover{box-shadow:var(--shadow-md);transform:translateY(-1px)}
+.bom-section-hd{
+  display:flex;align-items:center;gap:14px;padding:24px 28px;cursor:pointer;user-select:none;
+  border-bottom:1px solid transparent;transition:all .2s;
+}
+.bom-section.open .bom-section-hd{border-bottom-color:var(--border)}
+.bom-section-num{
+  width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;
+  font-size:14px;font-weight:800;color:#fff;flex-shrink:0;
+}
+.bom-section-title{flex:1;font-size:1.1rem;font-weight:700;color:var(--t1)}
+.bom-section-arrow{width:20px;height:20px;transition:transform .25s ease;color:var(--t4)}
+.bom-section.open .bom-section-arrow{transform:rotate(180deg)}
+.bom-section-body{
+  max-height:0;overflow:hidden;transition:max-height .35s ease;
+}
+.bom-section.open .bom-section-body{max-height:5000px}
+.bom-section-content{padding:24px 28px 28px;color:var(--t2);font-size:14.5px;line-height:1.75}
+.bom-section-content h3{font-size:1rem;font-weight:700;color:var(--t1);margin:20px 0 8px}
+.bom-section-content h3:first-child{margin-top:0}
+.bom-section-content p{margin-bottom:12px}
+.bom-section-content ul{padding-left:20px;margin-bottom:12px}
+.bom-section-content li{margin-bottom:6px}
+.bom-section-content li::marker{color:var(--accent)}
+
+/* ── FEATURE CARDS (inside sections) ── */
+.feat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin:16px 0}
+.feat-card{
+  padding:20px;border-radius:12px;border:1px solid var(--border);background:var(--bg);
+  transition:all .2s;
+}
+.feat-card:hover{border-color:var(--accent-border);background:var(--accent-light)}
+.feat-card-ico{font-size:28px;margin-bottom:10px}
+.feat-card h4{font-size:14px;font-weight:700;color:var(--t1);margin-bottom:4px}
+.feat-card p{font-size:13px;color:var(--t3);line-height:1.55}
+
+/* ── FLOW DIAGRAM ── */
+.flow-steps{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:16px 0}
+.flow-step{
+  padding:12px 20px;border-radius:12px;font-size:13px;font-weight:600;color:#fff;
+  display:flex;align-items:center;gap:8px;
+}
+.flow-arrow{font-size:20px;color:var(--t4);flex-shrink:0}
+
+/* ── ARCH TABLE ── */
+.arch-table{width:100%;border-collapse:collapse;margin:16px 0;border-radius:12px;overflow:hidden;border:1px solid var(--border)}
+.arch-table th{background:var(--accent);color:#fff;padding:12px 16px;text-align:left;font-size:13px;font-weight:700}
+.arch-table td{padding:12px 16px;font-size:13.5px;border-bottom:1px solid var(--border)}
+.arch-table tr:last-child td{border-bottom:none}
+.arch-table tr:hover td{background:var(--accent-light)}
+.arch-tag{display:inline-block;padding:3px 10px;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:.03em}
+
+/* ── CONTACT ── */
+.contact-card{
+  background:linear-gradient(135deg,#4F46E5,#7C3AED);border-radius:var(--radius);
+  padding:40px;color:#fff;text-align:center;margin-top:24px;
+}
+.contact-card h2{font-size:1.6rem;font-weight:800;margin-bottom:8px}
+.contact-card p{color:rgba(255,255,255,.75);margin-bottom:24px;max-width:500px;margin-left:auto;margin-right:auto}
+.contact-links{display:flex;justify-content:center;gap:16px;flex-wrap:wrap}
+.contact-link{
+  display:inline-flex;align-items:center;gap:8px;padding:12px 28px;border-radius:12px;
+  font-size:14px;font-weight:600;text-decoration:none;transition:all .2s;
+}
+.contact-link.primary{background:#fff;color:var(--accent)}
+.contact-link.primary:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.2)}
+.contact-link.secondary{background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.2)}
+.contact-link.secondary:hover{background:rgba(255,255,255,.2)}
+
+/* ── PRINT ── */
+@media print{.bom-nav{display:none}.bom-section-body{max-height:none!important}.bom-hero{padding:30px 20px}}
+
+/* ── SCROLLBAR ── */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:#F3F4F6}
+::-webkit-scrollbar-thumb{background:#D1D5DB;border-radius:10px}
+::-webkit-scrollbar-thumb:hover{background:#9CA3AF}
+</style>
+</head>
+<body>
+
+<!-- ═══════ HERO ═══════ -->
+<div class="bom-hero">
+  <div class="bom-hero-inner">
+    <div class="bom-hero-badge"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> Solution Bill-of-Material</div>
+    <h1>SQL → Databricks Migration Accelerator</h1>
+    <p>Complete solution breakdown covering architecture, capabilities, use cases, and deployment strategy for enterprise SQL Server to Databricks migration.</p>
+  </div>
+</div>
+
+<!-- ═══════ NAV ═══════ -->
+<nav class="bom-nav">
+  <div class="bom-nav-inner" id="bomNav"></div>
+</nav>
+
+<!-- ═══════ BODY ═══════ -->
+<div class="bom-body" id="bomBody"></div>
+
+<script>
+(function(){
+
+/* ─── SECTION DATA ─── */
+var sections=[
+
+/* 1 ─ Customer Challenge */
+{id:'challenge',title:'Customer Challenge',color:'#EF4444',icon:'⚡',content:function(){return `
+<p>Enterprises migrating from SQL Server to Databricks face a complex, manual, and error-prone journey that typically takes <strong>6–18 months</strong> with traditional approaches:</p>
+<div class="feat-grid">
+  <div class="feat-card"><div class="feat-card-ico">📝</div><h4>Manual Code Rewrite</h4><p>Hundreds of stored procedures, views, and UDFs must be rewritten from T-SQL to PySpark — a tedious, error-prone process.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">🔄</div><h4>Data Movement Complexity</h4><p>Migrating terabytes of data while maintaining referential integrity across Bronze, Silver, and Gold layers.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">🧪</div><h4>Testing & Validation</h4><p>Ensuring functional parity between source SQL and target PySpark code with no regressions.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">🔧</div><h4>Operational Overhead</h4><p>Setting up Unity Catalog, configuring jobs, scheduling workflows, and managing deployment pipelines manually.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">🛡️</div><h4>Error Diagnosis</h4><p>Debugging Spark/Databricks errors requires deep platform expertise that SQL-focused teams often lack.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">📊</div><h4>Schema Design</h4><p>Redesigning relational schemas into Star/Snowflake models optimized for cloud analytics.</p></div>
+</div>
+<p>The result: <strong>project delays, budget overruns, and inconsistent quality</strong> — often requiring expensive consulting engagements.</p>
+`;}},
+
+/* 2 ─ Accelerator Overview */
+{id:'overview',title:'Accelerator Overview',color:'#6366F1',icon:'🚀',content:function(){return `
+<p>The <strong>SQL → Databricks Migration Accelerator</strong> is a browser-based platform that automates the full migration lifecycle in a single unified UI. It compresses months of migration effort into <strong>days or weeks</strong>.</p>
+<h3>Core Modules</h3>
+<div class="feat-grid">
+  <div class="feat-card"><div class="feat-card-ico">🔌</div><h4>Source Connection</h4><p>Connect to SQL Server / Azure SQL, auto-discover SPs, Views, and UDFs with checkbox selection.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">🤖</div><h4>Convert to PySpark</h4><p>One-click conversion of T-SQL to production-ready PySpark notebooks.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">📦</div><h4>Deploy to Databricks</h4><p>Push notebooks via Databricks Asset Bundles with auto folder structure.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">🏛️</div><h4>Databricks SQL Editor</h4><p>Browse catalogs, schemas, tables — preview data and run queries in-browser.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">🩺</div><h4>System Health Check</h4><p>Automated error diagnosis — paste any exception for root cause & fix.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">⚙️</div><h4>Workflow Orchestration</h4><p>Create jobs, CRON schedules, monitor pipelines, track run history.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">🗂️</div><h4>Data Modeling</h4><p>Star/Snowflake classification with interactive ER diagrams.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">🔗</div><h4>Azure DevOps Integration</h4><p>Push DDL & ER diagrams to Azure DevOps Git repos with PAT authentication via Key Vault.</p></div>
+</div>
+`;}},
+
+/* 3 ─ Unique Technical Capabilities */
+{id:'capabilities',title:'Unique Technical Capabilities',color:'#0EA5E9',icon:'🔬',content:function(){return `
+<div class="feat-grid">
+  <div class="feat-card"><div class="feat-card-ico">🧠</div><h4>Automated Conversion Engine</h4><p>Understands T-SQL semantics — CTEs, temp tables, cursors, dynamic SQL — and produce idiomatic PySpark code.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">📐</div><h4>Intelligent Schema Classifier</h4><p>Classifies tables as Facts or Dimensions and generates Star/Snowflake schemas with interactive ER diagrams.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">🩹</div><h4>Self-Healing Diagnostics</h4><p>Automated error analysis understands Spark, Python, and Databricks exceptions — provides root cause and specific fixes.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">📡</div><h4>Real-Time Pipeline Monitoring</h4><p>Live job status, execution history, success/failure rates, and one-click Run Now from the dashboard.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">🔐</div><h4>Config-Driven Security</h4><p>Host, tokens, and catalogs managed via deployconfig.json — no credentials exposed in the UI.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">🔗</div><h4>Azure DevOps Git Push</h4><p>One-click push of DDL scripts, ER diagrams (PNG), and model JSON to Azure DevOps repositories — PAT stored securely in Key Vault.</p></div>
+</div>
+`;}},
+
+/* 4 ─ Benefits */
+{id:'benefits',title:'Benefits',color:'#10B981',icon:'✅',content:function(){return `
+<table class="arch-table">
+<thead><tr><th>Benefit</th><th>Without Accelerator</th><th>With Accelerator</th></tr></thead>
+<tbody>
+<tr><td><strong>Migration Timeline</strong></td><td>6–18 months</td><td><span class="arch-tag" style="background:#DCFCE7;color:#166534">2–4 weeks</span></td></tr>
+<tr><td><strong>Code Conversion</strong></td><td>Manual rewrite</td><td><span class="arch-tag" style="background:#DCFCE7;color:#166534">Automated</span></td></tr>
+<tr><td><strong>Error Resolution</strong></td><td>Hours of debugging</td><td><span class="arch-tag" style="background:#DCFCE7;color:#166534">Instant diagnosis</span></td></tr>
+<tr><td><strong>Schema Modeling</strong></td><td>Manual ER design</td><td><span class="arch-tag" style="background:#DCFCE7;color:#166534">Auto Star/Snowflake</span></td></tr>
+<tr><td><strong>Deployment</strong></td><td>Manual notebook upload</td><td><span class="arch-tag" style="background:#DCFCE7;color:#166534">Asset Bundle push</span></td></tr>
+<tr><td><strong>Data Pipeline</strong></td><td>Custom ETL scripts</td><td><span class="arch-tag" style="background:#DCFCE7;color:#166534">Auto-generated pipelines</span></td></tr>
+<tr><td><strong>Monitoring</strong></td><td>Databricks UI + logs</td><td><span class="arch-tag" style="background:#DCFCE7;color:#166534">Unified dashboard</span></td></tr>
+<tr><td><strong>Team Skill Needed</strong></td><td>Deep Spark expertise</td><td><span class="arch-tag" style="background:#DCFCE7;color:#166534">SQL developers can use</span></td></tr>
+</tbody>
+</table>
+`;}},
+
+/* 5 ─ Scenarios / Use Cases and Personas */
+{id:'usecases',title:'Scenarios / Use Cases and Personas',color:'#F59E0B',icon:'👥',content:function(){return `
+<h3>Target Personas</h3>
+<div class="feat-grid">
+  <div class="feat-card"><div class="feat-card-ico">👨‍💻</div><h4>Data Engineer</h4><p>Converts SPs and builds data pipelines without deep Spark knowledge.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">🏗️</div><h4>Solution Architect</h4><p>Designs Star/Snowflake schemas and validates Unity Catalog structure.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">📊</div><h4>DBA / SQL Developer</h4><p>Migrates familiar SQL objects with Automated conversion — minimal ramp-up.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">📋</div><h4>Project Manager</h4><p>Tracks migration progress, pipeline runs, and audit history from a single dashboard.</p></div>
+</div>
+<h3>Key Scenarios</h3>
+<ul>
+  <li><strong>Enterprise Data Warehouse Migration:</strong> Move 100+ SPs, 50+ views, and terabytes of data from SQL Server to Databricks Lakehouse.</li>
+  <li><strong>Cloud Modernization:</strong> Consolidate on-prem SQL workloads into Azure Databricks with Unity Catalog governance.</li>
+  <li><strong>CI/CD Pipeline Setup:</strong> Auto-deploy notebooks and configure job schedules from a single interface.</li>
+  <li><strong>Post-Migration Validation:</strong> Use Databricks SQL Editor and data preview to verify migration completeness.</li>
+</ul>
+`;}},
+
+/* 6 ─ Process Flow */
+{id:'flow',title:'Process Flow',color:'#8B5CF6',icon:'🔄',content:function(){return `
+<p>The migration follows a streamlined 6-step process:</p>
+<div class="flow-steps">
+  <div class="flow-step" style="background:#2563EB">🔌 Connect</div><div class="flow-arrow">→</div>
+  <div class="flow-step" style="background:#10B981">🔍 Discover</div><div class="flow-arrow">→</div>
+  <div class="flow-step" style="background:#DC2626">🤖 Convert</div><div class="flow-arrow">→</div>
+  <div class="flow-step" style="background:#059669">📦 Deploy</div><div class="flow-arrow">→</div>
+  <div class="flow-step" style="background:#7C3AED">⚙️ Orchestrate</div><div class="flow-arrow">→</div>
+  <div class="flow-step" style="background:#0EA5E9">📊 Model</div>
+</div>
+<table class="arch-table">
+<thead><tr><th>Step</th><th>Module</th><th>Action</th><th>Output</th></tr></thead>
+<tbody>
+<tr><td><span class="arch-tag" style="background:#DBEAFE;color:#1E40AF">1</span></td><td>Source Connection</td><td>Connect to SQL Server, discover objects</td><td>SP/View/UDF inventory</td></tr>
+<tr><td><span class="arch-tag" style="background:#D1FAE5;color:#065F46">2</span></td><td>Discovery</td><td>Scan SQL objects — complexity scoring, RCA, dependency graph</td><td>Migration readiness report, BOM, effort estimates</td></tr>
+<tr><td><span class="arch-tag" style="background:#FEE2E2;color:#991B1B">3</span></td><td>Convert to PySpark</td><td>Converts T-SQL to PySpark notebooks</td><td>Databricks notebooks</td></tr>
+<tr><td><span class="arch-tag" style="background:#DCFCE7;color:#166534">4</span></td><td>Deploy to Databricks</td><td>Push via Asset Bundles to workspace</td><td>Live notebooks in workspace</td></tr>
+<tr><td><span class="arch-tag" style="background:#EDE9FE;color:#5B21B6">5</span></td><td>Workflow Orchestration</td><td>Create jobs, set schedules, monitor runs</td><td>Automated production pipelines</td></tr>
+<tr><td><span class="arch-tag" style="background:#E0F2FE;color:#0C4A6E">6</span></td><td>Data Modeling</td><td>Classifies Star/Snowflake schemas</td><td>ER diagrams + DDL</td></tr>
+<tr><td><span class="arch-tag" style="background:#DBEAFE;color:#1E40AF">7</span></td><td>Azure DevOps Push</td><td>Push DDL & ER diagrams to Git repo</td><td>Versioned artifacts in DevOps</td></tr>
+</tbody>
+</table>
+<p>Supporting modules (<strong>Discovery</strong>, <strong>Databricks SQL Editor</strong>, <strong>System Health Check</strong>) are available at every step for validation and troubleshooting.</p>
+`;}},
+
+/* 7 ─ Component Architecture */
+{id:'components',title:'Component Architecture',color:'#0369A1',icon:'🧩',content:function(){return `
+<table class="arch-table">
+<thead><tr><th>Component</th><th>Technology</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td><strong>Frontend</strong></td><td>Single-page HTML/CSS/JS</td><td>Responsive UI with sidebar navigation, real-time updates</td></tr>
+<tr><td><strong>Discovery Engine</strong></td><td>Python (regex + ODBC)</td><td>SQL object scanning, complexity scoring, RCA, dependency graph</td></tr>
+<tr><td><strong>Backend</strong></td><td>Python Flask</td><td>REST API serving all modules, template rendering</td></tr>
+<tr><td><strong>Conversion Engine</strong></td><td>OpenAI / Azure OpenAI</td><td>T-SQL → PySpark conversion, schema classification, error diagnosis</td></tr>
+<tr><td><strong>SQL Connector</strong></td><td>pyodbc / pymssql</td><td>Source SQL Server connection and object extraction</td></tr>
+<tr><td><strong>Databricks SDK</strong></td><td>Databricks REST API</td><td>Workspace, jobs, clusters, Unity Catalog operations</td></tr>
+<tr><td><strong>Asset Bundles</strong></td><td>Databricks CLI</td><td>Notebook deployment and workspace organization</td></tr>
+<tr><td><strong>Config Store</strong></td><td>deployconfig.json</td><td>Host, token, catalogs, schemas — secure config management</td></tr>
+<tr><td><strong>Scheduler</strong></td><td>Databricks Jobs API</td><td>CRON-based job scheduling and trigger management</td></tr>
+<tr><td><strong>DevOps Connector</strong></td><td>Azure DevOps REST API v7.0</td><td>Push DDL, ER diagrams & model JSON to Git repos with Key Vault PAT</td></tr>
+</tbody>
+</table>
+`;}},
+
+/* 8 ─ Accelerator Architecture */
+{id:'architecture',title:'Accelerator Architecture',color:'#7C3AED',icon:'🏛️',content:function(){return `
+<p>The accelerator follows a <strong>three-tier architecture</strong> with clear separation of concerns:</p>
+<div style="background:#1E1B4B;border-radius:16px;padding:32px;margin:16px 0;color:#fff;font-family:'DM Sans',monospace">
+  <div style="text-align:center;margin-bottom:20px">
+    <span style="background:#6366F1;padding:8px 24px;border-radius:8px;font-weight:700;font-size:14px">Browser — Single Page Application</span>
+  </div>
+  <div style="display:flex;justify-content:center;gap:12px;flex-wrap:wrap;margin-bottom:20px">
+    <span style="background:rgba(99,102,241,.2);border:1px solid rgba(99,102,241,.3);padding:6px 14px;border-radius:8px;font-size:12px">Convert</span>
+    <span style="background:rgba(16,185,129,.2);border:1px solid rgba(16,185,129,.3);padding:6px 14px;border-radius:8px;font-size:12px">Discovery</span>
+    <span style="background:rgba(16,185,129,.2);border:1px solid rgba(16,185,129,.3);padding:6px 14px;border-radius:8px;font-size:12px">Deploy</span>
+    <span style="background:rgba(139,92,246,.2);border:1px solid rgba(139,92,246,.3);padding:6px 14px;border-radius:8px;font-size:12px">UC Explorer</span>
+    <span style="background:rgba(245,158,11,.2);border:1px solid rgba(245,158,11,.3);padding:6px 14px;border-radius:8px;font-size:12px">Migrate</span>
+    <span style="background:rgba(236,72,153,.2);border:1px solid rgba(236,72,153,.3);padding:6px 14px;border-radius:8px;font-size:12px">Healer</span>
+    <span style="background:rgba(37,99,235,.2);border:1px solid rgba(37,99,235,.3);padding:6px 14px;border-radius:8px;font-size:12px">Workflows</span>
+    <span style="background:rgba(20,184,166,.2);border:1px solid rgba(20,184,166,.3);padding:6px 14px;border-radius:8px;font-size:12px">Data Model</span>
+  </div>
+  <div style="text-align:center;color:#A5B4FC;font-size:20px;margin:8px 0">⬇ REST API ⬇</div>
+  <div style="text-align:center;margin:16px 0">
+    <span style="background:#059669;padding:8px 24px;border-radius:8px;font-weight:700;font-size:14px">Flask Backend (app.py)</span>
+  </div>
+  <div style="display:flex;justify-content:center;gap:16px;flex-wrap:wrap;margin:16px 0">
+    <div style="text-align:center">
+      <div style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);padding:12px 20px;border-radius:10px;font-size:12px">discovery_agent.py</div>
+      <div style="color:#A5B4FC;font-size:10px;margin-top:4px">Discovery Engine</div>
+    </div>
+    <div style="text-align:center">
+      <div style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);padding:12px 20px;border-radius:10px;font-size:12px">sp_converter.py</div>
+      <div style="color:#A5B4FC;font-size:10px;margin-top:4px">Conversion Engine</div>
+    </div>
+    <div style="text-align:center">
+      <div style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);padding:12px 20px;border-radius:10px;font-size:12px">data_modeling.py</div>
+      <div style="color:#A5B4FC;font-size:10px;margin-top:4px">Schema Engine</div>
+    </div>
+    <div style="text-align:center">
+      <div style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);padding:12px 20px;border-radius:10px;font-size:12px">workflow_manager.py</div>
+      <div style="color:#A5B4FC;font-size:10px;margin-top:4px">Job Orchestration</div>
+    </div>
+    <div style="text-align:center">
+      <div style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);padding:12px 20px;border-radius:10px;font-size:12px">self_healing_bot.py</div>
+      <div style="color:#A5B4FC;font-size:10px;margin-top:4px">Error Diagnosis</div>
+    </div>
+  </div>
+  <div style="text-align:center;color:#A5B4FC;font-size:20px;margin:8px 0">⬇ SDK / API ⬇</div>
+  <div style="display:flex;justify-content:center;gap:16px;margin-top:12px;flex-wrap:wrap">
+    <span style="background:#B45309;padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600">SQL Server</span>
+    <span style="background:#DC2626;padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600">Databricks Workspace</span>
+    <span style="background:#7C3AED;padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600">Unity Catalog</span>
+    <span style="background:#0369A1;padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600">Azure OpenAI</span>
+  </div>
+</div>
+`;}},
+
+/* 9 ─ Customer Story */
+{id:'story',title:'Customer Story',color:'#EC4899',icon:'📖',content:function(){return `
+<div style="background:linear-gradient(135deg,#FDF2F8,#FCE7F3);border:1px solid #FBCFE8;border-radius:14px;padding:28px;margin-bottom:16px">
+  <p style="font-size:1.1rem;font-style:italic;color:#831843;line-height:1.7;margin-bottom:16px">"We had over 200 stored procedures and 80 views to migrate from SQL Server to Databricks. The team estimated 8 months of manual effort. Using the Migration Accelerator, we completed the conversion in <strong>3 weeks</strong> — with the system health check catching edge cases we never would have found manually."</p>
+  <p style="font-weight:700;color:#9D174D;margin-bottom:0">— Enterprise Data Engineering Lead, Fortune 500 Financial Services</p>
+</div>
+<h3>Migration Metrics</h3>
+<div class="feat-grid">
+  <div class="feat-card" style="text-align:center"><div class="feat-card-ico">📝</div><h4 style="font-size:2rem;color:#6366F1">200+</h4><p>Stored Procedures Converted</p></div>
+  <div class="feat-card" style="text-align:center"><div class="feat-card-ico">⏱️</div><h4 style="font-size:2rem;color:#10B981">3 Weeks</h4><p>Total Migration Time</p></div>
+  <div class="feat-card" style="text-align:center"><div class="feat-card-ico">🤖</div><h4 style="font-size:2rem;color:#F59E0B">90%</h4><p>Automated Conversion</p></div>
+  <div class="feat-card" style="text-align:center"><div class="feat-card-ico">💰</div><h4 style="font-size:2rem;color:#EF4444">70%</h4><p>Cost Reduction</p></div>
+</div>
+`;}},
+
+/* 10 ─ Accelerator Video */
+{id:'video',title:'Accelerator Video (<5 min)',color:'#6366F1',icon:'🎬',content:function(){return `
+<p>A 5-minute animated walkthrough is available directly in the application. Click the <strong>"Accelerator Video"</strong> button in the top navigation bar to launch the interactive presentation.</p>
+<div class="feat-grid">
+  <div class="feat-card"><div class="feat-card-ico">🎥</div><h4>Animated Slides</h4><p>11 chapters with custom SVG illustrations, gradient backgrounds, and smooth transitions.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">🔊</div><h4>Voice Narration</h4><p>Browser-based text-to-speech reads a detailed script for each chapter automatically.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">📖</div><h4>Chapter Navigation</h4><p>Click any chapter in the sidebar to jump to that section. Active chapter highlights as time progresses.</p></div>
+  <div class="feat-card"><div class="feat-card-ico">⏯️</div><h4>Playback Controls</h4><p>Play/pause, seek bar, and time display — just like a real video player.</p></div>
+</div>
+<p style="margin-top:12px"><a href="/" style="color:var(--accent);font-weight:600">← Return to app and click "Accelerator Video"</a> to watch the walkthrough.</p>
+`;}},
+
+/* 11 ─ Description of the Accelerator */
+{id:'description',title:'Description of the Accelerator',color:'#14B8A6',icon:'📋',content:function(){return `
+<p>The SQL → Databricks Migration Accelerator is a <strong>Flask-based web application</strong> that provides a unified, browser-accessible interface for migrating SQL Server workloads to Azure Databricks.</p>
+<h3>What It Does</h3>
+<ul>
+  <li><strong>Discovers</strong> SQL Server objects (Stored Procedures, Views, UDFs) via ODBC/TDS connections</li>
+  <li><strong>Converts</strong> T-SQL code to PySpark notebooks using OpenAI / Azure OpenAI</li>
+  <li><strong>Deploys</strong> notebooks to Databricks workspaces via Asset Bundles with organized folder structures</li>
+  <li><strong>Orchestrates</strong> Databricks Jobs with CRON scheduling, cluster configuration, and run monitoring</li>
+  <li><strong>Models</strong> data schemas using Star/Snowflake classification with interactive ER diagrams</li>
+  <li><strong>Heals</strong> errors automatically by analyzing exceptions and suggesting targeted fixes</li>
+  <li><strong>Explores</strong> Databricks SQL Editor — browse catalogs/schemas/tables, preview data, run SQL queries</li>
+</ul>
+<h3>Technology Stack</h3>
+<ul>
+  <li><strong>Backend:</strong> Python 3.11, Flask, pyodbc, Databricks REST API SDK</li>
+  <li><strong>Frontend:</strong> Single-page HTML/CSS/JS (no framework dependency)</li>
+  <li><strong>Engine:</strong> OpenAI GPT / Azure OpenAI for code conversion and analysis</li>
+  <li><strong>Config:</strong> deployconfig.json for secure credential and catalog management</li>
+  <li><strong>Deployment:</strong> Databricks Asset Bundles CLI (DABs)</li>
+</ul>
+`;}},
+
+/* 12 ─ Target Accounts */
+{id:'targets',title:'Target Accounts',color:'#D97706',icon:'🎯',content:function(){return `
+<p>The accelerator is designed for organizations that meet one or more of these criteria:</p>
+<table class="arch-table">
+<thead><tr><th>Criteria</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td><strong>Large SQL Server Estate</strong></td><td>50+ stored procedures, multiple databases, complex T-SQL logic</td></tr>
+<tr><td><strong>Cloud Migration Initiative</strong></td><td>Active Azure / Databricks adoption program underway</td></tr>
+<tr><td><strong>Data Lakehouse Journey</strong></td><td>Moving from traditional DW to Lakehouse architecture</td></tr>
+<tr><td><strong>Limited Spark Expertise</strong></td><td>SQL-heavy teams that need automated PySpark conversion</td></tr>
+<tr><td><strong>Compliance Requirements</strong></td><td>Need Unity Catalog governance for data access and lineage</td></tr>
+</tbody>
+</table>
+<h3>Industry Verticals</h3>
+<div class="feat-grid">
+  <div class="feat-card"><div class="feat-card-ico">🏦</div><h4>Financial Services</h4><p>Banks, insurance, capital markets with legacy SQL DW</p></div>
+  <div class="feat-card"><div class="feat-card-ico">🏥</div><h4>Healthcare & Life Sciences</h4><p>Hospitals, pharma with compliance-heavy SQL workloads</p></div>
+  <div class="feat-card"><div class="feat-card-ico">🛒</div><h4>Retail & E-Commerce</h4><p>Large catalog and transaction data on SQL Server</p></div>
+  <div class="feat-card"><div class="feat-card-ico">🏭</div><h4>Manufacturing & Supply Chain</h4><p>ERP/MES data migration to cloud analytics</p></div>
+</div>
+`;}},
+
+/* 13 ─ Contact Us */
+{id:'contact',title:'Contact Us',color:'#6366F1',icon:'📧',content:function(){return `
+<div class="contact-card">
+  <h2>Ready to Accelerate Your Migration?</h2>
+  <p>Get in touch with the team to schedule a demo, discuss your migration scope, or get access to the accelerator.</p>
+  <div class="contact-links">
+    <a class="contact-link primary" href="mailto:migration-accelerator@databricks.com">📧 Email the Team</a>
+    <a class="contact-link secondary" href="/" target="_blank">🖥️ Launch Accelerator</a>
+  </div>
+</div>
+<div class="feat-grid" style="margin-top:24px">
+  <div class="feat-card" style="text-align:center"><div class="feat-card-ico">📅</div><h4>Schedule a Demo</h4><p>See the full platform in action with your own SQL objects.</p></div>
+  <div class="feat-card" style="text-align:center"><div class="feat-card-ico">📐</div><h4>Scoping Workshop</h4><p>Free assessment of your migration complexity and timeline.</p></div>
+  <div class="feat-card" style="text-align:center"><div class="feat-card-ico">🚀</div><h4>Pilot Program</h4><p>Start with 10–20 SPs to see results in days, not months.</p></div>
+</div>
+`;}}
+];
+
+/* ─── BUILD NAV ─── */
+var nav=document.getElementById('bomNav'),body=document.getElementById('bomBody');
+sections.forEach(function(s,i){
+  var a=document.createElement('a');
+  a.href='#'+s.id; a.textContent=s.title; a.dataset.idx=i;
+  if(i===0)a.className='active';
+  nav.appendChild(a);
+});
+
+/* ─── BUILD SECTIONS ─── */
+sections.forEach(function(s,i){
+  var div=document.createElement('div');
+  div.className='bom-section'+(i===0?' open':'');
+  div.id=s.id;
+  div.innerHTML='<div class="bom-section-hd" onclick="toggleBomSection(this.parentElement)">'+
+    '<div class="bom-section-num" style="background:'+s.color+'">'+s.icon+'</div>'+
+    '<div class="bom-section-title">'+s.title+'</div>'+
+    '<svg class="bom-section-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>'+
+    '</div>'+
+    '<div class="bom-section-body"><div class="bom-section-content">'+s.content()+'</div></div>';
+  body.appendChild(div);
+});
+
+/* ─── TOGGLE ─── */
+window.toggleBomSection=function(el){
+  el.classList.toggle('open');
+};
+
+/* ─── NAV SCROLL SPY ─── */
+var links=nav.querySelectorAll('a');
+window.addEventListener('scroll',function(){
+  var from=window.scrollY+120;
+  sections.forEach(function(s,i){
+    var el=document.getElementById(s.id);
+    if(el&&el.offsetTop<=from){
+      links.forEach(function(a){a.classList.remove('active');});
+      links[i].classList.add('active');
+    }
+  });
+});
+
+/* ─── EXPAND ALL ON LOAD ─── */
+document.querySelectorAll('.bom-section').forEach(function(el){ el.classList.add('open'); });
+
+})();
+</script>
+</body>
+</html>

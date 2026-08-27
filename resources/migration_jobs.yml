@@ -1,0 +1,253 @@
+# Metadata-Driven Medallion Pipeline Jobs
+# ========================================
+# All jobs use serverless compute where supported, with fallback to
+# classic clusters for jobs requiring ODBC drivers or specific libraries.
+
+resources:
+  jobs:
+    # ─── Metadata-Driven Orchestrator Pipeline ─────────────────────
+    medallion_pipeline:
+      name: "Medallion-Pipeline-${bundle.target}"
+      description: >
+        Metadata-driven medallion pipeline: reads wf_pipeline_metadata to discover
+        tables, then chains Extract → Bronze → Reconciliation → Silver → Logging.
+      tags:
+        project: sql-to-databricks-migration
+        pipeline: medallion
+        environment: ${bundle.target}
+      max_concurrent_runs: 1
+      environments:
+        - environment_key: default
+          spec:
+            client: "1"
+      tasks:
+        - task_key: orchestrator
+          notebook_task:
+            notebook_path: ../src/notebooks/00_Meta_Orchestrator.py
+            base_parameters:
+              catalog: ${var.catalog_admin}
+              schema: ${var.default_schema}
+              landing_path: ${var.landing_path}
+              workspace_path: ${var.notebook_root}
+              recon_catalog: ${var.catalog_recon}
+              recon_schema: ${var.default_schema}
+              recon_table: ReconcilationDetails
+              log_catalog: ${var.catalog_logging}
+              log_schema: ${var.default_schema}
+              log_table: ExecutionLog
+            source: WORKSPACE
+          environment_key: default
+
+    # ─── Individual Stage Jobs (for manual/ad-hoc runs) ────────────
+    extract_job:
+      name: "Extract-AdHoc-${bundle.target}"
+      description: Run a single metadata-driven JDBC extraction by job_id.
+      tags:
+        project: sql-to-databricks-migration
+        stage: extract
+      max_concurrent_runs: 3
+      environments:
+        - environment_key: default
+          spec:
+            client: "1"
+      tasks:
+        - task_key: extract
+          notebook_task:
+            notebook_path: ../src/notebooks/01_Meta_Extract.py
+            base_parameters:
+              catalog: ${var.catalog_admin}
+              schema: ${var.default_schema}
+              landing_path: ${var.landing_path}
+            source: WORKSPACE
+          environment_key: default
+
+    bronze_job:
+      name: "Bronze-AdHoc-${bundle.target}"
+      description: Run a single metadata-driven Bronze load by job_id.
+      tags:
+        project: sql-to-databricks-migration
+        stage: bronze
+      max_concurrent_runs: 3
+      environments:
+        - environment_key: default
+          spec:
+            client: "1"
+      tasks:
+        - task_key: bronze
+          notebook_task:
+            notebook_path: ../src/notebooks/02_Meta_Bronze.py
+            base_parameters:
+              catalog: ${var.catalog_admin}
+              schema: ${var.default_schema}
+              landing_path: ${var.landing_path}
+            source: WORKSPACE
+          environment_key: default
+
+    silver_job:
+      name: "Silver-AdHoc-${bundle.target}"
+      description: Run a single metadata-driven Silver load by job_id.
+      tags:
+        project: sql-to-databricks-migration
+        stage: silver
+      max_concurrent_runs: 3
+      environments:
+        - environment_key: default
+          spec:
+            client: "1"
+      tasks:
+        - task_key: silver
+          notebook_task:
+            notebook_path: ../src/notebooks/03_Meta_Silver.py
+            base_parameters:
+              catalog: ${var.catalog_admin}
+              schema: ${var.default_schema}
+            source: WORKSPACE
+          environment_key: default
+
+    reconciliation_job:
+      name: "Reconciliation-AdHoc-${bundle.target}"
+      description: Run aggregate reconciliation (Source vs Bronze) by job_id.
+      tags:
+        project: sql-to-databricks-migration
+        stage: reconciliation
+      max_concurrent_runs: 3
+      environments:
+        - environment_key: default
+          spec:
+            client: "1"
+      tasks:
+        - task_key: reconciliation
+          notebook_task:
+            notebook_path: ../src/notebooks/04_Meta_Reconciliation.py
+            base_parameters:
+              catalog: ${var.catalog_admin}
+              schema: ${var.default_schema}
+              landing_path: ${var.landing_path}
+              recon_catalog: ${var.catalog_recon}
+              recon_schema: ${var.default_schema}
+              recon_table: ReconcilationDetails
+            source: WORKSPACE
+          environment_key: default
+
+    # ─── Multi-Stage Chained Job (non-metadata, static tables) ─────
+    static_medallion_pipeline:
+      name: "Static-Medallion-${bundle.target}"
+      description: >
+        Static medallion pipeline with fixed table list.
+        Landing → Bronze → Silver with task dependencies.
+      tags:
+        project: sql-to-databricks-migration
+        pipeline: static-medallion
+      max_concurrent_runs: 1
+      environments:
+        - environment_key: default
+          spec:
+            client: "1"
+      tasks:
+        - task_key: landing_zone
+          notebook_task:
+            notebook_path: ../src/notebooks/01_Landing_Zone.py
+            base_parameters:
+              catalog: ${var.catalog_volumes}
+              schema: ${var.default_schema}
+              landing_path: ${var.landing_path}
+              load_type: full
+            source: WORKSPACE
+          environment_key: default
+
+        - task_key: bronze_layer
+          depends_on:
+            - task_key: landing_zone
+          notebook_task:
+            notebook_path: ../src/notebooks/02_Bronze.py
+            base_parameters:
+              catalog: ${var.catalog_bronze}
+              schema: ${var.default_schema}
+              landing_path: ${var.landing_path}
+              mode: standard
+            source: WORKSPACE
+          environment_key: default
+
+        - task_key: silver_layer
+          depends_on:
+            - task_key: bronze_layer
+          notebook_task:
+            notebook_path: ../src/notebooks/03_Silver.py
+            base_parameters:
+              catalog: ${var.catalog_silver}
+              schema: ${var.default_schema}
+              bronze_catalog: ${var.catalog_bronze}
+              bronze_schema: ${var.default_schema}
+              mode: standard
+            source: WORKSPACE
+          environment_key: default
+
+    # ─── CDC + DLT Pipeline ──────────────────────────────────────
+    cdc_dlt_pipeline:
+      name: "CDC-DLT-Pipeline-${bundle.target}"
+      description: >
+        CDC pipeline with Delta Live Tables: Extract via SQL Server
+        Change Tracking → DLT Bronze (expectations) → DLT Silver
+        (apply_changes SCD Type 1 merge).
+      tags:
+        project: sql-to-databricks-migration
+        pipeline: cdc-dlt
+        environment: ${bundle.target}
+      max_concurrent_runs: 1
+      environments:
+        - environment_key: default
+          spec:
+            client: "1"
+      tasks:
+        - task_key: cdc_extract
+          notebook_task:
+            notebook_path: ../src/notebooks/01_Meta_Extract.py
+            base_parameters:
+              catalog: ${var.catalog_admin}
+              schema: ${var.default_schema}
+              landing_path: ${var.landing_path}
+              cdc_mode: change_tracking
+            source: WORKSPACE
+          environment_key: default
+
+        - task_key: dlt_bronze_silver
+          depends_on:
+            - task_key: cdc_extract
+          notebook_task:
+            notebook_path: ../src/notebooks/02_Meta_Bronze.py
+            base_parameters:
+              catalog: ${var.catalog_admin}
+              schema: ${var.default_schema}
+              landing_path: ${var.landing_path}
+              exec_mode: dlt
+              cdc_mode: change_tracking
+            source: WORKSPACE
+          environment_key: default
+
+    # ─── DLT Pipeline Definition ────────────────────────────────
+    dlt_medallion_pipeline:
+      name: "DLT-Medallion-${bundle.target}"
+      description: >
+        Delta Live Tables pipeline for Bronze + Silver layers.
+        Includes quality expectations, CDC apply_changes(), and CDF.
+      tags:
+        project: sql-to-databricks-migration
+        pipeline: dlt-medallion
+        environment: ${bundle.target}
+      max_concurrent_runs: 1
+      environments:
+        - environment_key: default
+          spec:
+            client: "1"
+      tasks:
+        - task_key: dlt_pipeline
+          notebook_task:
+            notebook_path: ../src/notebooks/02_Meta_Bronze.py
+            base_parameters:
+              catalog: ${var.catalog_admin}
+              schema: ${var.default_schema}
+              landing_path: ${var.landing_path}
+              exec_mode: dlt
+              cdc_mode: change_tracking
+            source: WORKSPACE
+          environment_key: default

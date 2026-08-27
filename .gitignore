@@ -1,0 +1,55 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# ── Virtual environment ──────────────────────────────────────────────────────
+.venv/
+.env
+
+# ── IDE / Editor ─────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── OS / Office temp files ───────────────────────────────────────────────────
+~$*
+Thumbs.db
+.DS_Store
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+migration_utility/logs/
+
+# ── Sensitive config (credentials) ───────────────────────────────────────────
+deployconfig.json
+migration_utility/deployconfig.json
+
+# ── Runtime data / local state ───────────────────────────────────────────────
+migration_utility/migration_state.db*
+migration_utility/schema_compare_results.json
+migration_utility/job_schedules.json
+job_schedules.json
+
+# ── Databricks CLI / Azure ───────────────────────────────────────────────────
+.databricks/
+.azure/
+
+# ── Not app code ─────────────────────────────────────────────────────────────
+webapp_logs*/
+*.zip
+cookies.txt
+
+# ── One-click deploy: per-client configs and generated reports ──────────────
+deploy/clients/
+deploy/reports/
+.deploy_venv/
+
+
+# Runtime state
+migration_utility/.scheduler.pid

@@ -1,0 +1,123 @@
+# Databricks Asset Bundle — SQL to Databricks Migration Studio
+# ================================================================
+# This bundle declares:
+#   - The Migration Studio Databricks App
+#   - All Databricks-side resources (notebooks, jobs, pipelines)
+#   - Multi-cloud configuration via variables
+#
+# Usage:
+#   databricks bundle validate          — check YAML syntax
+#   databricks bundle deploy -t dev     — deploy to dev workspace
+#   databricks bundle run -t dev medallion_pipeline  — trigger the pipeline
+
+bundle:
+  name: sql-to-databricks-migration
+
+variables:
+  # ── Unity Catalog catalogs ──────────────────────────────────────
+  catalog_bronze:
+    description: Bronze catalog for raw ingestion
+    default: bronze
+  catalog_silver:
+    description: Silver catalog for cleansed data
+    default: silver
+  catalog_admin:
+    description: Admin source catalog for config tables
+    default: admin_source
+  catalog_volumes:
+    description: Volumes catalog for landing zone
+    default: dev_volumes
+  catalog_recon:
+    description: Reconciliation catalog
+    default: reconciliation
+  catalog_logging:
+    description: Logging catalog for execution audit trail
+    default: loggingdetails
+
+  # ── Schemas ─────────────────────────────────────────────────────
+  default_schema:
+    description: Default schema used across catalogs
+    default: hr
+  app_schema:
+    description: Schema for app persistence tables
+    default: migration_app
+
+  # ── Storage ─────────────────────────────────────────────────────
+  storage_account:
+    description: Storage account/bucket name (cloud-agnostic)
+    default: sqltodatabrciksmig
+  container:
+    description: Storage container/prefix
+    default: datalake
+
+  # ── Paths ───────────────────────────────────────────────────────
+  landing_path:
+    description: Landing zone base path (UC Volumes)
+    default: /Volumes/dev_volumes/hr/landing
+  notebook_root:
+    description: Workspace path for deployed notebooks
+    default: /Shared/MetadataPipeline
+
+  # ── Compute ─────────────────────────────────────────────────────
+  sql_warehouse_id:
+    description: Serverless SQL Warehouse ID for app queries
+    default: ""
+
+  # ── Multi-Cloud ─────────────────────────────────────────────────
+  cloud_provider:
+    description: Cloud provider (azure, aws, gcp)
+    default: azure
+
+  # ── Per-client secrets/identifiers (always override via --var at deploy time) ──
+  flask_secret_key:
+    description: Flask session-signing secret — MUST be a unique random value per client
+    default: ""
+  genie_space_id:
+    description: Genie Space ID for this workspace (blank = Genie chat disabled until configured)
+    default: ""
+  client_name:
+    description: Client identifier — used to namespace the workspace deploy path
+    default: default
+
+include:
+  - resources/*.yml
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://adb-7405613585789005.5.azuredatabricks.net/
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+
+  staging:
+    workspace:
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/staging
+    variables:
+      catalog_bronze: bronze_staging
+      catalog_silver: silver_staging
+      catalog_volumes: dev_volumes_staging
+
+  prod:
+    mode: production
+    workspace:
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/prod
+    variables:
+      catalog_bronze: bronze_prod
+      catalog_silver: silver_prod
+      catalog_admin: admin_source_prod
+      catalog_volumes: dev_volumes_prod
+      catalog_recon: reconciliation_prod
+      catalog_logging: loggingdetails_prod
+      storage_account: sqltodatabrciksmigprod
+
+  # ── Generic, host-agnostic target used by deploy/one_click_deploy.py ────────
+  # Host comes purely from the DATABRICKS_HOST env var (no hardcoded workspace),
+  # so the same bundle can be deployed to ANY client workspace unchanged.
+  # All catalog/schema/storage values are supplied per-client via --var.
+  # Deployed under the deploying token's own user folder (not /Workspace/Shared)
+  # so it never hits the "bundle root is writable by all users" CLI error.
+  client:
+    mode: production
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/client-${var.client_name}

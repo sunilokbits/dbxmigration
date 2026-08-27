@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "migration-studio",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["migration_utility/app.py"],
+      "port": 5050,
+      "autoPort": false,
+      "env": {
+        "DEV_USER_EMAIL": "sunil.kumar@insight.com",
+        "DEV_USER_NAME": "Sunil Kumar",
+        "PORT": "5050"
+      }
+    }
+  ]
+}

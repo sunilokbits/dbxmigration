@@ -1,0 +1,1055 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Migration Studio — Help &amp; Documentation</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+:root{
+  --font:'DM Sans',system-ui,-apple-system,sans-serif;
+  --bg:#F9FAFB; --surface:#FFFFFF; --surface-2:#F5F6F8;
+  --border:#E5E7EB; --border-2:#D1D5DB;
+  --t1:#1B1F2E; --t2:#374151; --t3:#5F6B7A; --t4:#9CA3AF;
+  --blue:#2563EB; --blue-light:#EFF6FF; --blue-fg:#1D4ED8;
+  --green:#059669; --green-light:#ECFDF5;
+  --amber:#D97706; --amber-light:#FFFBEB;
+  --red:#DC2626; --accent:#FF3621;
+  --purple:#7C3AED; --purple-light:#F5F3FF;
+  --teal:#0D9488; --teal-light:#F0FDFA;
+  --indigo:#4338CA; --indigo-light:#EEF2FF;
+  --rose:#E11D48; --rose-light:#FFF1F2;
+}
+html{scroll-behavior:smooth;}
+body{font-family:var(--font);font-size:15px;line-height:1.7;color:var(--t1);background:var(--bg);}
+
+/* ── HERO ── */
+.hero{
+  background:linear-gradient(135deg,#0F172A 0%,#1E293B 50%,#0F172A 100%);
+  color:#fff; padding:80px 0 60px; text-align:center; position:relative; overflow:hidden;
+}
+.hero::before{
+  content:''; position:absolute; top:-50%; left:-50%; width:200%; height:200%;
+  background:radial-gradient(circle at 30% 50%, rgba(255,54,33,.12) 0%, transparent 50%),
+             radial-gradient(circle at 70% 50%, rgba(37,99,235,.1) 0%, transparent 50%);
+}
+.hero h1{font-size:2.8rem;font-weight:800;letter-spacing:-.03em;position:relative;}
+.hero h1 span{background:linear-gradient(135deg,#FF3621,#FF7355);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.hero p{font-size:1.15rem;color:rgba(255,255,255,.65);margin-top:12px;position:relative;max-width:640px;margin-left:auto;margin-right:auto;}
+.hero-badge{
+  display:inline-flex;align-items:center;gap:6px;margin-top:24px;position:relative;
+  padding:8px 20px;border-radius:99px;font-size:.85rem;font-weight:600;
+  background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:rgba(255,255,255,.8);
+}
+
+/* ── NAV ── */
+.doc-nav{
+  position:sticky;top:0;z-index:100;background:rgba(255,255,255,.92);backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--border);padding:0 40px;
+}
+.doc-nav-inner{
+  max-width:1200px;margin:0 auto;display:flex;align-items:center;gap:8px;
+  overflow-x:auto;padding:12px 0;
+}
+.doc-nav a{
+  padding:8px 16px;border-radius:8px;font-size:.82rem;font-weight:600;color:var(--t3);
+  text-decoration:none;white-space:nowrap;transition:all .2s;
+}
+.doc-nav a:hover{background:var(--blue-light);color:var(--blue-fg);}
+
+/* ── CONTAINER ── */
+.container{max-width:1200px;margin:0 auto;padding:48px 40px 80px;}
+
+/* ── TOC ── */
+.toc{
+  background:var(--surface);border:1px solid var(--border);border-radius:16px;
+  padding:2rem;margin-bottom:48px;
+}
+.toc h2{font-size:1.3rem;font-weight:700;margin-bottom:16px;color:var(--t1);}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;}
+.toc a{
+  display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:10px;
+  text-decoration:none;color:var(--t2);font-size:.88rem;font-weight:500;
+  transition:all .2s;border:1px solid transparent;
+}
+.toc a:hover{background:var(--blue-light);border-color:rgba(37,99,235,.15);color:var(--blue-fg);}
+.toc-num{
+  width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+  font-size:.75rem;font-weight:700;color:#fff;flex-shrink:0;
+}
+
+/* ── SECTION ── */
+.section{margin-bottom:56px;scroll-margin-top:80px;}
+.section-header{
+  display:flex;align-items:center;gap:14px;margin-bottom:20px;
+  padding-bottom:14px;border-bottom:2px solid var(--border);
+}
+.section-icon{
+  width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;
+}
+.section-icon svg{width:22px;height:22px;fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+.section h2{font-size:1.5rem;font-weight:800;letter-spacing:-.02em;color:var(--t1);}
+.section-body{
+  background:var(--surface);border:1px solid var(--border);border-radius:16px;
+  padding:2rem;box-shadow:0 1px 3px rgba(0,0,0,.04);
+}
+.section-body p{margin-bottom:14px;color:var(--t2);font-size:.95rem;}
+.section-body p:last-child{margin-bottom:0;}
+
+/* ── FEATURE GRID ── */
+.feat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;margin-top:16px;}
+.feat-card{
+  padding:18px;border-radius:12px;border:1px solid var(--border);
+  background:var(--surface-2);transition:all .2s;
+}
+.feat-card:hover{border-color:var(--border-2);transform:translateY(-1px);box-shadow:0 4px 16px rgba(0,0,0,.06);}
+.feat-card h4{font-size:.9rem;font-weight:700;color:var(--t1);margin-bottom:6px;display:flex;align-items:center;gap:8px;}
+.feat-card p{font-size:.83rem;color:var(--t3);line-height:1.6;}
+.feat-icon{font-size:1.1rem;}
+
+/* ── SAMPLE IMAGE PLACEHOLDERS ── */
+.img-placeholder{
+  width:100%;border-radius:12px;overflow:hidden;margin:18px 0;
+  background:linear-gradient(135deg,var(--surface-2),#fff);
+  border:1px solid var(--border);position:relative;
+}
+.img-inner{
+  padding:40px 24px;text-align:center;
+  background:linear-gradient(135deg,rgba(37,99,235,.03),rgba(99,102,241,.03));
+}
+.img-inner svg{width:48px;height:48px;fill:none;stroke:var(--t4);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;margin-bottom:12px;}
+.img-cap{font-size:.8rem;color:var(--t4);font-weight:500;}
+
+/* ── STEP LIST ── */
+.steps{counter-reset:step;margin:16px 0;}
+.step-item{
+  display:flex;gap:14px;padding:12px 0;border-bottom:1px solid var(--border);
+  counter-increment:step;
+}
+.step-item:last-child{border-bottom:none;}
+.step-item::before{
+  content:counter(step);width:28px;height:28px;border-radius:8px;
+  background:var(--blue);color:#fff;display:flex;align-items:center;justify-content:center;
+  font-size:.78rem;font-weight:700;flex-shrink:0;margin-top:2px;
+}
+.step-item p{font-size:.9rem;color:var(--t2);line-height:1.6;}
+.step-item strong{color:var(--t1);}
+
+/* ── KEY-VALUE INFO ── */
+.info-table{width:100%;border-collapse:collapse;margin:14px 0;}
+.info-table th,.info-table td{text-align:left;padding:10px 14px;font-size:.88rem;border-bottom:1px solid var(--border);}
+.info-table th{color:var(--t3);font-weight:600;width:200px;background:var(--surface-2);}
+.info-table td{color:var(--t1);}
+
+/* ── BADGES ── */
+.badge{display:inline-flex;padding:3px 10px;border-radius:6px;font-size:.75rem;font-weight:700;letter-spacing:.02em;}
+.badge-blue{background:var(--blue-light);color:var(--blue-fg);}
+.badge-green{background:var(--green-light);color:var(--green);}
+.badge-amber{background:var(--amber-light);color:var(--amber);}
+.badge-purple{background:var(--purple-light);color:var(--purple);}
+.badge-teal{background:var(--teal-light);color:var(--teal);}
+.badge-rose{background:var(--rose-light);color:var(--rose);}
+
+/* ── TIP / NOTE ── */
+.tip{
+  padding:16px 18px;border-radius:12px;margin:16px 0;font-size:.88rem;
+  display:flex;align-items:flex-start;gap:10px;
+}
+.tip-info{background:var(--blue-light);border:1px solid rgba(37,99,235,.15);color:var(--blue-fg);}
+.tip-warn{background:var(--amber-light);border:1px solid rgba(217,119,6,.15);color:var(--amber);}
+.tip-icon{font-size:1.1rem;flex-shrink:0;margin-top:1px;}
+
+/* ── FOOTER ── */
+.doc-footer{
+  text-align:center;padding:40px 0;border-top:1px solid var(--border);
+  color:var(--t4);font-size:.85rem;margin-top:40px;
+}
+.doc-footer a{color:var(--blue);text-decoration:none;font-weight:600;}
+
+/* ── SCROLLBAR ── */
+::-webkit-scrollbar{width:6px;height:6px;}
+::-webkit-scrollbar-track{background:#F3F4F6;}
+::-webkit-scrollbar-thumb{background:#D1D5DB;border-radius:10px;}
+::-webkit-scrollbar-thumb:hover{background:#9CA3AF;}
+
+@media (max-width:768px){
+  .hero h1{font-size:1.8rem;}
+  .container{padding:24px 16px 60px;}
+  .feat-grid{grid-template-columns:1fr;}
+  .toc-grid{grid-template-columns:1fr;}
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════ HERO ═══════ -->
+<div class="hero">
+  <h1>SQL → Databricks <span>Migration Studio</span></h1>
+  <p>Complete documentation for every module in the Migration Studio. Learn how each feature works, step-by-step workflows, and best practices.</p>
+  <div class="hero-badge">📖 Help &amp; Documentation — v2.4</div>
+</div>
+
+<!-- ═══════ STICKY NAV ═══════ -->
+<nav class="doc-nav">
+  <div class="doc-nav-inner">
+    <a href="#dashboard">Dashboard</a>
+    <a href="#discovery">Discovery</a>
+    <a href="#convert">Convert</a>
+    <a href="#deploy">Deploy</a>
+    <a href="#databricks-sql-editor">Databricks SQL Editor</a>
+    <a href="#metadata">MetadataFlow</a>
+    <a href="#pipelines">Pipelines</a>
+    <a href="#jobs">Jobs</a>
+    <a href="#scheduler">Scheduler</a>
+    <a href="#reports">Reports</a>
+    <a href="#progress">Progress</a>
+    <a href="#schema">Schema</a>
+    <a href="#recon">Reconciliation</a>
+    <a href="#dq">Data Quality</a>
+    <a href="#datamodel">Data Modeling</a>
+    <a href="#healer">Self-Healing</a>
+    <a href="#audit">Audit</a>
+    <a href="#settings">Settings</a>
+  </div>
+</nav>
+
+<!-- ═══════ CONTENT ═══════ -->
+<div class="container">
+
+<!-- TABLE OF CONTENTS -->
+<div class="toc">
+  <h2>📋 Table of Contents</h2>
+  <div class="toc-grid">
+    <a href="#dashboard"><span class="toc-num" style="background:var(--blue);">1</span> Dashboard</a>
+    <a href="#discovery"><span class="toc-num" style="background:var(--green);">2</span> Discovery</a>
+    <a href="#convert"><span class="toc-num" style="background:var(--accent);">3</span> Convert to PySpark</a>
+    <a href="#deploy"><span class="toc-num" style="background:var(--green);">4</span> Deploy Notebooks</a>
+    <a href="#databricks-sql-editor"><span class="toc-num" style="background:var(--purple);">5</span> Databricks SQL Editor</a>
+    <a href="#metadata"><span class="toc-num" style="background:var(--blue);">6</span> MetadataFlow</a>
+    <a href="#pipelines"><span class="toc-num" style="background:var(--blue);">7</span> Pipeline Studio</a>
+    <a href="#jobs"><span class="toc-num" style="background:var(--blue);">8</span> Job Manager</a>
+    <a href="#scheduler"><span class="toc-num" style="background:var(--blue);">9</span> Job Scheduler</a>
+    <a href="#reports"><span class="toc-num" style="background:var(--teal);">10</span> Reports</a>
+    <a href="#progress"><span class="toc-num" style="background:var(--teal);">11</span> Progress Tracker</a>
+    <a href="#schema"><span class="toc-num" style="background:var(--teal);">12</span> Schema Comparison</a>
+    <a href="#recon"><span class="toc-num" style="background:var(--teal);">13</span> Reconciliation</a>
+    <a href="#dq"><span class="toc-num" style="background:var(--teal);">14</span> Data Quality</a>
+    <a href="#datamodel"><span class="toc-num" style="background:var(--amber);">15</span> Data Modeling</a>
+    <a href="#healer"><span class="toc-num" style="background:var(--purple);">16</span> System Health Check</a>
+    <a href="#audit"><span class="toc-num" style="background:var(--purple);">17</span> Audit &amp; Compliance</a>
+    <a href="#settings"><span class="toc-num" style="background:var(--t4);">18</span> Settings</a>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- 1. DASHBOARD -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="dashboard">
+  <div class="section-header">
+    <div class="section-icon" style="background:linear-gradient(135deg,#2563EB,#3B82F6);">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+    </div>
+    <div>
+      <h2>Dashboard</h2>
+      <span class="badge badge-blue">Workflow</span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p>The Dashboard is your central command center for the entire migration project. It provides a real-time overview of all migration activities, KPI metrics, pipeline health, and workflow progress.</p>
+
+    <div class="img-placeholder">
+      <div class="img-inner">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+        <div class="img-cap">Dashboard — KPI cards showing total pipelines, jobs, success rate and recent runs</div>
+      </div>
+    </div>
+
+    <div class="feat-grid">
+      <div class="feat-card">
+        <h4><span class="feat-icon">📊</span> KPI Metric Cards</h4>
+        <p>Six colorful gradient cards showing Total Pipelines, Total Jobs, Success Rate, Watermarks, Active Clusters, and Recent Runs at a glance.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">📈</span> Pipeline Health</h4>
+        <p>Real-time pipeline status with success/failure counts, last run timestamps, and drill-down capability.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">⚡</span> Quick Actions</h4>
+        <p>One-click auto-initialization syncs all workflows, pipelines, and job metadata from your Databricks workspace.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">🔄</span> Auto-Refresh</h4>
+        <p>Dashboard data refreshes automatically when entering the pane, ensuring you always see the latest stats.</p>
+      </div>
+    </div>
+
+    <div class="tip tip-info">
+      <span class="tip-icon">💡</span>
+      <div><strong>Tip:</strong> Click the "Auto Init" button on first load to pull all pipeline and job metadata from your connected Databricks workspace.</div>
+    </div>
+  </div>
+</div>
+
+    <div class="tip tip-info">
+      <span class="tip-icon">💡</span>
+      <div><strong>Tip:</strong> Click the "Auto Init" button on first load to pull all pipeline and job metadata from your connected Databricks workspace.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- 2. DISCOVERY -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="discovery">
+  <div class="section-header">
+    <div class="section-icon" style="background:linear-gradient(135deg,#059669,#10B981);">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+    </div>
+    <div>
+      <h2>Discovery</h2>
+      <span class="badge badge-blue">Workflow</span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p>The Discovery module scans your SQL Server source (or built-in demo objects) and performs deep analysis on every Stored Procedure, View, and UDF. It generates complexity scores, migration readiness assessments, root-cause analysis, and a dependency graph — giving stakeholders clear visibility before a single line of code is converted.</p>
+
+    <div class="img-placeholder">
+      <div class="img-inner">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <div class="img-cap">Discovery pane — KPI cards, Bill of Materials, complexity charts & dependency graph</div>
+      </div>
+    </div>
+
+    <h3 style="font-size:1rem;font-weight:700;margin:20px 0 12px;">How It Works</h3>
+    <div class="steps">
+      <div class="step-item"><p><strong>Select Source</strong> — Choose "Static Demo Objects", "Live SQL Server (ODBC)", or "Both" from the dropdown.</p></div>
+      <div class="step-item"><p><strong>Run Discovery Scan</strong> — Click the scan button. The engine analyses every SQL object using 15+ regex patterns detecting CTEs, cursors, temp tables, MERGE, dynamic SQL, window functions, PIVOT, TRY-CATCH, transactions, CROSS APPLY, and more.</p></div>
+      <div class="step-item"><p><strong>Review KPI Cards</strong> — 12 cards show total objects, type breakdown (SPs / Views / UDFs), complexity tiers (Simple / Moderate / Complex / Very Complex), story points, average complexity, auto-convert readiness %, and high-risk count.</p></div>
+      <div class="step-item"><p><strong>Filter the BOM Table</strong> — Search by name, filter by type, tier, or risk level. Click any row to open the RCA panel.</p></div>
+      <div class="step-item"><p><strong>Analyse Charts</strong> — A doughnut chart shows tier distribution; a horizontal bar chart ranks the top 15 objects by complexity score.</p></div>
+      <div class="step-item"><p><strong>Explore Dependencies</strong> — The D3.js force-directed graph shows object-to-object and object-to-table relationships. Drag nodes, click for RCA details.</p></div>
+      <div class="step-item"><p><strong>Export</strong> — Download a self-contained HTML report or a CSV Bill-of-Materials.</p></div>
+    </div>
+
+    <div class="feat-grid">
+      <div class="feat-card">
+        <h4><span class="feat-icon">🔍</span> Complexity Scoring</h4>
+        <p>Additive scoring: cursors (+15), dynamic SQL (+15), MERGE (+10), temp tables (+5 each), CTEs (+3), and more. Total maps to Simple/Moderate/Complex/Very Complex tiers.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">📋</span> Bill of Materials</h4>
+        <p>Full inventory table with name, type, lines, params, table refs, score, tier, effort hours, risk level, and migration readiness.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">🔗</span> Dependency Graph</h4>
+        <p>D3.js interactive force-directed graph. Nodes sized by complexity, coloured by type, with clickable RCA detail panels.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">🩺</span> Root Cause Analysis</h4>
+        <p>Per-object RCA showing which constructs cause complexity, their migration impact, why they're hard to convert, and unsupported PySpark patterns.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">⚡</span> Risk Assessment</h4>
+        <p>Risk factors detected: cursor usage, dynamic SQL, OPENQUERY, GOTO, excessive temp tables. Risk levels: Low / Medium / High / Critical.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">📊</span> Effort Estimation</h4>
+        <p>Each tier maps to effort hours (4-8h Simple, 8-16h Moderate, 16-24h Complex, 24-40h Very Complex) and story points for sprint planning.</p>
+      </div>
+    </div>
+
+    <div class="tip tip-info">
+      <span class="tip-icon">💡</span>
+      <div><strong>Tip:</strong> Run Discovery before Convert to PySpark — it helps you prioritise simple objects for quick wins and flag complex ones for manual review.</div>
+    </div>
+    <div class="tip tip-warn">
+      <span class="tip-icon">⚠️</span>
+      <div><strong>Live source:</strong> Requires an active ODBC connection. Configure server, database, and credentials in Settings first. Discovery will scan <code>sys.procedures</code>, <code>sys.views</code>, <code>sys.objects</code>, and <code>sys.sql_expression_dependencies</code>.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- 3. CONVERT TO PYSPARK -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="convert">
+  <div class="section-header">
+    <div class="section-icon" style="background:linear-gradient(135deg,#FF3621,#FF7355);">
+      <svg viewBox="0 0 24 24"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/></svg>
+    </div>
+    <div>
+      <h2>Convert to PySpark</h2>
+      <span class="badge badge-rose">Core</span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p>The heart of the migration. This module connects to your SQL Server source, discovers Stored Procedures, Views, and UDFs, and converts them to Databricks-compatible PySpark notebooks using automated transformation.</p>
+
+    <div class="img-placeholder">
+      <div class="img-inner">
+        <svg viewBox="0 0 24 24"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/></svg>
+        <div class="img-cap">Convert pane — Source connection, object selector, and converted PySpark code viewer</div>
+      </div>
+    </div>
+
+    <h3 style="font-size:1rem;font-weight:700;margin:20px 0 12px;">How It Works</h3>
+    <div class="steps">
+      <div class="step-item"><p><strong>Connect to SQL Server</strong> — Enter your server, database, and credentials in the Source Connection card. Supports Windows and SQL Authentication.</p></div>
+      <div class="step-item"><p><strong>Discover Objects</strong> — Click "Fetch Objects" to scan for Stored Procedures, Views, and UDFs. The KPI pills at the top show totals.</p></div>
+      <div class="step-item"><p><strong>Select Objects</strong> — Use checkboxes to pick which SQL objects to convert. Use "Select All" or filter by type.</p></div>
+      <div class="step-item"><p><strong>Convert</strong> — Click "Convert Selected" to transform SQL code into PySpark. Each object becomes a separate `.py` notebook.</p></div>
+      <div class="step-item"><p><strong>Review &amp; Edit</strong> — View converted code in the syntax-highlighted editor. Make manual edits if needed before deploying.</p></div>
+    </div>
+
+    <div class="feat-grid">
+      <div class="feat-card">
+        <h4><span class="feat-icon">🔗</span> Source Connection</h4>
+        <p>SQL Server connection with server name, database, user/password, and optional Windows Auth toggle.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">🔍</span> Object Discovery</h4>
+        <p>Automatic discovery of SPs, Views, and UDFs with counts displayed in KPI stat pills.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">🤖</span> Conversion</h4>
+        <p>Intelligent SQL-to-PySpark conversion handling joins, CTEs, temp tables, cursors, and complex patterns.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">📝</span> Code Viewer</h4>
+        <p>Dark-themed syntax-highlighted code editor with copy, download, and inline editing capabilities.</p>
+      </div>
+    </div>
+
+    <div class="tip tip-info">
+      <span class="tip-icon">💡</span>
+      <div><strong>Tip:</strong> UDFs are automatically bundled into a single <code>HelperFunction.py</code> notebook for reuse across all converted notebooks.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- 3. DEPLOY NOTEBOOKS -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="deploy">
+  <div class="section-header">
+    <div class="section-icon" style="background:linear-gradient(135deg,#059669,#34D399);">
+      <svg viewBox="0 0 24 24"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0018 9h-1.26A8 8 0 103 16.3"/></svg>
+    </div>
+    <div>
+      <h2>Deploy Notebooks</h2>
+      <span class="badge badge-green">Deploy</span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p>Deploy your converted PySpark notebooks directly to the Databricks workspace. Supports deploying to any workspace path with automatic folder creation.</p>
+
+    <div class="img-placeholder">
+      <div class="img-inner">
+        <svg viewBox="0 0 24 24"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0018 9h-1.26A8 8 0 103 16.3"/></svg>
+        <div class="img-cap">Deploy pane — Select notebooks and push them to your Databricks workspace folder</div>
+      </div>
+    </div>
+
+    <div class="steps">
+      <div class="step-item"><p><strong>Select Notebooks</strong> — Choose which converted notebooks to deploy from the list of available files.</p></div>
+      <div class="step-item"><p><strong>Set Workspace Path</strong> — Specify the target folder in Databricks (e.g., <code>/Shared/migration/converted</code>).</p></div>
+      <div class="step-item"><p><strong>Deploy</strong> — Click "Deploy Selected" to push notebooks to Databricks via the REST API.</p></div>
+      <div class="step-item"><p><strong>Verify</strong> — Check the deployment log for confirmation and navigate directly to the deployed notebooks.</p></div>
+    </div>
+
+    <table class="info-table">
+      <tr><th>Deployment Target</th><td>Databricks Workspace (REST API 2.0)</td></tr>
+      <tr><th>Notebook Format</th><td>PySpark (.py) — Python language</td></tr>
+      <tr><th>Authentication</th><td>Personal Access Token (from deployconfig.json)</td></tr>
+      <tr><th>Overwrite</th><td>Existing notebooks are overwritten on redeploy</td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- 4. DATABRICKS SQL EDITOR -->
+<!-- ═════════════════════════════════════════════════════════════════ -->
+<div class="section" id="databricks-sql-editor">
+  <div class="section-header">
+    <div class="section-icon" style="background:linear-gradient(135deg,#7C3AED,#A78BFA);">
+      <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+    </div>
+    <div>
+      <h2>Databricks SQL Editor</h2>
+      <span class="badge badge-purple">Catalog</span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p>Browse and interact with your Databricks SQL Editor directly from the Migration Studio. View tables, preview data, and execute SQL queries — all without leaving the tool.</p>
+
+    <div class="img-placeholder">
+      <div class="img-inner">
+        <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+        <div class="img-cap">Databricks SQL Editor — Browse catalogs, schemas, tables and run live SQL queries</div>
+      </div>
+    </div>
+
+    <div class="feat-grid">
+      <div class="feat-card">
+        <h4><span class="feat-icon">📂</span> Catalog Browser</h4>
+        <p>Dropdown selectors for Catalog and Schema, auto-populated from your <code>deployconfig.json</code> configuration.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">📋</span> Table List</h4>
+        <p>View all tables in the selected schema with MANAGED/EXTERNAL type indicators.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">👁️</span> Data Preview</h4>
+        <p>Click any table to preview its data with column headers and formatted rows.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">⚡</span> SQL Executor</h4>
+        <p>Write and run custom SQL queries against your Unity Catalog tables. Results displayed in a formatted table.</p>
+      </div>
+    </div>
+
+    <div class="tip tip-info">
+      <span class="tip-icon">💡</span>
+      <div><strong>Note:</strong> Host and token are automatically loaded from <code>deployconfig.json</code> — no need to enter them manually. Catalog and schema dropdowns are pre-populated from your config file.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- 5. METADATAFLOW -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="metadata">
+  <div class="section-header">
+    <div class="section-icon" style="background:linear-gradient(135deg,#2563EB,#60A5FA);">
+      <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+    </div>
+    <div>
+      <h2>MetadataFlow</h2>
+      <span class="badge badge-blue">Workflow</span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p>Creates and manages metadata notebooks that define table schemas, column mappings, data types, and lineage information for your migrated tables. These metadata notebooks drive the pipeline generation.</p>
+
+    <div class="feat-grid">
+      <div class="feat-card">
+        <h4><span class="feat-icon">🗂️</span> Schema Definitions</h4>
+        <p>Auto-generates metadata notebooks with complete table schemas, column types, and nullable flags.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">🔗</span> Lineage Tracking</h4>
+        <p>Records source-to-target column mappings and transformation rules for full data lineage.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">📤</span> Deploy Metadata</h4>
+        <p>Push metadata notebooks to Databricks workspace for use by downstream pipelines.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- 8. PIPELINE STUDIO -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="pipelines">
+  <div class="section-header">
+    <div class="section-icon" style="background:linear-gradient(135deg,#2563EB,#60A5FA);">
+      <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+    </div>
+    <div>
+      <h2>Pipeline Studio</h2>
+      <span class="badge badge-blue">Workflow</span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p>Manage your Databricks Delta Live Table (DLT) pipelines. View pipeline configurations, trigger updates, monitor execution status, and inspect pipeline event logs.</p>
+
+    <div class="img-placeholder">
+      <div class="img-inner">
+        <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        <div class="img-cap">Pipeline Studio — View, manage, and trigger DLT pipeline runs</div>
+      </div>
+    </div>
+
+    <div class="feat-grid">
+      <div class="feat-card">
+        <h4><span class="feat-icon">📋</span> Pipeline List</h4>
+        <p>View all DLT pipelines with name, state (RUNNING, IDLE, FAILED), and last update time.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">▶️</span> Trigger Runs</h4>
+        <p>Start pipeline updates with full or refresh modes directly from the UI.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">📊</span> Event Logs</h4>
+        <p>View detailed pipeline event logs including data quality metrics and processing stats.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- 9. JOB MANAGER -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="jobs">
+  <div class="section-header">
+    <div class="section-icon" style="background:linear-gradient(135deg,#2563EB,#60A5FA);">
+      <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+    </div>
+    <div>
+      <h2>Job Manager</h2>
+      <span class="badge badge-blue">Workflow</span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p>Create, view, and manage Databricks Jobs. Configure multi-task jobs with notebook tasks, set cluster policies, add dependencies, and monitor run history with detailed logs.</p>
+
+    <div class="feat-grid">
+      <div class="feat-card">
+        <h4><span class="feat-icon">📝</span> Create Jobs</h4>
+        <p>Define job name, select notebook tasks, configure cluster, and set up task dependencies.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">▶️</span> Run Now</h4>
+        <p>Trigger immediate job runs and monitor execution in real-time with status polling.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">📜</span> Run History</h4>
+        <p>View past job runs with start time, duration, result state, and error details.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">🔧</span> Edit Jobs</h4>
+        <p>Update job configurations, add/remove tasks, and change cluster settings without recreating.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- 10. JOB SCHEDULER -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="scheduler">
+  <div class="section-header">
+    <div class="section-icon" style="background:linear-gradient(135deg,#2563EB,#60A5FA);">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    </div>
+    <div>
+      <h2>Job Scheduler</h2>
+      <span class="badge badge-blue">Workflow</span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p>Schedule recurring job runs with cron expressions or user-friendly time pickers. Manages timezone settings, pause/resume schedules, and integrates with the Databricks Jobs API.</p>
+
+    <div class="img-placeholder">
+      <div class="img-inner">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        <div class="img-cap">Job Scheduler — Configure schedules with cron, timezone selector, and edit capabilities</div>
+      </div>
+    </div>
+
+    <div class="steps">
+      <div class="step-item"><p><strong>Select Job</strong> — Choose from the list of existing Databricks Jobs.</p></div>
+      <div class="step-item"><p><strong>Set Schedule</strong> — Use the cron builder or manual input. Supports standard cron (5 fields) and Quartz (6-7 fields).</p></div>
+      <div class="step-item"><p><strong>Set Timezone</strong> — Pick your timezone from the dropdown (e.g., America/New_York, UTC).</p></div>
+      <div class="step-item"><p><strong>Apply</strong> — Save the schedule. The job will run automatically at the specified times.</p></div>
+    </div>
+
+    <div class="tip tip-warn">
+      <span class="tip-icon">⚠️</span>
+      <div><strong>Note:</strong> Cron format uses Quartz syntax (seconds minute hour day month day-of-week). Example: <code>0 30 8 * * ?</code> runs daily at 8:30 AM.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- 11. REPORTS -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="reports">
+  <div class="section-header">
+    <div class="section-icon" style="background:linear-gradient(135deg,#0EA5E9,#38BDF8);">
+      <svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+    </div>
+    <div>
+      <h2>Reports</h2>
+      <span class="badge badge-teal">Analytics</span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p>Generate comprehensive migration reports with conversion statistics, success/failure summaries, object-level details, and exportable PDF/CSV formats.</p>
+
+    <div class="feat-grid">
+      <div class="feat-card">
+        <h4><span class="feat-icon">📊</span> Conversion Stats</h4>
+        <p>Object counts, conversion success rates, and error breakdowns by object type.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">📄</span> Export Reports</h4>
+        <p>Download migration reports as PDF presentations or CSV data files for stakeholder review.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- 12. PROGRESS TRACKER -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="progress">
+  <div class="section-header">
+    <div class="section-icon" style="background:linear-gradient(135deg,#0EA5E9,#38BDF8);">
+      <svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+    </div>
+    <div>
+      <h2>Progress Tracker</h2>
+      <span class="badge badge-teal">Analytics</span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p>Track overall migration progress across all phases. Visual progress bars, milestone markers, and phase-level breakdowns show exactly where your migration stands.</p>
+
+    <div class="feat-grid">
+      <div class="feat-card">
+        <h4><span class="feat-icon">📈</span> Overall Progress</h4>
+        <p>Percentage completion across all migration phases with animated progress bars.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">🎯</span> Phase Tracking</h4>
+        <p>Individual progress for Convert, Deploy, Migrate, Test, and Validate phases.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- 13. SCHEMA COMPARISON -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="schema">
+  <div class="section-header">
+    <div class="section-icon" style="background:linear-gradient(135deg,#0EA5E9,#38BDF8);">
+      <svg viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M8 3H3v5"/><path d="M12 22v-8.5"/><path d="M20 9.5V12l-8 4.5L4 12V9.5"/><path d="M4 3l8 4.5L20 3"/></svg>
+    </div>
+    <div>
+      <h2>Schema Comparison</h2>
+      <span class="badge badge-teal">Analytics</span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p>Compare source SQL Server schemas against target Databricks Delta table schemas. Highlights column mismatches, type differences, missing columns, and extra columns in a visual diff view.</p>
+
+    <div class="feat-grid">
+      <div class="feat-card">
+        <h4><span class="feat-icon">🔍</span> Side-by-Side Diff</h4>
+        <p>Visual comparison showing source and target columns with color-coded match/mismatch indicators.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">⚠️</span> Mismatch Detection</h4>
+        <p>Flags type mismatches (e.g., VARCHAR→STRING), missing columns, and nullable changes.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- 14. RECONCILIATION REPORT -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="recon">
+  <div class="section-header">
+    <div class="section-icon" style="background:linear-gradient(135deg,#0EA5E9,#38BDF8);">
+      <svg viewBox="0 0 24 24"><path d="M9 5H2v7l6.29 6.29c.94.94 2.48.94 3.42 0l4.58-4.58c.94-.94.94-2.48 0-3.42L9 5z"/><path d="M6 9h.01"/></svg>
+    </div>
+    <div>
+      <h2>Reconciliation Report</h2>
+      <span class="badge badge-teal">Analytics</span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p>Validate data integrity post-migration by comparing row counts, checksums, and sample data between source and target tables. Ensures no data loss during migration.</p>
+
+    <div class="feat-grid">
+      <div class="feat-card">
+        <h4><span class="feat-icon">🔢</span> Row Count Matching</h4>
+        <p>Compares source and target row counts per table with match/mismatch status.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">✅</span> Checksum Validation</h4>
+        <p>Hash-based data comparison to verify exact data match between systems.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">📊</span> Summary Dashboard</h4>
+        <p>Overall reconciliation score with pass/fail status for each table.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- 15. DATA QUALITY -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="dq">
+  <div class="section-header">
+    <div class="section-icon" style="background:linear-gradient(135deg,#0EA5E9,#38BDF8);">
+      <svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+    </div>
+    <div>
+      <h2>Data Quality</h2>
+      <span class="badge badge-teal">Analytics</span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p>Define and execute data quality rules on your migrated Delta tables. Check for nulls, duplicates, range violations, referential integrity, and custom SQL assertions.</p>
+
+    <div class="feat-grid">
+      <div class="feat-card">
+        <h4><span class="feat-icon">🛡️</span> Quality Rules</h4>
+        <p>Define rules like NOT NULL checks, unique constraints, range validations, and regex pattern matches.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">📋</span> DQ Summary</h4>
+        <p>Quality score per table with pass/warn/fail indicators and detailed violation logs.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">🔄</span> Re-Run Checks</h4>
+        <p>Execute data quality checks on demand or as part of automated pipeline runs.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- 16. DATA MODELING -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="datamodel">
+  <div class="section-header">
+    <div class="section-icon" style="background:linear-gradient(135deg,#D97706,#FBBF24);">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="3"/><line x1="12" y1="8" x2="12" y2="14"/><circle cx="6" cy="19" r="3"/><circle cx="18" cy="19" r="3"/><line x1="12" y1="14" x2="6" y2="16"/><line x1="12" y1="14" x2="18" y2="16"/></svg>
+    </div>
+    <div>
+      <h2>Data Modeling</h2>
+      <span class="badge badge-amber">Modeling</span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p>Data modeling engine that analyzes your tables and automatically classifies them into Star Schema or Snowflake Schema patterns. Generate ER diagrams, DDL scripts, and edit models interactively.</p>
+
+    <div class="img-placeholder">
+      <div class="img-inner">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="3"/><line x1="12" y1="8" x2="12" y2="14"/><circle cx="6" cy="19" r="3"/><circle cx="18" cy="19" r="3"/><line x1="12" y1="14" x2="6" y2="16"/><line x1="12" y1="14" x2="18" y2="16"/></svg>
+        <div class="img-cap">Data Modeling — Classifies tables as Facts/Dimensions, generates ER diagrams and DDL</div>
+      </div>
+    </div>
+
+    <div class="steps">
+      <div class="step-item"><p><strong>Select Catalog &amp; Schema</strong> — Pick source tables from Unity Catalog or load sample demo data.</p></div>
+      <div class="step-item"><p><strong>Choose Schema Type</strong> — Select Auto (system decides), Star Schema, or Snowflake Schema.</p></div>
+      <div class="step-item"><p><strong>Generate Model</strong> — Classifies tables as Fact or Dimension, identifies relationships, and builds the ER diagram.</p></div>
+      <div class="step-item"><p><strong>Edit Interactively</strong> — Rename tables, add/remove columns, change roles, edit PK/nullable flags, and manage relationships.</p></div>
+      <div class="step-item"><p><strong>Generate DDL</strong> — Export CREATE TABLE statements for all modeled tables.</p></div>
+    </div>
+
+    <div class="feat-grid">
+      <div class="feat-card">
+        <h4><span class="feat-icon">🤖</span> Auto Classification</h4>
+        <p>GPT-powered analysis identifies Fact vs Dimension tables based on naming patterns, column types, and relationships.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">📐</span> ER Diagram</h4>
+        <p>Interactive SVG entity-relationship diagram with draggable nodes and relationship lines.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">✏️</span> 9 Edit Types</h4>
+        <p>Add/remove tables, rename, change roles, add/remove/edit columns, manage relationships — all inline.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">🎲</span> Sample Data Demo</h4>
+        <p>10 built-in sample tables for offline demos — no Databricks connection required.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- 16b. AZURE DEVOPS GIT INTEGRATION -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="devops-integration">
+  <div class="section-header">
+    <div class="section-icon" style="background:linear-gradient(135deg,#0078D4,#106EBE);">
+      <svg viewBox="0 0 24 24"><path d="M0 0h24v24H0z" fill="none"/><path d="M12 2L2 7l10 5 10-5-10-5z" fill="currentColor" opacity=".3"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+    </div>
+    <div>
+      <h2>Azure DevOps — Git Integration</h2>
+      <span class="badge badge-blue">DevOps</span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p>Push Data Model DDL scripts, ER diagram images (PNG), and model JSON to an Azure DevOps Git repository directly from the Data Modeling module. Uses PAT authentication stored securely in Azure Key Vault.</p>
+
+    <div class="img-placeholder">
+      <div class="img-inner">
+        <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+        <div class="img-cap">Azure DevOps Integration — Push DDL & ER diagrams to Git with Key Vault PAT</div>
+      </div>
+    </div>
+
+    <div class="steps">
+      <div class="step-item"><p><strong>Configure Settings</strong> — In Settings → Azure DevOps section, enter Organization, Project, Repository, and Branch name.</p></div>
+      <div class="step-item"><p><strong>Store PAT in Key Vault</strong> — Store your Azure DevOps Personal Access Token as <code>devops-token</code> secret in Azure Key Vault (e.g. <code>kv-dbxmigrator-west3</code>).</p></div>
+      <div class="step-item"><p><strong>Test Connection</strong> — Click "Test Connection" to verify the PAT and repo access. A green success message confirms connectivity.</p></div>
+      <div class="step-item"><p><strong>Generate Model</strong> — Go to Data Modeling, generate your Star/Snowflake schema, and review the ER diagram and DDL.</p></div>
+      <div class="step-item"><p><strong>Push to DevOps</strong> — Click the "Push to DevOps" button in the ER Diagram toolbar. Enter a commit message and the files are committed atomically.</p></div>
+    </div>
+
+    <div class="feat-grid">
+      <div class="feat-card">
+        <h4><span class="feat-icon">🔗</span> One-Click Git Push</h4>
+        <p>DDL (.sql), ER diagram (.png), and model (.json) are pushed in a single atomic commit to your configured branch.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">🔐</span> Key Vault Security</h4>
+        <p>PAT is never stored in config or UI — resolved at runtime from Azure Key Vault secret <code>devops-token</code>.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">🌿</span> Auto Branch Creation</h4>
+        <p>If the target branch doesn't exist, it's automatically created from the default branch (usually <code>main</code>).</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">✅</span> Test Connection</h4>
+        <p>Validates organization, project, repo, and PAT before pushing — shows repo name and default branch on success.</p>
+      </div>
+    </div>
+
+    <div class="callout callout-info" style="margin-top:16px;">
+      <strong>Configuration Fields:</strong>
+      <ul style="margin:8px 0 0;padding-left:20px;">
+        <li><strong>Organization</strong> — Azure DevOps org name (e.g. <code>EMEA-SalesOps</code>) or full URL</li>
+        <li><strong>Project</strong> — Project name (e.g. <code>AI Accelerator</code>)</li>
+        <li><strong>Repository</strong> — Git repository name</li>
+        <li><strong>Branch</strong> — Target branch (auto-created if missing, defaults to <code>data-modeling</code>)</li>
+        <li><strong>PAT</strong> — Stored in Key Vault as secret name <code>devops-token</code></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- 17. SYSTEM HEALTH CHECK -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="healer">
+  <div class="section-header">
+    <div class="section-icon" style="background:linear-gradient(135deg,#7C3AED,#A78BFA);">
+      <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+    </div>
+    <div>
+      <h2>System Health Check</h2>
+      <span class="badge badge-purple">Monitor</span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p>Paste any error message or exception traceback and get automated diagnosis with actionable fix suggestions. Supports Databricks, Spark, Python, and SQL error patterns.</p>
+
+    <div class="img-placeholder">
+      <div class="img-inner">
+        <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <div class="img-cap">System Health Check — Paste an error, get automated diagnosis and fix recommendations</div>
+      </div>
+    </div>
+
+    <div class="steps">
+      <div class="step-item"><p><strong>Paste Error</strong> — Copy-paste the full error message or stack trace into the text area.</p></div>
+      <div class="step-item"><p><strong>Analyze</strong> — Click "Diagnose" to send the error to the analysis engine.</p></div>
+      <div class="step-item"><p><strong>Review Fix</strong> — The bot returns root cause analysis, suggested fixes, and prevention tips in a formatted card.</p></div>
+    </div>
+
+    <div class="tip tip-info">
+      <span class="tip-icon">💡</span>
+      <div><strong>Examples of supported errors:</strong> <code>java.lang.OutOfMemoryError</code>, <code>AnalysisException: Table not found</code>, <code>Connection timed out</code>, Spark shuffle errors, permission denied, and more.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- 18. AUDIT & COMPLIANCE -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="audit">
+  <div class="section-header">
+    <div class="section-icon" style="background:linear-gradient(135deg,#7C3AED,#A78BFA);">
+      <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+    </div>
+    <div>
+      <h2>Audit &amp; Compliance</h2>
+      <span class="badge badge-purple">Monitor</span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p>Maintains a complete audit trail of all migration activities. Tracks who did what, when, and the result. Useful for compliance reporting, change management, and troubleshooting.</p>
+
+    <div class="feat-grid">
+      <div class="feat-card">
+        <h4><span class="feat-icon">📝</span> Activity Log</h4>
+        <p>Timestamped log of every action: conversions, deployments, data loads, schema changes, and configurations.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">👤</span> User Tracking</h4>
+        <p>Records which user performed each action for accountability and compliance.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">🔒</span> Change History</h4>
+        <p>Full history of configuration changes, schedule modifications, and job updates.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- 19. SETTINGS -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="settings">
+  <div class="section-header">
+    <div class="section-icon" style="background:linear-gradient(135deg,#6B7280,#9CA3AF);">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z"/></svg>
+    </div>
+    <div>
+      <h2>Settings</h2>
+      <span class="badge badge-blue">Config</span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p>Configure Infrastructure as Code settings including folder structures, external locations, storage credentials, Unity Catalog volumes, and deployment configurations.</p>
+
+    <div class="feat-grid">
+      <div class="feat-card">
+        <h4><span class="feat-icon">📁</span> Folder Structure</h4>
+        <p>Define workspace folder paths for landing, bronze, silver, and gold layers.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">🌐</span> External Locations</h4>
+        <p>Configure ADLS Gen2 storage paths, storage credentials, and external location names.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">📦</span> UC Volumes</h4>
+        <p>Set up Unity Catalog volume configurations for managed and external storage.</p>
+      </div>
+      <div class="feat-card">
+        <h4><span class="feat-icon">⚙️</span> Deploy Config</h4>
+        <p>View and edit the <code>deployconfig.json</code> file which stores host, token, catalog, and schema settings.</p>
+      </div>
+    </div>
+
+    <div class="tip tip-warn">
+      <span class="tip-icon">⚠️</span>
+      <div><strong>Important:</strong> Changes to Settings affect the entire migration workflow. Review carefully before applying, as they configure the target Databricks environment paths and credentials.</div>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<!-- ═══════ FOOTER ═══════ -->
+<div class="doc-footer">
+  <p>SQL → Databricks Migration Studio — v2.4 &mdash; Built with ❤️ for enterprise data teams</p>
+  <p style="margin-top:8px;"><a href="/">← Back to Migration Studio</a></p>
+</div>
+
+</body>
+</html>

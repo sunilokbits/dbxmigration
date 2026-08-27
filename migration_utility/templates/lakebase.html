@@ -1,0 +1,1156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lakebase Integration Analysis — DBXConnect Migration Studio</title>
+<style>
+:root {
+  --primary: #6366F1;
+  --primary-dark: #4F46E5;
+  --success: #10B981;
+  --warning: #F59E0B;
+  --danger: #EF4444;
+  --info: #3B82F6;
+  --surface: #F8FAFC;
+  --border: #E2E8F0;
+  --text: #1E293B;
+  --text-muted: #64748B;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: var(--surface); color: var(--text); line-height: 1.6; }
+.container { max-width: 1200px; margin: 0 auto; padding: 40px 24px; }
+
+/* Header */
+.hero { background: linear-gradient(135deg, #1E1B4B 0%, #312E81 50%, #4338CA 100%); border-radius: 20px; padding: 48px 40px; color: #fff; margin-bottom: 40px; position: relative; overflow: hidden; }
+.hero::before { content: ''; position: absolute; top: -50%; right: -20%; width: 60%; height: 200%; background: radial-gradient(ellipse, rgba(99,102,241,.2) 0%, transparent 70%); }
+.hero h1 { font-size: 32px; font-weight: 800; margin-bottom: 8px; position: relative; }
+.hero .subtitle { font-size: 16px; color: rgba(255,255,255,.75); position: relative; }
+.hero .badge { display: inline-block; margin-top: 16px; padding: 6px 14px; background: rgba(99,102,241,.3); border: 1px solid rgba(165,180,252,.4); border-radius: 99px; font-size: 12px; font-weight: 600; color: #C7D2FE; }
+
+/* Section */
+.section { background: #fff; border: 1px solid var(--border); border-radius: 16px; padding: 32px; margin-bottom: 28px; }
+.section h2 { font-size: 20px; font-weight: 700; margin-bottom: 16px; display: flex; align-items: center; gap: 10px; }
+.section h2 .ico { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+.section h3 { font-size: 15px; font-weight: 700; margin: 20px 0 10px; color: var(--primary-dark); }
+.section p, .section li { font-size: 14px; line-height: 1.7; color: var(--text); }
+.section ul, .section ol { padding-left: 20px; margin: 10px 0; }
+.section li { margin-bottom: 6px; }
+
+/* Cards grid */
+.card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin: 16px 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+.card h4 { font-size: 14px; font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.card p { font-size: 13px; color: var(--text-muted); }
+.card .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-top: 8px; }
+.tag-low { background: #DCFCE7; color: #166534; }
+.tag-med { background: #FEF3C7; color: #92400E; }
+.tag-high { background: #FEE2E2; color: #991B1B; }
+.tag-info { background: #DBEAFE; color: #1E40AF; }
+
+/* Tables */
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
+th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); }
+th { background: var(--surface); font-weight: 700; color: var(--text-muted); text-transform: uppercase; font-size: 11px; letter-spacing: .04em; }
+td { color: var(--text); }
+tr:hover td { background: #F1F5F9; }
+
+/* Callouts */
+.callout { padding: 16px 20px; border-radius: 10px; margin: 16px 0; font-size: 13px; border-left: 4px solid; }
+.callout-info { background: #EFF6FF; border-color: var(--info); }
+.callout-success { background: #F0FDF4; border-color: var(--success); }
+.callout-warning { background: #FFFBEB; border-color: var(--warning); }
+.callout-danger { background: #FEF2F2; border-color: var(--danger); }
+.callout strong { display: block; margin-bottom: 4px; }
+
+/* Timeline */
+.timeline { position: relative; padding-left: 32px; margin: 20px 0; }
+.timeline::before { content: ''; position: absolute; left: 12px; top: 4px; bottom: 4px; width: 2px; background: var(--border); }
+.timeline-item { position: relative; margin-bottom: 20px; }
+.timeline-item::before { content: ''; position: absolute; left: -24px; top: 6px; width: 10px; height: 10px; border-radius: 50%; background: var(--primary); border: 2px solid #fff; box-shadow: 0 0 0 2px var(--primary); }
+.timeline-item h4 { font-size: 14px; font-weight: 700; }
+.timeline-item p { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+.timeline-item .effort { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; background: #EDE9FE; color: #5B21B6; margin-top: 6px; }
+
+/* Comparison */
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 16px 0; }
+.compare-col { padding: 20px; border-radius: 12px; border: 1px solid var(--border); }
+.compare-col h4 { font-size: 14px; font-weight: 700; margin-bottom: 10px; }
+.compare-col.current { background: #FEF2F2; border-color: #FECACA; }
+.compare-col.proposed { background: #F0FDF4; border-color: #BBF7D0; }
+
+/* Code block */
+.code-block { background: #1E293B; color: #E2E8F0; padding: 16px 20px; border-radius: 10px; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 12px; overflow-x: auto; margin: 12px 0; line-height: 1.7; }
+.code-block .comment { color: #64748B; }
+.code-block .keyword { color: #A78BFA; }
+.code-block .string { color: #34D399; }
+.code-block .func { color: #60A5FA; }
+
+/* Score */
+.score-row { display: flex; gap: 20px; margin: 16px 0; flex-wrap: wrap; }
+.score-item { flex: 1; min-width: 150px; text-align: center; padding: 20px; background: var(--surface); border-radius: 12px; border: 1px solid var(--border); }
+.score-item .num { font-size: 28px; font-weight: 800; color: var(--primary); }
+.score-item .label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+/* Footer */
+.footer { text-align: center; padding: 20px; color: var(--text-muted); font-size: 12px; }
+
+@media (max-width: 768px) {
+  .compare { grid-template-columns: 1fr; }
+  .hero { padding: 32px 24px; }
+  .hero h1 { font-size: 24px; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- HERO -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="hero">
+  <h1>&#9889; Lakebase Integration Analysis</h1>
+  <div class="subtitle">Complete evaluation for DBXConnect Migration Studio — Effort, Cost &amp; Architecture</div>
+  <div class="badge">Databricks Lakebase Postgres &bull; Fully Managed &bull; Scale-to-Zero</div>
+</div>
+
+<!-- TAB NAVIGATION -->
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab('analysis')">&#128202; Analysis &amp; Planning</button>
+  <button class="tab-btn" onclick="switchTab('steps')">&#128221; Step-by-Step Guide</button>
+</div>
+
+<!-- TAB 1: ANALYSIS (existing content) -->
+<div id="tab-analysis" class="tab-content active">
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- SECTION 1: WHAT IS LAKEBASE -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <h2><span class="ico" style="background:#EDE9FE;color:#6366F1;">&#128218;</span> What is Lakebase?</h2>
+  <p><strong>Lakebase</strong> is Databricks' fully managed PostgreSQL database, natively integrated into the Databricks platform. It brings <strong>OLTP (transactional)</strong> capabilities alongside your Lakehouse <strong>OLAP (analytical)</strong> workloads.</p>
+
+  <div class="card-grid">
+    <div class="card">
+      <h4>&#9889; Low-Latency Transactions</h4>
+      <p>Sub-10ms reads/writes for app state, user sessions, config, and metadata — unlike Delta tables which have 100ms+ latency.</p>
+    </div>
+    <div class="card">
+      <h4>&#128260; Auto-Scaling</h4>
+      <p>Scales from 0.5 to 64 Compute Units (CU) automatically based on demand. Each CU = 2 GB RAM.</p>
+    </div>
+    <div class="card">
+      <h4>&#128164; Scale-to-Zero</h4>
+      <p>When idle, compute scales to zero — zero cost for inactive databases. Resumes in seconds.</p>
+    </div>
+    <div class="card">
+      <h4>&#127919; Unity Catalog Integration</h4>
+      <p>Automatic UC registration — query Lakebase tables from notebooks, SQL warehouses, and pipelines via standard SQL.</p>
+    </div>
+    <div class="card">
+      <h4>&#128268; Databricks Apps Native</h4>
+      <p>First-class integration: connection details injected as environment variables (PGHOST, PGDATABASE, PGUSER). Zero credential management.</p>
+    </div>
+    <div class="card">
+      <h4>&#128256; Change Data Feed</h4>
+      <p>Row-level changes from Postgres stored as Delta tables — ideal for audit trails, downstream pipelines, and compliance.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- SECTION 2: WHY LAKEBASE FOR DBXCONNECT -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <h2><span class="ico" style="background:#DCFCE7;color:#059669;">&#10004;</span> Why Lakebase for DBXConnect?</h2>
+
+  <div class="compare">
+    <div class="compare-col current">
+      <h4>&#128308; Current Architecture (Problems)</h4>
+      <ul>
+        <li><strong>JSON files on /tmp</strong> — Config (genie_spaces, mcp_endpoints) lost on every redeployment</li>
+        <li><strong>In-memory dicts</strong> — MCP sessions (_mcp_sessions) lost on app restart</li>
+        <li><strong>No multi-instance support</strong> — If app scales to 2+ replicas, sessions/state diverge</li>
+        <li><strong>Delta tables for app state</strong> — High latency (200ms+) for simple config reads</li>
+        <li><strong>No real-time audit</strong> — Audit log writes to Delta are batched, not transactional</li>
+        <li><strong>File-based user roles</strong> — Cannot enforce ACID constraints on role assignments</li>
+      </ul>
+    </div>
+    <div class="compare-col proposed">
+      <h4>&#128994; With Lakebase (Solutions)</h4>
+      <ul>
+        <li><strong>Persistent config storage</strong> — Survives all deployments, zero file I/O</li>
+        <li><strong>Durable sessions</strong> — MCP sessions stored in Postgres, survive restarts</li>
+        <li><strong>Shared state across replicas</strong> — All instances read/write same DB</li>
+        <li><strong>Sub-5ms config reads</strong> — Postgres optimized for point lookups</li>
+        <li><strong>Transactional audit log</strong> — Every action committed with ACID guarantees</li>
+        <li><strong>Proper RBAC tables</strong> — Foreign keys, constraints, and indexes for user management</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout callout-success">
+    <strong>Key Benefit:</strong>
+    Lakebase solves the #1 pain point in DBXConnect today — <strong>configuration loss on redeployment</strong>. Your Genie spaces, MCP endpoints, user preferences, and session state will persist permanently.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- SECTION 3: INTEGRATION PLAN -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <h2><span class="ico" style="background:#DBEAFE;color:#2563EB;">&#128736;</span> Integration Plan</h2>
+  <p>Below is the proposed migration plan, organized by priority and effort:</p>
+
+  <table>
+    <thead>
+      <tr><th>Component</th><th>Current Storage</th><th>Lakebase Table</th><th>Priority</th><th>Effort</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Genie Space Config</td><td>JSON file (/tmp)</td><td><code>app_config.genie_spaces</code></td><td>&#128308; P0</td><td>4 hrs</td></tr>
+      <tr><td>MCP Endpoint Config</td><td>JSON file (/tmp)</td><td><code>app_config.mcp_endpoints</code></td><td>&#128308; P0</td><td>3 hrs</td></tr>
+      <tr><td>MCP Sessions</td><td>In-memory dict</td><td><code>app_state.mcp_sessions</code></td><td>&#128992; P1</td><td>6 hrs</td></tr>
+      <tr><td>User Roles / RBAC</td><td>Delta table (migration_app.user_roles)</td><td><code>app_auth.user_roles</code></td><td>&#128992; P1</td><td>8 hrs</td></tr>
+      <tr><td>Audit Log</td><td>Delta table (migration_app.audit_log)</td><td><code>app_audit.events</code></td><td>&#128993; P2</td><td>6 hrs</td></tr>
+      <tr><td>User Preferences</td><td>LocalStorage (browser)</td><td><code>app_config.user_prefs</code></td><td>&#128993; P2</td><td>4 hrs</td></tr>
+      <tr><td>FAQ Knowledge Base</td><td>Python dict (code)</td><td><code>app_config.faq_entries</code></td><td>&#128994; P3</td><td>5 hrs</td></tr>
+      <tr><td>Scheduler State</td><td>Delta table</td><td><code>app_state.scheduler_runs</code></td><td>&#128994; P3</td><td>8 hrs</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Proposed Database Schema</h3>
+  <div class="code-block">
+<span class="comment">-- Lakebase schema for DBXConnect Migration Studio</span>
+<span class="keyword">CREATE SCHEMA</span> app_config;
+<span class="keyword">CREATE SCHEMA</span> app_state;
+<span class="keyword">CREATE SCHEMA</span> app_auth;
+<span class="keyword">CREATE SCHEMA</span> app_audit;
+
+<span class="comment">-- P0: Persistent configuration</span>
+<span class="keyword">CREATE TABLE</span> app_config.genie_spaces (
+    id          <span class="func">UUID</span> <span class="keyword">PRIMARY KEY DEFAULT</span> gen_random_uuid(),
+    space_id    <span class="func">VARCHAR</span>(64) <span class="keyword">NOT NULL UNIQUE</span>,
+    name        <span class="func">VARCHAR</span>(255) <span class="keyword">NOT NULL</span>,
+    description <span class="func">TEXT</span>,
+    created_at  <span class="func">TIMESTAMPTZ</span> <span class="keyword">DEFAULT</span> now(),
+    created_by  <span class="func">VARCHAR</span>(255)
+);
+
+<span class="keyword">CREATE TABLE</span> app_config.mcp_endpoints (
+    id           <span class="func">UUID</span> <span class="keyword">PRIMARY KEY DEFAULT</span> gen_random_uuid(),
+    endpoint_url <span class="func">TEXT</span> <span class="keyword">NOT NULL UNIQUE</span>,
+    name         <span class="func">VARCHAR</span>(255) <span class="keyword">NOT NULL</span>,
+    type         <span class="func">VARCHAR</span>(20) <span class="keyword">DEFAULT</span> <span class="string">'mcp'</span>,
+    created_at   <span class="func">TIMESTAMPTZ</span> <span class="keyword">DEFAULT</span> now()
+);
+
+<span class="comment">-- P1: Session state (survives restarts)</span>
+<span class="keyword">CREATE TABLE</span> app_state.mcp_sessions (
+    session_id      <span class="func">VARCHAR</span>(64) <span class="keyword">PRIMARY KEY</span>,
+    endpoint_url    <span class="func">TEXT</span> <span class="keyword">NOT NULL</span>,
+    mcp_session_hdr <span class="func">VARCHAR</span>(255),
+    tools           <span class="func">JSONB</span>,
+    request_counter <span class="func">INTEGER</span> <span class="keyword">DEFAULT</span> 0,
+    created_at      <span class="func">TIMESTAMPTZ</span> <span class="keyword">DEFAULT</span> now(),
+    last_used       <span class="func">TIMESTAMPTZ</span> <span class="keyword">DEFAULT</span> now()
+);
+
+<span class="comment">-- P1: User management</span>
+<span class="keyword">CREATE TABLE</span> app_auth.user_roles (
+    user_email  <span class="func">VARCHAR</span>(255) <span class="keyword">PRIMARY KEY</span>,
+    role        <span class="func">VARCHAR</span>(20) <span class="keyword">CHECK</span> (role <span class="keyword">IN</span> (<span class="string">'admin'</span>,<span class="string">'operator'</span>,<span class="string">'viewer'</span>)),
+    granted_by  <span class="func">VARCHAR</span>(255),
+    granted_at  <span class="func">TIMESTAMPTZ</span> <span class="keyword">DEFAULT</span> now()
+);
+
+<span class="comment">-- P2: Audit log</span>
+<span class="keyword">CREATE TABLE</span> app_audit.events (
+    id         <span class="func">BIGSERIAL</span> <span class="keyword">PRIMARY KEY</span>,
+    user_email <span class="func">VARCHAR</span>(255),
+    action     <span class="func">VARCHAR</span>(100) <span class="keyword">NOT NULL</span>,
+    entity     <span class="func">VARCHAR</span>(255),
+    details    <span class="func">JSONB</span>,
+    timestamp  <span class="func">TIMESTAMPTZ</span> <span class="keyword">DEFAULT</span> now()
+);
+<span class="keyword">CREATE INDEX</span> idx_audit_ts <span class="keyword">ON</span> app_audit.events(timestamp <span class="keyword">DESC</span>);
+<span class="keyword">CREATE INDEX</span> idx_audit_user <span class="keyword">ON</span> app_audit.events(user_email);
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- SECTION 4: EFFORT ESTIMATE -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <h2><span class="ico" style="background:#FEF3C7;color:#D97706;">&#9201;</span> Effort Estimate</h2>
+
+  <div class="score-row">
+    <div class="score-item">
+      <div class="num">44</div>
+      <div class="label">Total Hours</div>
+    </div>
+    <div class="score-item">
+      <div class="num">5.5</div>
+      <div class="label">Developer Days</div>
+    </div>
+    <div class="score-item">
+      <div class="num">2</div>
+      <div class="label">Sprint Weeks</div>
+    </div>
+    <div class="score-item">
+      <div class="num">8</div>
+      <div class="label">Files Changed</div>
+    </div>
+  </div>
+
+  <h3>Implementation Timeline</h3>
+  <div class="timeline">
+    <div class="timeline-item">
+      <h4>Phase 1 — Foundation (Week 1, Days 1-2)</h4>
+      <p>Create Lakebase project, configure app.yaml resource binding, implement db.py connection module with token refresh, add psycopg2/SQLAlchemy to requirements.txt.</p>
+      <span class="effort">8 hours</span>
+    </div>
+    <div class="timeline-item">
+      <h4>Phase 2 — Config Migration (Week 1, Days 3-4)</h4>
+      <p>Migrate genie_spaces.json and mcp_endpoints.json to Postgres tables. Update _load/_save functions in genie.py. Add migration script for existing data.</p>
+      <span class="effort">7 hours</span>
+    </div>
+    <div class="timeline-item">
+      <h4>Phase 3 — Session State (Week 1, Day 5)</h4>
+      <p>Replace in-memory _mcp_sessions dict with Postgres-backed session store. Add TTL cleanup for expired sessions. Support multi-replica consistency.</p>
+      <span class="effort">6 hours</span>
+    </div>
+    <div class="timeline-item">
+      <h4>Phase 4 — Auth &amp; Audit (Week 2, Days 1-3)</h4>
+      <p>Move user_roles to Lakebase with proper constraints. Implement transactional audit logging. Add indexes for fast lookups.</p>
+      <span class="effort">14 hours</span>
+    </div>
+    <div class="timeline-item">
+      <h4>Phase 5 — Testing &amp; Deploy (Week 2, Days 4-5)</h4>
+      <p>Integration tests, load testing, rollback plan. Deploy with feature flag for gradual rollout. Unity Catalog federation verification.</p>
+      <span class="effort">9 hours</span>
+    </div>
+  </div>
+
+  <div class="callout callout-info">
+    <strong>Low Risk Integration:</strong>
+    Since Lakebase is native to Databricks Apps, there is <strong>zero infrastructure to manage</strong>. The connection is automatic via environment variables — no secrets, no VPC peering, no firewall rules. The primary effort is refactoring Python code from file I/O to SQL queries.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- SECTION 5: COST ANALYSIS -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <h2><span class="ico" style="background:#FEE2E2;color:#DC2626;">&#128176;</span> Cost Analysis</h2>
+
+  <div class="callout callout-warning">
+    <strong>Pricing Model:</strong>
+    Lakebase charges based on <strong>Compute Units (CU)</strong> consumed. Each CU = 2 GB RAM. Billing is per-second for active compute time. With <strong>scale-to-zero</strong> enabled, you pay nothing when the database is idle.
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Scenario</th><th>CU Range</th><th>Est. Monthly Cost*</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Development / Testing</strong></td>
+        <td>0.5 CU (scale-to-zero)</td>
+        <td>$15 – $40</td>
+        <td>Active only during work hours; zero cost overnight/weekends</td>
+      </tr>
+      <tr>
+        <td><strong>Production (Light)</strong><br>5-10 users, &lt;100 queries/min</td>
+        <td>0.5 – 2 CU autoscale</td>
+        <td>$50 – $120</td>
+        <td>DBXConnect typical load — config reads, session writes, audit</td>
+      </tr>
+      <tr>
+        <td><strong>Production (Medium)</strong><br>20-50 users, &lt;500 queries/min</td>
+        <td>1 – 4 CU autoscale</td>
+        <td>$120 – $300</td>
+        <td>Multiple concurrent migrations, heavy audit logging</td>
+      </tr>
+      <tr>
+        <td><strong>Production (Heavy)</strong><br>50+ users, &gt;1000 queries/min</td>
+        <td>2 – 8 CU autoscale</td>
+        <td>$300 – $600</td>
+        <td>Large enterprise deployment with continuous activity</td>
+      </tr>
+    </tbody>
+  </table>
+  <p style="font-size:11px;color:var(--text-muted);margin-top:8px;">*Estimates based on Azure Databricks pricing for Lakebase CU-hours. Actual costs vary by region and usage patterns. Storage is billed separately at standard rates (~$0.023/GB/month).</p>
+
+  <h3>Cost Comparison: Current vs. Lakebase</h3>
+  <table>
+    <thead>
+      <tr><th>Item</th><th>Current Cost</th><th>With Lakebase</th><th>Delta</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Config storage (JSON/Delta)</td><td>$0 (bundled in app compute)</td><td>Included in CU</td><td>$0</td></tr>
+      <tr><td>Session state</td><td>$0 (in-memory, but unreliable)</td><td>Included in CU</td><td>$0</td></tr>
+      <tr><td>Audit log writes (Delta via SQL Warehouse)</td><td>~$30-80/mo (warehouse compute)</td><td>Included in CU</td><td>-$30 to -$80</td></tr>
+      <tr><td>User role lookups (Delta)</td><td>~$10-20/mo (warehouse queries)</td><td>Included in CU</td><td>-$10 to -$20</td></tr>
+      <tr><td><strong>Lakebase compute</strong></td><td>N/A</td><td>$50-120/mo (light production)</td><td>+$50 to +$120</td></tr>
+      <tr style="background:#F0FDF4;"><td><strong>Net Estimated Change</strong></td><td colspan="2"></td><td><strong>+$0 to +$20/mo</strong></td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout callout-success">
+    <strong>Cost Verdict:</strong>
+    For a typical DBXConnect deployment (5-20 users), adding Lakebase costs approximately <strong>$50-120/month</strong> but eliminates SQL Warehouse dependency for app-state queries, potentially <strong>breaking even or saving $20-80/month</strong> while gaining massive reliability improvements.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- SECTION 6: ERROR & RISK ANALYSIS -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <h2><span class="ico" style="background:#FEF3C7;color:#D97706;">&#9888;</span> Error &amp; Risk Analysis</h2>
+
+  <h3>Integration Risks</h3>
+  <table>
+    <thead>
+      <tr><th>Risk</th><th>Severity</th><th>Likelihood</th><th>Mitigation</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>OAuth token expiry (1hr) causes connection drops</td>
+        <td><span class="tag tag-med">Medium</span></td>
+        <td><span class="tag tag-high">High</span></td>
+        <td>Implement SQLAlchemy <code>do_connect</code> event with 15-min token refresh (pattern provided in Databricks docs)</td>
+      </tr>
+      <tr>
+        <td>Cold start latency after scale-to-zero (3-5s)</td>
+        <td><span class="tag tag-low">Low</span></td>
+        <td><span class="tag tag-med">Medium</span></td>
+        <td>Set min CU to 0.5 in production (prevents full scale-to-zero); use connection retry with 3s backoff</td>
+      </tr>
+      <tr>
+        <td>Schema migration conflicts during deploy</td>
+        <td><span class="tag tag-med">Medium</span></td>
+        <td><span class="tag tag-low">Low</span></td>
+        <td>Use Lakebase branching for dev/staging; apply migrations via startup script with <code>IF NOT EXISTS</code></td>
+      </tr>
+      <tr>
+        <td>Connection pool exhaustion under load</td>
+        <td><span class="tag tag-high">High</span></td>
+        <td><span class="tag tag-low">Low</span></td>
+        <td>Use SQLAlchemy connection pooling (pool_size=5, max_overflow=10); monitor with pg_stat_activity</td>
+      </tr>
+      <tr>
+        <td>Data loss during migration from JSON/Delta</td>
+        <td><span class="tag tag-high">High</span></td>
+        <td><span class="tag tag-low">Low</span></td>
+        <td>Run dual-write mode for 1 week; validate counts; keep JSON fallback behind feature flag</td>
+      </tr>
+      <tr>
+        <td>Lakebase service availability</td>
+        <td><span class="tag tag-med">Medium</span></td>
+        <td><span class="tag tag-low">Very Low</span></td>
+        <td>Lakebase runs on Neon Postgres with built-in HA; implement circuit breaker to fall back to Delta reads</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Common Errors During Integration</h3>
+  <div class="card-grid">
+    <div class="card">
+      <h4>&#128308; psycopg2 not installed</h4>
+      <p>Add <code>psycopg2-binary==2.9.9</code> to requirements.txt. The binary wheel avoids libpq build issues in the container.</p>
+      <span class="tag tag-low">Easy Fix</span>
+    </div>
+    <div class="card">
+      <h4>&#128308; PGHOST not set</h4>
+      <p>Add Lakebase as a resource in <code>app.yaml</code>. The platform auto-injects PG* env vars when the resource is declared.</p>
+      <span class="tag tag-low">Easy Fix</span>
+    </div>
+    <div class="card">
+      <h4>&#128992; Token refresh race condition</h4>
+      <p>Multiple threads calling <code>generate_database_credential()</code> simultaneously. Use a lock + shared token with 15-min TTL.</p>
+      <span class="tag tag-med">Moderate</span>
+    </div>
+    <div class="card">
+      <h4>&#128992; SSL certificate errors</h4>
+      <p>Always use <code>sslmode='require'</code>. The Lakebase endpoint enforces TLS; self-signed cert issues don't apply.</p>
+      <span class="tag tag-low">Easy Fix</span>
+    </div>
+    <div class="card">
+      <h4>&#128308; Permission denied on schema</h4>
+      <p>The app's service principal needs schema ownership. Run <code>GRANT ALL ON SCHEMA app_config TO app_role;</code> during setup.</p>
+      <span class="tag tag-med">Moderate</span>
+    </div>
+    <div class="card">
+      <h4>&#128992; Connection timeout on first request</h4>
+      <p>If scale-to-zero is enabled, first connection takes 3-5s. Add a startup health-check that warms the connection pool.</p>
+      <span class="tag tag-low">Easy Fix</span>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- SECTION 7: CODE EXAMPLE -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <h2><span class="ico" style="background:#DBEAFE;color:#2563EB;">&#128187;</span> Implementation: Connection Module</h2>
+  <p>Below is the proposed <code>db.py</code> module that handles Lakebase connectivity with auto-refresh:</p>
+
+  <div class="code-block">
+<span class="comment"># migration_utility/routes/db.py</span>
+<span class="keyword">import</span> os, uuid, time, threading
+<span class="keyword">from</span> sqlalchemy <span class="keyword">import</span> create_engine, text, event
+<span class="keyword">from</span> sqlalchemy.pool <span class="keyword">import</span> QueuePool
+<span class="keyword">from</span> databricks.sdk <span class="keyword">import</span> WorkspaceClient
+
+_w = WorkspaceClient()
+_lock = threading.Lock()
+_token = <span class="keyword">None</span>
+_token_ts = 0
+_TOKEN_TTL = 900  <span class="comment"># Refresh every 15 min (token valid 1hr)</span>
+
+<span class="keyword">def</span> <span class="func">_get_engine</span>():
+    pg_url = (<span class="string">f"postgresql+psycopg2://"</span>
+              <span class="string">f"{os.environ['PGUSER']}:@"</span>
+              <span class="string">f"{os.environ['PGHOST']}:"</span>
+              <span class="string">f"{os.environ.get('PGPORT','5432')}/"</span>
+              <span class="string">f"{os.environ['PGDATABASE']}"</span>)
+    engine = create_engine(
+        pg_url,
+        poolclass=QueuePool,
+        pool_size=5,
+        max_overflow=10,
+        pool_pre_ping=<span class="keyword">True</span>,
+        pool_recycle=1800
+    )
+
+    @event.listens_for(engine, <span class="string">"do_connect"</span>)
+    <span class="keyword">def</span> <span class="func">_inject_token</span>(dialect, conn_rec, cargs, cparams):
+        <span class="keyword">global</span> _token, _token_ts
+        <span class="keyword">with</span> _lock:
+            <span class="keyword">if</span> _token <span class="keyword">is None or</span> time.time() - _token_ts &gt; _TOKEN_TTL:
+                cred = _w.database.generate_database_credential(
+                    request_id=str(uuid.uuid4()),
+                    instance_names=[os.environ[<span class="string">'PGDATABASE'</span>]]
+                )
+                _token = cred.token
+                _token_ts = time.time()
+        cparams[<span class="string">"password"</span>] = _token
+        cparams[<span class="string">"sslmode"</span>] = <span class="string">"require"</span>
+
+    <span class="keyword">return</span> engine
+
+engine = _get_engine()
+
+<span class="keyword">def</span> <span class="func">get_db</span>():
+    <span class="string">"""Return a connection context manager."""</span>
+    <span class="keyword">return</span> engine.connect()
+  </div>
+
+  <h3>Example: Saving MCP Endpoints (Before vs After)</h3>
+  <div class="compare">
+    <div class="compare-col current">
+      <h4>Before (File-based)</h4>
+      <div class="code-block" style="font-size:11px;">
+<span class="keyword">def</span> <span class="func">_save_mcp_endpoints</span>(endpoints):
+    path = <span class="string">"/tmp/genie_mcp_endpoints.json"</span>
+    <span class="keyword">with</span> open(path, <span class="string">"w"</span>) <span class="keyword">as</span> f:
+        json.dump(endpoints, f)
+      </div>
+    </div>
+    <div class="compare-col proposed">
+      <h4>After (Lakebase)</h4>
+      <div class="code-block" style="font-size:11px;">
+<span class="keyword">def</span> <span class="func">_save_mcp_endpoint</span>(name, url):
+    <span class="keyword">with</span> get_db() <span class="keyword">as</span> conn:
+        conn.execute(text(<span class="string">"""</span>
+<span class="string">            INSERT INTO app_config.mcp_endpoints</span>
+<span class="string">            (endpoint_url, name)</span>
+<span class="string">            VALUES (:url, :name)</span>
+<span class="string">            ON CONFLICT (endpoint_url) DO NOTHING</span>
+<span class="string">        """</span>), {<span class="string">"url"</span>: url, <span class="string">"name"</span>: name})
+        conn.commit()
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- SECTION 8: APP.YAML CHANGES -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <h2><span class="ico" style="background:#EDE9FE;color:#6366F1;">&#128221;</span> Required Configuration Changes</h2>
+
+  <h3>app.yaml — Add Lakebase Resource</h3>
+  <div class="code-block">
+<span class="comment"># app.yaml — add under resources section</span>
+resources:
+  - name: lakebase-db
+    type: postgres
+    config:
+      project: dbxconnect-db
+      branch: production
+  </div>
+
+  <h3>requirements.txt — New Dependencies</h3>
+  <div class="code-block">
+<span class="comment"># Add these lines</span>
+psycopg2-binary==2.9.9
+SQLAlchemy==2.0.30
+databricks-sdk&gt;=0.30.0
+  </div>
+
+  <h3>Files to Create/Modify</h3>
+  <table>
+    <thead><tr><th>File</th><th>Action</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>migration_utility/routes/db.py</code></td><td>&#128994; Create</td><td>Connection module with token refresh (shown above)</td></tr>
+      <tr><td><code>migration_utility/routes/genie.py</code></td><td>&#128992; Modify</td><td>Replace _load/_save_mcp_endpoints and _spaces_config_path with SQL</td></tr>
+      <tr><td><code>migration_utility/routes/auth.py</code></td><td>&#128992; Modify</td><td>Query user_roles from Lakebase instead of Delta</td></tr>
+      <tr><td><code>migration_utility/init_db.py</code></td><td>&#128994; Create</td><td>Schema creation script (runs on first deploy)</td></tr>
+      <tr><td><code>app.yaml</code></td><td>&#128992; Modify</td><td>Add Lakebase resource declaration</td></tr>
+      <tr><td><code>requirements.txt</code></td><td>&#128992; Modify</td><td>Add psycopg2-binary, SQLAlchemy</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- SECTION 9: BENEFITS SUMMARY -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <h2><span class="ico" style="background:#DCFCE7;color:#059669;">&#127942;</span> Benefits Summary</h2>
+
+  <div class="card-grid">
+    <div class="card">
+      <h4>&#128640; Reliability</h4>
+      <p>No more config loss on redeployment. Genie spaces, MCP endpoints, and user preferences persist permanently.</p>
+    </div>
+    <div class="card">
+      <h4>&#9889; Performance</h4>
+      <p>Sub-5ms config reads vs 200ms+ from Delta. 10-50x faster for the point-lookup patterns the app uses constantly.</p>
+    </div>
+    <div class="card">
+      <h4>&#128736; Scalability</h4>
+      <p>Multi-replica support. If the app scales horizontally, all instances share the same consistent state.</p>
+    </div>
+    <div class="card">
+      <h4>&#128274; Security</h4>
+      <p>Zero credential management. OAuth tokens auto-generated by the platform. Connection encrypted with TLS.</p>
+    </div>
+    <div class="card">
+      <h4>&#128200; Observability</h4>
+      <p>Transactional audit log with ACID guarantees. Lakebase CDF streams changes to Delta for analytics pipelines.</p>
+    </div>
+    <div class="card">
+      <h4>&#128176; Cost Efficient</h4>
+      <p>Scale-to-zero when idle. Autoscaling means you never over-provision. Offloads warehouse queries for app state.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- SECTION 10: RECOMMENDATION -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <h2><span class="ico" style="background:#DBEAFE;color:#2563EB;">&#127775;</span> Final Recommendation</h2>
+
+  <div class="score-row">
+    <div class="score-item">
+      <div class="num" style="color:#10B981;">HIGH</div>
+      <div class="label">Value Impact</div>
+    </div>
+    <div class="score-item">
+      <div class="num" style="color:#F59E0B;">LOW</div>
+      <div class="label">Integration Risk</div>
+    </div>
+    <div class="score-item">
+      <div class="num" style="color:#6366F1;">MINIMAL</div>
+      <div class="label">Cost Increase</div>
+    </div>
+    <div class="score-item">
+      <div class="num" style="color:#3B82F6;">2 WEEKS</div>
+      <div class="label">Time to Implement</div>
+    </div>
+  </div>
+
+  <div class="callout callout-success">
+    <strong>&#10004; Strongly Recommended</strong>
+    <p style="margin-top:8px;">Lakebase integration is a <strong>high-value, low-risk</strong> improvement for DBXConnect. The primary benefit — <strong>permanent configuration persistence</strong> — directly addresses the most frustrating bug in the current architecture (MCP endpoints and Genie spaces being lost on redeployment). The cost is near-zero for a typical deployment ($50-120/month offset by reduced warehouse usage), and the implementation effort (2 weeks) is modest.</p>
+    <p style="margin-top:8px;"><strong>Recommended approach:</strong> Start with P0 items (Genie Spaces + MCP Endpoints config) as a proof of concept. This takes only 1-2 days and immediately eliminates the config-loss issue. Then expand to sessions, auth, and audit in subsequent sprints.</p>
+  </div>
+</div>
+
+</div><!-- /tab-analysis -->
+
+<!-- TAB 2: STEP-BY-STEP GUIDE -->
+<div id="tab-steps" class="tab-content">
+
+<div class="section" style="background:linear-gradient(135deg,#EEF2FF,#E0E7FF);border-color:#A5B4FC;margin-bottom:28px;">
+  <h2 style="margin-bottom:8px;">&#128640; Complete Implementation Guide</h2>
+  <p>Follow these 12 steps in order to integrate Lakebase into DBXConnect Migration Studio. Estimated total time: <strong>2 weeks (44 hours)</strong>.</p>
+</div>
+
+<!-- STEP 1 -->
+<div class="step-card">
+  <div class="step-num">1</div>
+  <h3>Create a Lakebase Project</h3>
+  <p>Provision a new Lakebase Postgres instance in the Databricks workspace. This creates a managed Postgres database with a default <code>production</code> branch.</p>
+  <div class="cmd">
+<span class="c"># Navigate to Lakebase in the workspace</span>
+1. Click the <span class="f">App Switcher</span> (grid icon) in the top-left of Databricks
+2. Select <span class="s">"Lakebase Postgres"</span>
+3. Click <span class="s">"+ Create Project"</span>
+4. Name: <span class="s">dbxconnect-db</span>
+5. Postgres version: <span class="f">17</span> (default)
+6. Click <span class="s">"Create"</span>
+
+<span class="c"># Or via CLI:</span>
+<span class="k">databricks</span> postgres create-project dbxconnect-db --json '{"spec": {"postgres_version": "17"}}'
+  </div>
+  <div class="tip">&#128161; The project creates automatically with a <code>production</code> branch and <code>databricks_postgres</code> database. Wait ~1 minute for compute to become active.</div>
+</div>
+
+<div class="step-connector"><div class="arrow">&#8595;</div></div>
+
+<!-- STEP 2 -->
+<div class="step-card">
+  <div class="step-num">2</div>
+  <h3>Configure Autoscaling Compute</h3>
+  <p>Set up the compute endpoint with autoscaling limits appropriate for DBXConnect's workload (config reads, session writes, audit logging).</p>
+  <div class="cmd">
+<span class="c"># Via Lakebase UI:</span>
+1. Open project <span class="s">dbxconnect-db</span> &rarr; branch <span class="s">production</span>
+2. Click <span class="f">"Computes"</span> tab
+3. Edit the default compute:
+   - Min CU: <span class="s">0.5</span> (1 GB RAM — enough for light load)
+   - Max CU: <span class="s">2.0</span> (4 GB RAM — handles peak)
+   - Scale-to-zero: <span class="s">Enabled</span> (saves cost when idle)
+   - Idle timeout: <span class="s">5 minutes</span>
+
+<span class="c"># Or via CLI:</span>
+<span class="k">databricks</span> postgres create-endpoint \
+  projects/dbxconnect-db/branches/production \
+  app-compute \
+  --json '{"spec": {"autoscaling_limit_min_cu": 0.5, "autoscaling_limit_max_cu": 2.0, "suspend_timeout_seconds": 300}}'
+  </div>
+  <div class="tip">&#128161; For development, use 0.5 CU with scale-to-zero. For production with 10+ users, set min to 0.5 and max to 4.0 CU.</div>
+</div>
+
+<div class="step-connector"><div class="arrow">&#8595;</div></div>
+
+<!-- STEP 3 -->
+<div class="step-card">
+  <div class="step-num">3</div>
+  <h3>Update app.yaml — Declare Lakebase Resource</h3>
+  <p>Add the Lakebase database as a resource in the app configuration. Databricks will auto-inject connection environment variables (PGHOST, PGDATABASE, PGUSER, PGPORT).</p>
+  <div class="cmd">
+<span class="c"># File: /apps/DBXConnect/app.yaml</span>
+<span class="c"># Add this under the existing 'resources' section:</span>
+
+resources:
+  - name: <span class="s">lakebase-db</span>
+    type: <span class="f">postgres</span>
+    config:
+      project: <span class="s">dbxconnect-db</span>
+      branch: <span class="s">production</span>
+  </div>
+  <div class="warn">&#9888; After adding the resource, the app's service principal will be auto-granted a Postgres role. You do NOT need to manually create credentials.</div>
+</div>
+
+<div class="step-connector"><div class="arrow">&#8595;</div></div>
+
+<!-- STEP 4 -->
+<div class="step-card">
+  <div class="step-num">4</div>
+  <h3>Update requirements.txt — Add Dependencies</h3>
+  <p>Add the PostgreSQL client libraries and the Databricks SDK for token generation.</p>
+  <div class="cmd">
+<span class="c"># File: /apps/DBXConnect/requirements.txt</span>
+<span class="c"># Add these lines:</span>
+
+psycopg2-binary==2.9.9
+SQLAlchemy==2.0.30
+databricks-sdk>=0.30.0
+  </div>
+  <ul class="file-list">
+    <li><code>psycopg2-binary</code> — PostgreSQL driver (binary wheel, no build deps)</li>
+    <li><code>SQLAlchemy</code> — ORM + connection pooling + token refresh hooks</li>
+    <li><code>databricks-sdk</code> — Generates OAuth tokens for Lakebase auth</li>
+  </ul>
+</div>
+
+<div class="step-connector"><div class="arrow">&#8595;</div></div>
+
+<!-- STEP 5 -->
+<div class="step-card">
+  <div class="step-num">5</div>
+  <h3>Create db.py — Connection Module</h3>
+  <p>Create a centralized database connection module with automatic OAuth token refresh every 15 minutes and connection pooling.</p>
+  <div class="cmd">
+<span class="c"># File: /apps/DBXConnect/migration_utility/routes/db.py</span>
+
+<span class="k">import</span> os, uuid, time, threading
+<span class="k">from</span> sqlalchemy <span class="k">import</span> create_engine, text, event
+<span class="k">from</span> sqlalchemy.pool <span class="k">import</span> QueuePool
+<span class="k">from</span> databricks.sdk <span class="k">import</span> WorkspaceClient
+
+_w = WorkspaceClient()
+_lock = threading.Lock()
+_token = <span class="k">None</span>
+_token_ts = 0
+_TOKEN_TTL = 900  <span class="c"># Refresh every 15 min</span>
+
+<span class="k">def</span> <span class="f">_create_engine</span>():
+    url = (<span class="s">f"postgresql+psycopg2://"</span>
+           <span class="s">f"{os.environ['PGUSER']}:@"</span>
+           <span class="s">f"{os.environ['PGHOST']}:"</span>
+           <span class="s">f"{os.environ.get('PGPORT','5432')}/"</span>
+           <span class="s">f"{os.environ['PGDATABASE']}"</span>)
+    eng = create_engine(url, poolclass=QueuePool,
+                        pool_size=5, max_overflow=10,
+                        pool_pre_ping=<span class="k">True</span>, pool_recycle=1800)
+
+    @event.listens_for(eng, <span class="s">"do_connect"</span>)
+    <span class="k">def</span> <span class="f">_inject_token</span>(dialect, conn_rec, cargs, cparams):
+        <span class="k">global</span> _token, _token_ts
+        <span class="k">with</span> _lock:
+            <span class="k">if</span> _token <span class="k">is None or</span> time.time() - _token_ts > _TOKEN_TTL:
+                cred = _w.database.generate_database_credential(
+                    request_id=str(uuid.uuid4()),
+                    instance_names=[os.environ[<span class="s">'PGDATABASE'</span>]])
+                _token = cred.token
+                _token_ts = time.time()
+        cparams[<span class="s">"password"</span>] = _token
+        cparams[<span class="s">"sslmode"</span>] = <span class="s">"require"</span>
+    <span class="k">return</span> eng
+
+engine = _create_engine()
+
+<span class="k">def</span> <span class="f">get_db</span>():
+    <span class="s">"""Return a connection context manager."""</span>
+    <span class="k">return</span> engine.connect()
+  </div>
+  <div class="tip">&#128161; This module handles token refresh transparently. All other modules just call <code>from routes.db import get_db</code> and use <code>with get_db() as conn:</code>.</div>
+</div>
+
+<div class="step-connector"><div class="arrow">&#8595;</div></div>
+
+<!-- STEP 6 -->
+<div class="step-card">
+  <div class="step-num">6</div>
+  <h3>Create init_db.py — Schema Migration Script</h3>
+  <p>Create a startup script that ensures all required tables exist. This runs on every app startup with <code>IF NOT EXISTS</code> for idempotency.</p>
+  <div class="cmd">
+<span class="c"># File: /apps/DBXConnect/migration_utility/init_db.py</span>
+
+<span class="k">from</span> routes.db <span class="k">import</span> get_db
+<span class="k">from</span> sqlalchemy <span class="k">import</span> text
+
+<span class="k">def</span> <span class="f">run_migrations</span>():
+    <span class="s">"""Create schemas and tables if they don't exist."""</span>
+    <span class="k">with</span> get_db() <span class="k">as</span> conn:
+        conn.execute(text(<span class="s">"CREATE SCHEMA IF NOT EXISTS app_config"</span>))
+        conn.execute(text(<span class="s">"CREATE SCHEMA IF NOT EXISTS app_state"</span>))
+        conn.execute(text(<span class="s">"CREATE SCHEMA IF NOT EXISTS app_auth"</span>))
+        conn.execute(text(<span class="s">"CREATE SCHEMA IF NOT EXISTS app_audit"</span>))
+
+        conn.execute(text(<span class="s">"""</span>
+<span class="s">            CREATE TABLE IF NOT EXISTS app_config.genie_spaces (</span>
+<span class="s">                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),</span>
+<span class="s">                space_id VARCHAR(64) NOT NULL UNIQUE,</span>
+<span class="s">                name VARCHAR(255) NOT NULL,</span>
+<span class="s">                description TEXT,</span>
+<span class="s">                created_at TIMESTAMPTZ DEFAULT now(),</span>
+<span class="s">                created_by VARCHAR(255)</span>
+<span class="s">            )</span>
+<span class="s">        """</span>))
+
+        conn.execute(text(<span class="s">"""</span>
+<span class="s">            CREATE TABLE IF NOT EXISTS app_config.mcp_endpoints (</span>
+<span class="s">                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),</span>
+<span class="s">                endpoint_url TEXT NOT NULL UNIQUE,</span>
+<span class="s">                name VARCHAR(255) NOT NULL,</span>
+<span class="s">                type VARCHAR(20) DEFAULT 'mcp',</span>
+<span class="s">                created_at TIMESTAMPTZ DEFAULT now()</span>
+<span class="s">            )</span>
+<span class="s">        """</span>))
+
+        conn.execute(text(<span class="s">"""</span>
+<span class="s">            CREATE TABLE IF NOT EXISTS app_state.mcp_sessions (</span>
+<span class="s">                session_id VARCHAR(64) PRIMARY KEY,</span>
+<span class="s">                endpoint_url TEXT NOT NULL,</span>
+<span class="s">                mcp_session_hdr VARCHAR(255),</span>
+<span class="s">                tools JSONB,</span>
+<span class="s">                request_counter INTEGER DEFAULT 0,</span>
+<span class="s">                created_at TIMESTAMPTZ DEFAULT now(),</span>
+<span class="s">                last_used TIMESTAMPTZ DEFAULT now()</span>
+<span class="s">            )</span>
+<span class="s">        """</span>))
+
+        conn.execute(text(<span class="s">"""</span>
+<span class="s">            CREATE TABLE IF NOT EXISTS app_auth.user_roles (</span>
+<span class="s">                user_email VARCHAR(255) PRIMARY KEY,</span>
+<span class="s">                role VARCHAR(20) CHECK (role IN ('admin','operator','viewer')),</span>
+<span class="s">                granted_by VARCHAR(255),</span>
+<span class="s">                granted_at TIMESTAMPTZ DEFAULT now()</span>
+<span class="s">            )</span>
+<span class="s">        """</span>))
+
+        conn.execute(text(<span class="s">"""</span>
+<span class="s">            CREATE TABLE IF NOT EXISTS app_audit.events (</span>
+<span class="s">                id BIGSERIAL PRIMARY KEY,</span>
+<span class="s">                user_email VARCHAR(255),</span>
+<span class="s">                action VARCHAR(100) NOT NULL,</span>
+<span class="s">                entity VARCHAR(255),</span>
+<span class="s">                details JSONB,</span>
+<span class="s">                timestamp TIMESTAMPTZ DEFAULT now()</span>
+<span class="s">            )</span>
+<span class="s">        """</span>))
+        conn.commit()
+    print(<span class="s">"[init_db] All schemas and tables ready."</span>)
+  </div>
+</div>
+
+<div class="step-connector"><div class="arrow">&#8595;</div></div>
+
+<!-- STEP 7 -->
+<div class="step-card">
+  <div class="step-num">7</div>
+  <h3>Update app.py — Run Migrations on Startup</h3>
+  <p>Call the migration script when the Flask app starts. This ensures tables are created before any request is processed.</p>
+  <div class="cmd">
+<span class="c"># File: /apps/DBXConnect/migration_utility/app.py</span>
+<span class="c"># Add after existing imports:</span>
+
+<span class="k">from</span> init_db <span class="k">import</span> run_migrations
+
+<span class="c"># Add before app.run() or at bottom of file:</span>
+<span class="k">try</span>:
+    run_migrations()
+<span class="k">except</span> Exception <span class="k">as</span> e:
+    print(<span class="s">f"[WARNING] Lakebase init skipped: {e}"</span>)
+    <span class="c"># App still works with JSON fallback if Lakebase unavailable</span>
+  </div>
+  <div class="tip">&#128161; Wrapping in try/except means the app still starts even if Lakebase is temporarily unavailable. The JSON-based fallback continues to work.</div>
+</div>
+
+<div class="step-connector"><div class="arrow">&#8595;</div></div>
+
+<!-- STEP 8 -->
+<div class="step-card">
+  <div class="step-num">8</div>
+  <h3>Refactor genie.py — Replace File I/O with SQL</h3>
+  <p>Update the <code>_load_mcp_endpoints()</code> and <code>_save_mcp_endpoints()</code> functions to use Lakebase instead of JSON files.</p>
+  <div class="cmd">
+<span class="c"># File: /apps/DBXConnect/migration_utility/routes/genie.py</span>
+<span class="c"># Replace the existing functions:</span>
+
+<span class="k">from</span> routes.db <span class="k">import</span> get_db
+
+<span class="k">def</span> <span class="f">_load_mcp_endpoints</span>():
+    <span class="k">try</span>:
+        <span class="k">with</span> get_db() <span class="k">as</span> conn:
+            rows = conn.execute(text(
+                <span class="s">"SELECT id, endpoint_url, name, type FROM app_config.mcp_endpoints ORDER BY created_at"</span>
+            )).fetchall()
+            <span class="k">return</span> [{<span class="s">"id"</span>: str(r[0]), <span class="s">"endpoint_url"</span>: r[1],
+                     <span class="s">"name"</span>: r[2], <span class="s">"type"</span>: r[3]} <span class="k">for</span> r <span class="k">in</span> rows]
+    <span class="k">except</span> Exception:
+        <span class="c"># Fallback to JSON if Lakebase unavailable</span>
+        <span class="k">return</span> _load_mcp_endpoints_json()
+
+<span class="k">def</span> <span class="f">_save_mcp_endpoint</span>(name, endpoint_url):
+    <span class="k">with</span> get_db() <span class="k">as</span> conn:
+        conn.execute(text(<span class="s">"""</span>
+<span class="s">            INSERT INTO app_config.mcp_endpoints (endpoint_url, name)</span>
+<span class="s">            VALUES (:url, :name)</span>
+<span class="s">            ON CONFLICT (endpoint_url) DO NOTHING</span>
+<span class="s">        """</span>), {<span class="s">"url"</span>: endpoint_url, <span class="s">"name"</span>: name})
+        conn.commit()
+
+<span class="k">def</span> <span class="f">_delete_mcp_endpoint</span>(ep_id):
+    <span class="k">with</span> get_db() <span class="k">as</span> conn:
+        conn.execute(text(
+            <span class="s">"DELETE FROM app_config.mcp_endpoints WHERE id = :id"</span>
+        ), {<span class="s">"id"</span>: ep_id})
+        conn.commit()
+  </div>
+</div>
+
+<div class="step-connector"><div class="arrow">&#8595;</div></div>
+
+<!-- STEP 9 -->
+<div class="step-card">
+  <div class="step-num">9</div>
+  <h3>Refactor Session State — Persistent MCP Sessions</h3>
+  <p>Replace the in-memory <code>_mcp_sessions</code> dict with Postgres-backed storage so sessions survive app restarts.</p>
+  <div class="cmd">
+<span class="c"># In genie.py — replace _mcp_sessions dict usage:</span>
+
+<span class="k">def</span> <span class="f">_get_mcp_session</span>(session_id):
+    <span class="k">with</span> get_db() <span class="k">as</span> conn:
+        row = conn.execute(text(
+            <span class="s">"SELECT * FROM app_state.mcp_sessions WHERE session_id = :sid"</span>
+        ), {<span class="s">"sid"</span>: session_id}).fetchone()
+        <span class="k">if</span> row:
+            conn.execute(text(
+                <span class="s">"UPDATE app_state.mcp_sessions SET last_used = now() WHERE session_id = :sid"</span>
+            ), {<span class="s">"sid"</span>: session_id})
+            conn.commit()
+            <span class="k">return</span> dict(row._mapping)
+    <span class="k">return None</span>
+
+<span class="k">def</span> <span class="f">_save_mcp_session</span>(session_id, endpoint, mcp_hdr, tools, counter):
+    <span class="k">with</span> get_db() <span class="k">as</span> conn:
+        conn.execute(text(<span class="s">"""</span>
+<span class="s">            INSERT INTO app_state.mcp_sessions</span>
+<span class="s">            (session_id, endpoint_url, mcp_session_hdr, tools, request_counter)</span>
+<span class="s">            VALUES (:sid, :ep, :hdr, :tools::jsonb, :cnt)</span>
+<span class="s">            ON CONFLICT (session_id) DO UPDATE SET</span>
+<span class="s">              mcp_session_hdr = :hdr, request_counter = :cnt, last_used = now()</span>
+<span class="s">        """</span>), {<span class="s">"sid"</span>: session_id, <span class="s">"ep"</span>: endpoint,
+              <span class="s">"hdr"</span>: mcp_hdr, <span class="s">"tools"</span>: json.dumps(tools), <span class="s">"cnt"</span>: counter})
+        conn.commit()
+  </div>
+</div>
+
+<div class="step-connector"><div class="arrow">&#8595;</div></div>
+
+<!-- STEP 10 -->
+<div class="step-card">
+  <div class="step-num">10</div>
+  <h3>Migrate User Roles &amp; Audit Log</h3>
+  <p>Move user role management from Delta tables to Lakebase for instant lookups. Add transactional audit logging.</p>
+  <div class="cmd">
+<span class="c"># In routes/auth.py or routes/admin.py:</span>
+
+<span class="k">def</span> <span class="f">get_user_role</span>(email):
+    <span class="k">with</span> get_db() <span class="k">as</span> conn:
+        row = conn.execute(text(
+            <span class="s">"SELECT role FROM app_auth.user_roles WHERE user_email = :e"</span>
+        ), {<span class="s">"e"</span>: email}).fetchone()
+        <span class="k">return</span> row[0] <span class="k">if</span> row <span class="k">else</span> <span class="s">"viewer"</span>
+
+<span class="k">def</span> <span class="f">log_audit</span>(email, action, entity, details=<span class="k">None</span>):
+    <span class="k">with</span> get_db() <span class="k">as</span> conn:
+        conn.execute(text(<span class="s">"""</span>
+<span class="s">            INSERT INTO app_audit.events (user_email, action, entity, details)</span>
+<span class="s">            VALUES (:e, :a, :ent, :d::jsonb)</span>
+<span class="s">        """</span>), {<span class="s">"e"</span>: email, <span class="s">"a"</span>: action,
+              <span class="s">"ent"</span>: entity, <span class="s">"d"</span>: json.dumps(details) <span class="k">if</span> details <span class="k">else None</span>})
+        conn.commit()
+  </div>
+</div>
+
+<div class="step-connector"><div class="arrow">&#8595;</div></div>
+
+<!-- STEP 11 -->
+<div class="step-card">
+  <div class="step-num">11</div>
+  <h3>Test Locally &amp; Deploy</h3>
+  <p>Run local tests, verify connections, then deploy the updated app.</p>
+  <div class="cmd">
+<span class="c"># 1. Verify Lakebase project is active:</span>
+<span class="k">databricks</span> postgres get-project projects/dbxconnect-db --output JSON
+
+<span class="c"># 2. Deploy the app:</span>
+<span class="k">databricks</span> apps deploy dbxconnect \
+  --source-code-path /Workspace/Users/sunil.kumar@insight.com/apps/DBXConnect
+
+<span class="c"># 3. Check deployment status:</span>
+<span class="k">databricks</span> apps get dbxconnect --output JSON
+
+<span class="c"># 4. Check logs for migration output:</span>
+<span class="k">databricks</span> apps logs dbxconnect
+<span class="c"># Look for: "[init_db] All schemas and tables ready."</span>
+  </div>
+  <ul class="checklist">
+    <li>App starts without errors</li>
+    <li>init_db prints success message in logs</li>
+    <li>MCP endpoints persist after adding (test: add, refresh page, verify still there)</li>
+    <li>Genie spaces persist after redeployment</li>
+    <li>MCP sessions survive app restart</li>
+  </ul>
+</div>
+
+<div class="step-connector"><div class="arrow">&#8595;</div></div>
+
+<!-- STEP 12 -->
+<div class="step-card">
+  <div class="step-num">12</div>
+  <h3>Verify Unity Catalog Federation &amp; Monitor</h3>
+  <p>Confirm Lakebase tables are accessible from Unity Catalog for analytics. Set up monitoring for the database.</p>
+  <div class="cmd">
+<span class="c"># Query Lakebase data from any notebook or SQL warehouse:</span>
+<span class="k">SELECT</span> * <span class="k">FROM</span> <span class="s">databricks_postgres_main</span>.app_audit.events
+<span class="k">ORDER BY</span> timestamp <span class="k">DESC</span> <span class="k">LIMIT</span> 20;
+
+<span class="c"># Check active connections:</span>
+<span class="k">SELECT</span> * <span class="k">FROM</span> pg_stat_activity <span class="k">WHERE</span> state = <span class="s">'active'</span>;
+
+<span class="c"># Monitor table sizes:</span>
+<span class="k">SELECT</span> schemaname, tablename,
+       pg_size_pretty(pg_total_relation_size(schemaname||<span class="s">'.'</span>||tablename))
+<span class="k">FROM</span> pg_tables
+<span class="k">WHERE</span> schemaname <span class="k">LIKE</span> <span class="s">'app_%'</span>;
+  </div>
+  <div class="tip">&#128161; Lakebase automatically registers in Unity Catalog. You can query audit logs, user roles, and config from notebooks using standard SQL — perfect for building dashboards.</div>
+</div>
+
+<!-- FINAL CHECKLIST -->
+<div class="section" style="margin-top:32px;">
+  <h2><span class="ico" style="background:#DCFCE7;color:#059669;">&#10004;</span> Final Verification Checklist</h2>
+  <div class="card-grid">
+    <div class="card">
+      <h4>&#128994; Infrastructure</h4>
+      <ul class="checklist">
+        <li>Lakebase project created and active</li>
+        <li>Compute autoscaling configured (0.5-2 CU)</li>
+        <li>app.yaml has postgres resource declared</li>
+        <li>requirements.txt has psycopg2 + SQLAlchemy</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>&#128994; Application Code</h4>
+      <ul class="checklist">
+        <li>db.py connection module created</li>
+        <li>init_db.py migration script created</li>
+        <li>app.py calls run_migrations() on startup</li>
+        <li>genie.py uses SQL for config read/write</li>
+        <li>Session state stored in Postgres</li>
+        <li>Audit logging uses transactional inserts</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>&#128994; Validation</h4>
+      <ul class="checklist">
+        <li>MCP endpoints persist across redeployments</li>
+        <li>Genie spaces persist across redeployments</li>
+        <li>Sessions survive app restarts</li>
+        <li>Audit log visible in Unity Catalog</li>
+        <li>No errors in app logs</li>
+        <li>Scale-to-zero working (zero cost when idle)</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+</div><!-- /tab-steps -->
+
+<!-- Footer -->
+<div class="footer">
+  <p>Generated for DBXConnect Migration Studio &bull; Databricks Lakebase Integration Analysis &bull; July 2026</p>
+  <p style="margin-top:4px;">Based on Databricks Lakebase Autoscaling documentation &bull; Azure region pricing</p>
+</div>
+
+</div><!-- /container -->
+
+<script>
+function switchTab(tab) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + tab).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+</body>
+</html>

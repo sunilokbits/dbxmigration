@@ -1,0 +1,1140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DBX Migration Studio — Genie Chat Test Cases</title>
+    <style>
+        :root {
+            --primary: #1b3a4b;
+            --accent: #ff6b35;
+            --success: #2ecc71;
+            --warning: #f39c12;
+            --danger: #e74c3c;
+            --info: #3498db;
+            --bg: #f8f9fa;
+            --card-bg: #ffffff;
+            --text: #2c3e50;
+            --border: #dee2e6;
+            --shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            padding: 2rem;
+        }
+
+        .container { max-width: 1200px; margin: 0 auto; }
+
+        header {
+            background: linear-gradient(135deg, var(--primary), #2d5f7a);
+            color: white;
+            padding: 2.5rem 3rem;
+            border-radius: 12px;
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow);
+        }
+
+        header h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+        header p { opacity: 0.9; font-size: 1.05rem; }
+
+        .meta-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1rem;
+            margin: 1.5rem 0 0;
+            padding-top: 1.5rem;
+            border-top: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .meta-item { font-size: 0.9rem; }
+        .meta-item strong { display: block; opacity: 0.7; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; }
+
+        .summary-bar {
+            display: flex;
+            gap: 1.5rem;
+            flex-wrap: wrap;
+            margin-bottom: 2rem;
+            padding: 1.2rem 1.5rem;
+            background: var(--card-bg);
+            border-radius: 10px;
+            box-shadow: var(--shadow);
+        }
+
+        .summary-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 600;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: white;
+        }
+
+        .badge-total { background: var(--primary); }
+        .badge-onboarding { background: #8e44ad; }
+        .badge-modules { background: var(--info); }
+        .badge-architecture { background: #16a085; }
+        .badge-security { background: var(--warning); }
+        .badge-troubleshooting { background: var(--danger); }
+        .badge-devops { background: #2c3e50; }
+        .badge-api { background: var(--accent); }
+        .badge-edge { background: #7f8c8d; }
+
+        .category-section {
+            margin-bottom: 2.5rem;
+        }
+
+        .category-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 2px solid var(--border);
+        }
+
+        .category-header h2 {
+            font-size: 1.3rem;
+            color: var(--primary);
+        }
+
+        .category-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            color: white;
+        }
+
+        .test-card {
+            background: var(--card-bg);
+            border-radius: 10px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            box-shadow: var(--shadow);
+            border-left: 4px solid var(--info);
+            transition: transform 0.15s ease;
+        }
+
+        .test-card:hover { transform: translateX(4px); }
+
+        .test-card.pass { border-left-color: var(--success); }
+        .test-card.warn { border-left-color: var(--warning); }
+        .test-card.edge { border-left-color: #7f8c8d; }
+
+        .test-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 0.75rem;
+        }
+
+        .test-id {
+            font-size: 0.8rem;
+            font-weight: 700;
+            color: var(--info);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .test-priority {
+            font-size: 0.75rem;
+            padding: 0.15rem 0.6rem;
+            border-radius: 12px;
+            font-weight: 600;
+        }
+
+        .priority-high { background: #fdeaea; color: var(--danger); }
+        .priority-medium { background: #fef5e7; color: var(--warning); }
+        .priority-low { background: #eafaf1; color: var(--success); }
+
+        .test-question {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 0.75rem;
+            color: var(--text);
+        }
+
+        .test-question::before {
+            content: '💬 ';
+        }
+
+        .test-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.75rem;
+            font-size: 0.9rem;
+        }
+
+        .detail-item {
+            padding: 0.5rem 0.75rem;
+            background: var(--bg);
+            border-radius: 6px;
+        }
+
+        .detail-item label {
+            display: block;
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            margin-bottom: 0.2rem;
+        }
+
+        .expected-section {
+            grid-column: 1 / -1;
+        }
+
+        .section-tag {
+            display: inline-block;
+            padding: 0.2rem 0.6rem;
+            background: #e8f4fd;
+            color: var(--info);
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin: 0.1rem;
+        }
+
+        .execution-section {
+            margin-top: 3rem;
+            padding: 2rem;
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: var(--shadow);
+        }
+
+        .execution-section h2 {
+            color: var(--primary);
+            margin-bottom: 1rem;
+        }
+
+        .code-block {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 1.25rem;
+            border-radius: 8px;
+            font-family: 'Cascadia Code', 'Fira Code', monospace;
+            font-size: 0.85rem;
+            overflow-x: auto;
+            margin: 1rem 0;
+        }
+
+        .code-block .comment { color: #6a9955; }
+        .code-block .keyword { color: #569cd6; }
+        .code-block .string { color: #ce9178; }
+        .code-block .function { color: #dcdcaa; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+            font-size: 0.9rem;
+        }
+
+        th, td {
+            padding: 0.75rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            background: var(--primary);
+            color: white;
+            font-weight: 600;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        tr:hover td { background: #f1f8ff; }
+
+        .status-icon { font-size: 1.2rem; }
+
+        footer {
+            margin-top: 3rem;
+            padding: 1.5rem;
+            text-align: center;
+            color: #6c757d;
+            font-size: 0.85rem;
+            border-top: 1px solid var(--border);
+        }
+
+        @media (max-width: 768px) {
+            body { padding: 1rem; }
+            .test-details { grid-template-columns: 1fr; }
+            .meta-info { grid-template-columns: 1fr 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🧪 Genie Chat — Test Cases</h1>
+            <p>Document Q&A RAG Validation Suite for DBX Migration Studio</p>
+            <div class="meta-info">
+                <div class="meta-item">
+                    <strong>Application</strong>
+                    DBX Migration Studio
+                </div>
+                <div class="meta-item">
+                    <strong>VS Index</strong>
+                    admin_source.migration_app.doc_qa_chunks_index
+                </div>
+                <div class="meta-item">
+                    <strong>Embedding Model</strong>
+                    databricks-gte-large-en
+                </div>
+                <div class="meta-item">
+                    <strong>Last Updated</strong>
+                    July 2026
+                </div>
+            </div>
+        </header>
+
+        <!-- Summary Bar -->
+        <div class="summary-bar">
+            <div class="summary-item"><span class="badge badge-total">30</span> Total Tests</div>
+            <div class="summary-item"><span class="badge badge-onboarding">4</span> Onboarding</div>
+            <div class="summary-item"><span class="badge badge-modules">8</span> Modules</div>
+            <div class="summary-item"><span class="badge badge-architecture">4</span> Architecture</div>
+            <div class="summary-item"><span class="badge badge-security">3</span> Security</div>
+            <div class="summary-item"><span class="badge badge-troubleshooting">4</span> Troubleshooting</div>
+            <div class="summary-item"><span class="badge badge-devops">3</span> DevOps</div>
+            <div class="summary-item"><span class="badge badge-api">2</span> API</div>
+            <div class="summary-item"><span class="badge badge-edge">2</span> Edge Cases</div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- CATEGORY 1: ONBOARDING -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div class="category-section">
+            <div class="category-header">
+                <div class="category-icon" style="background:#8e44ad;">🚀</div>
+                <h2>Onboarding &amp; Getting Started</h2>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-ONB-001</span>
+                    <span class="test-priority priority-high">High Priority</span>
+                </div>
+                <div class="test-question">What is DBX Migration Studio and what does it do?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        General product overview
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Returns Overview section with app description
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Overview</span>
+                        <span class="section-tag">Architecture</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-ONB-002</span>
+                    <span class="test-priority priority-high">High Priority</span>
+                </div>
+                <div class="test-question">How do I get started with the migration process?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Step-by-step onboarding
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Returns the 5-step workflow guide
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Getting Started 5-Step Workflow</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-ONB-003</span>
+                    <span class="test-priority priority-medium">Medium</span>
+                </div>
+                <div class="test-question">What are the steps to configure the app for the first time?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Initial configuration setup
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Returns app config + getting started info
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">App Configuration</span>
+                        <span class="section-tag">Getting Started 5-Step Workflow</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-ONB-004</span>
+                    <span class="test-priority priority-medium">Medium</span>
+                </div>
+                <div class="test-question">What Python packages does the app need?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Dependency discovery
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Returns full dependency list
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Dependencies</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- CATEGORY 2: MODULES -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div class="category-section">
+            <div class="category-header">
+                <div class="category-icon" style="background:var(--info);">🧩</div>
+                <h2>Module-Specific Questions</h2>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-MOD-001</span>
+                    <span class="test-priority priority-high">High Priority</span>
+                </div>
+                <div class="test-question">How do I convert stored procedures to PySpark notebooks?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        T-SQL to PySpark conversion
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Describes AI-powered conversion with API endpoints
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Convert to PySpark Module</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-MOD-002</span>
+                    <span class="test-priority priority-high">High Priority</span>
+                </div>
+                <div class="test-question">How does the self-healing bot detect and fix failures?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Auto-recovery mechanism
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Health checks, diagnosis, remediation flow
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Self-Healing Bot Module</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-MOD-003</span>
+                    <span class="test-priority priority-high">High Priority</span>
+                </div>
+                <div class="test-question">How do I create Bronze Silver Gold pipelines?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Medallion pipeline creation
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Pipeline Studio + medallion architecture details
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Pipeline Studio Module</span>
+                        <span class="section-tag">Data Flow Medallion Architecture</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-MOD-004</span>
+                    <span class="test-priority priority-medium">Medium</span>
+                </div>
+                <div class="test-question">How do I schedule a migration job to run at 2am daily?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Job scheduling with cron
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Cron scheduling explanation
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Job Manager and Scheduler Module</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-MOD-005</span>
+                    <span class="test-priority priority-high">High Priority</span>
+                </div>
+                <div class="test-question">How do I scan my SQL Server database to discover all objects?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Database discovery scan
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Discovery scan process and API
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Discovery Module</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-MOD-006</span>
+                    <span class="test-priority priority-medium">Medium</span>
+                </div>
+                <div class="test-question">How do I validate data after migration to check row counts match?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Post-migration data validation
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Row count + aggregate comparison
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Reconciliation Module</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-MOD-007</span>
+                    <span class="test-priority priority-medium">Medium</span>
+                </div>
+                <div class="test-question">How do I check data quality scores and completeness?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Data quality metrics
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        DQ scorecard and rule checks
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Data Quality Module</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-MOD-008</span>
+                    <span class="test-priority priority-medium">Medium</span>
+                </div>
+                <div class="test-question">How do I set up metadata tables and Unity Catalog schemas?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        MetadataFlow initialization
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Schema provisioning + metadata table details
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">MetadataFlow Module</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- CATEGORY 3: ARCHITECTURE -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div class="category-section">
+            <div class="category-header">
+                <div class="category-icon" style="background:#16a085;">🏗️</div>
+                <h2>Architecture &amp; Infrastructure</h2>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-ARC-001</span>
+                    <span class="test-priority priority-medium">Medium</span>
+                </div>
+                <div class="test-question">What is the medallion architecture and how does data flow?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Data pipeline architecture
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Landing → Bronze → Silver → Gold flow
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Data Flow Medallion Architecture</span>
+                        <span class="section-tag">Architecture</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-ARC-002</span>
+                    <span class="test-priority priority-medium">Medium</span>
+                </div>
+                <div class="test-question">Where is data stored in Azure Data Lake?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Storage paths discovery
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        ADLS account, container, path layout
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Storage Layout ADLS Gen2</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-ARC-003</span>
+                    <span class="test-priority priority-medium">Medium</span>
+                </div>
+                <div class="test-question">What tables are in the bronze and silver schemas?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Catalog exploration
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Lists bronze.hr and silver.hr tables
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Connected Catalogs and Tables</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-ARC-004</span>
+                    <span class="test-priority priority-low">Low</span>
+                </div>
+                <div class="test-question">What notebooks are used for the ETL pipeline?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Notebook inventory
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Lists all ETL notebooks (00-05)
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">ETL Pipeline Notebooks</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- CATEGORY 4: SECURITY -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div class="category-section">
+            <div class="category-header">
+                <div class="category-icon" style="background:var(--warning);">🔒</div>
+                <h2>Security &amp; Administration</h2>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-SEC-001</span>
+                    <span class="test-priority priority-high">High Priority</span>
+                </div>
+                <div class="test-question">How does authentication and RBAC work in the app?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Auth mechanism
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Proxy auth + role-based access control
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Security and Authentication</span>
+                        <span class="section-tag">User Management RBAC</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-SEC-002</span>
+                    <span class="test-priority priority-medium">Medium</span>
+                </div>
+                <div class="test-question">What user roles are available and what can each role do?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Role permissions matrix
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Admin / Operator / Viewer breakdown
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">User Management RBAC</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-SEC-003</span>
+                    <span class="test-priority priority-medium">Medium</span>
+                </div>
+                <div class="test-question">How do I check the audit log for today's actions?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Audit trail query
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Audit module + table location
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Audit and Compliance Module</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- CATEGORY 5: TROUBLESHOOTING -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div class="category-section">
+            <div class="category-header">
+                <div class="category-icon" style="background:var(--danger);">🔧</div>
+                <h2>Troubleshooting</h2>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-TRB-001</span>
+                    <span class="test-priority priority-high">High Priority</span>
+                </div>
+                <div class="test-question">My connection to SQL Server is timing out, what should I check?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Connection failure diagnosis
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Firewall rules, IP allow-list, connection methods
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Troubleshooting</span>
+                        <span class="section-tag">Source Connection Module</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-TRB-002</span>
+                    <span class="test-priority priority-high">High Priority</span>
+                </div>
+                <div class="test-question">Pipeline is failing, how do I diagnose the issue?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Pipeline failure recovery
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Self-healing bot + troubleshooting steps
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Troubleshooting</span>
+                        <span class="section-tag">Self-Healing Bot Module</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-TRB-003</span>
+                    <span class="test-priority priority-medium">Medium</span>
+                </div>
+                <div class="test-question">I'm getting a TLS/SSL certificate error connecting to the database</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        SSL certificate fix
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Set Encrypt=yes;TrustServerCertificate=yes
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Troubleshooting</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-TRB-004</span>
+                    <span class="test-priority priority-medium">Medium</span>
+                </div>
+                <div class="test-question">Metadata tables are missing, how do I recreate them?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Recovery from missing metadata
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Run MetadataFlow init API
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Troubleshooting</span>
+                        <span class="section-tag">MetadataFlow Module</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- CATEGORY 6: DEVOPS -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div class="category-section">
+            <div class="category-header">
+                <div class="category-icon" style="background:#2c3e50;">⚙️</div>
+                <h2>DevOps &amp; Deployment</h2>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-DEV-001</span>
+                    <span class="test-priority priority-medium">Medium</span>
+                </div>
+                <div class="test-question">How is the app integrated with Azure DevOps?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        CI/CD integration
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Org, project, repo, branch details
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">DevOps Integration</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-DEV-002</span>
+                    <span class="test-priority priority-medium">Medium</span>
+                </div>
+                <div class="test-question">What are the key source files in the codebase?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Code navigation
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Lists all major .py files with purposes
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Key Source Files</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-DEV-003</span>
+                    <span class="test-priority priority-low">Low</span>
+                </div>
+                <div class="test-question">What environment variables does the app need?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Environment configuration
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Lists app.yml env vars
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">App Configuration</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- CATEGORY 7: API -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div class="category-section">
+            <div class="category-header">
+                <div class="category-icon" style="background:var(--accent);">🔌</div>
+                <h2>API &amp; Developer</h2>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-API-001</span>
+                    <span class="test-priority priority-medium">Medium</span>
+                </div>
+                <div class="test-question">What API endpoints are available for the discovery module?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        API endpoint discovery
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Lists POST/GET routes for /api/v1/discovery/*
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Discovery Module</span>
+                        <span class="section-tag">API Route Summary</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card pass">
+                <div class="test-header">
+                    <span class="test-id">TC-API-002</span>
+                    <span class="test-priority priority-low">Low</span>
+                </div>
+                <div class="test-question">What are all the Flask blueprints and route prefixes?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Route architecture
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        Lists all 15 blueprints with prefixes
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">API Route Summary</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- CATEGORY 8: EDGE CASES -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div class="category-section">
+            <div class="category-header">
+                <div class="category-icon" style="background:#7f8c8d;">⚡</div>
+                <h2>Edge Cases &amp; Fallback Behavior</h2>
+            </div>
+
+            <div class="test-card edge">
+                <div class="test-header">
+                    <span class="test-id">TC-EDG-001</span>
+                    <span class="test-priority priority-low">Low</span>
+                </div>
+                <div class="test-question">What's the weather today?</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Off-topic question (no relevant docs)
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        RAG returns low-relevance results; Genie handles gracefully
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">Any (low similarity score)</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="test-card edge">
+                <div class="test-header">
+                    <span class="test-id">TC-EDG-002</span>
+                    <span class="test-priority priority-low">Low</span>
+                </div>
+                <div class="test-question">asdf jkl;</div>
+                <div class="test-details">
+                    <div class="detail-item">
+                        <label>Intent</label>
+                        Gibberish / invalid input
+                    </div>
+                    <div class="detail-item">
+                        <label>Expected Behavior</label>
+                        System does not crash; returns generic response
+                    </div>
+                    <div class="detail-item expected-section">
+                        <label>Expected RAG Sections</label>
+                        <span class="section-tag">N/A (graceful degradation)</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- EXECUTION REFERENCE -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div class="execution-section">
+            <h2>📋 Quick Reference: Running Tests</h2>
+            <p>Use the <strong>06_Setup_DocQA_RAG</strong> notebook (cells 10-11) to run all tests programmatically, or test manually through the app's Genie chat panel.</p>
+
+            <h3 style="margin-top:1.5rem;">Manual Testing (In-App)</h3>
+            <ol style="padding-left:1.5rem; margin-top:0.5rem;">
+                <li>Open DBX Migration Studio in your browser</li>
+                <li>Navigate to the <strong>Genie AI Assistant</strong> tab</li>
+                <li>Type each test question and verify the response contains relevant information</li>
+                <li>Check that responses reference the correct module/section</li>
+            </ol>
+
+            <h3 style="margin-top:1.5rem;">Automated Testing (Notebook)</h3>
+            <div class="code-block">
+<span class="comment"># Run from notebook 06_Setup_DocQA_RAG, Cell 10</span>
+<span class="comment"># Executes all 21 test cases and reports pass/fail rate</span>
+
+<span class="keyword">from</span> databricks.sdk <span class="keyword">import</span> WorkspaceClient
+w = WorkspaceClient()
+
+results = w.vector_search_indexes.<span class="function">query_index</span>(
+    index_name=<span class="string">"admin_source.migration_app.doc_qa_chunks_index"</span>,
+    columns=[<span class="string">"section"</span>, <span class="string">"content"</span>],
+    query_text=<span class="string">"How do I convert stored procedures?"</span>,
+    num_results=3,
+)
+<span class="keyword">print</span>(results.result.data_array)
+            </div>
+
+            <h3 style="margin-top:1.5rem;">Pass/Fail Criteria</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Result</th>
+                        <th>Criteria</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="status-icon">✅</span> Pass</td>
+                        <td>Expected section appears in top 3 results</td>
+                        <td>No action needed</td>
+                    </tr>
+                    <tr>
+                        <td><span class="status-icon">⚠️</span> Partial</td>
+                        <td>Expected section in top 5 but not top 3</td>
+                        <td>Consider refining chunk content</td>
+                    </tr>
+                    <tr>
+                        <td><span class="status-icon">❌</span> Fail</td>
+                        <td>Expected section not in results at all</td>
+                        <td>Review chunk content; add more specific docs</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <footer>
+            <p><strong>DBX Migration Studio</strong> — Document Q&A Test Suite | Version 1.0 | July 2026</p>
+            <p>Generated for the RAG-powered Genie Chat integration</p>
+        </footer>
+    </div>
+</body>
+</html>

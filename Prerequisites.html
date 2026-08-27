@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Migration Studio — Deployment Prerequisites</title>
+<style>
+  :root{
+    --bg:#F6F8FB; --surface:#FFFFFF; --surface-2:#F1F5F9;
+    --ink:#0F172A; --t2:#334155; --t3:#64748B; --t4:#94A3B8;
+    --line:#E2E8F0; --brand:#4F46E5; --brand-2:#6366F1; --brand-soft:#EEF2FF;
+    --green:#059669; --green-soft:#ECFDF5; --amber:#D97706; --amber-soft:#FFFBEB;
+    --red:#DC2626; --red-soft:#FEF2F2; --blue:#2563EB; --blue-soft:#EFF6FF;
+    --purple-soft:#F5F3FF; --radius:14px;
+    --shadow:0 1px 3px rgba(15,23,42,.06),0 8px 24px rgba(15,23,42,.06);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Segoe UI',system-ui,-apple-system,Arial,sans-serif;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.55}
+
+  /* ── Header ── */
+  .hdr{background:linear-gradient(120deg,#111B33 0%,#1E2A52 55%,#312E81 100%);color:#fff;padding:34px 40px 88px;position:relative;overflow:hidden}
+  .hdr::after{content:"";position:absolute;right:-120px;top:-120px;width:420px;height:420px;border-radius:50%;background:radial-gradient(circle,rgba(99,102,241,.35),transparent 70%)}
+  .hdr::before{content:"";position:absolute;right:120px;bottom:-160px;width:300px;height:300px;border-radius:50%;background:radial-gradient(circle,rgba(16,185,129,.18),transparent 70%)}
+  .hdr-inner{max-width:1180px;margin:0 auto;position:relative;z-index:1}
+  .hdr .kicker{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);padding:5px 14px;border-radius:99px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+  .hdr .kicker .dot{width:7px;height:7px;border-radius:50%;background:#34D399;box-shadow:0 0 8px #34D399}
+  .hdr h1{font-size:30px;font-weight:800;margin:16px 0 6px;letter-spacing:-.02em}
+  .hdr p{color:#C7D2FE;font-size:14.5px;max-width:760px}
+  .hdr-meta{display:flex;gap:26px;margin-top:18px;flex-wrap:wrap}
+  .hdr-meta .m{font-size:12px;color:#A5B4FC}
+  .hdr-meta .m b{display:block;color:#fff;font-size:13px;font-weight:700}
+
+  /* ── Readiness bar ── */
+  .ready{max-width:1180px;margin:-56px auto 0;padding:0 40px;position:relative;z-index:2}
+  .ready-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px 26px;display:flex;align-items:center;gap:26px;flex-wrap:wrap}
+  .ring{position:relative;width:92px;height:92px;flex-shrink:0}
+  .ring svg{transform:rotate(-90deg)}
+  .ring .pct{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;font-weight:800;font-size:19px;color:var(--brand)}
+  .ring .pct small{font-size:9px;color:var(--t4);font-weight:600;letter-spacing:.06em}
+  .ready-info{flex:1;min-width:240px}
+  .ready-info h3{font-size:15px;font-weight:800}
+  .ready-info p{font-size:12px;color:var(--t3);margin-top:2px}
+  .ready-bars{display:flex;gap:18px;flex-wrap:wrap}
+  .rbar{min-width:170px}
+  .rbar .lbl{display:flex;justify-content:space-between;font-size:11px;font-weight:700;color:var(--t2);margin-bottom:5px}
+  .rbar .track{height:7px;border-radius:99px;background:var(--surface-2);overflow:hidden}
+  .rbar .fill{height:100%;border-radius:99px;transition:width .5s ease}
+  .btn{border:none;cursor:pointer;font-family:inherit;font-weight:700;font-size:12.5px;border-radius:10px;padding:10px 18px;transition:.18s;display:inline-flex;align-items:center;gap:7px}
+  .btn-primary{background:var(--brand);color:#fff}
+  .btn-primary:hover{background:#4338CA;transform:translateY(-1px)}
+  .btn-ghost{background:var(--surface);color:var(--t2);border:1px solid var(--line)}
+  .btn-ghost:hover{border-color:var(--brand);color:var(--brand)}
+
+  /* ── Tabs ── */
+  .wrap{max-width:1180px;margin:26px auto 70px;padding:0 40px}
+  .tabs{display:flex;gap:6px;background:var(--surface);border:1px solid var(--line);padding:6px;border-radius:14px;box-shadow:var(--shadow);position:sticky;top:12px;z-index:20}
+  .tab{flex:1;border:none;background:transparent;cursor:pointer;padding:12px 10px;border-radius:10px;font-family:inherit;font-size:13px;font-weight:700;color:var(--t3);display:flex;align-items:center;justify-content:center;gap:9px;transition:.18s;position:relative}
+  .tab:hover{color:var(--brand);background:var(--brand-soft)}
+  .tab.active{background:linear-gradient(135deg,var(--brand),#7C3AED);color:#fff;box-shadow:0 4px 14px rgba(79,70,229,.35)}
+  .tab .ico{width:19px;height:19px}
+  .tab .cnt{background:rgba(255,255,255,.25);font-size:10px;padding:1px 8px;border-radius:99px}
+  .tab:not(.active) .cnt{background:var(--surface-2);color:var(--t3)}
+  .tab-panel{display:none;animation:fade .35s ease}
+  .tab-panel.active{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+  /* ── Toolbar ── */
+  .toolbar{display:flex;gap:10px;align-items:center;margin:22px 0 16px;flex-wrap:wrap}
+  .search{flex:1;min-width:220px;position:relative}
+  .search input{width:100%;padding:10px 14px 10px 38px;border:1px solid var(--line);border-radius:10px;font-family:inherit;font-size:13px;background:var(--surface);outline:none;transition:.18s}
+  .search input:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(79,70,229,.12)}
+  .search svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);width:15px;height:15px;color:var(--t4)}
+  .chips{display:flex;gap:7px}
+  .chip{border:1px solid var(--line);background:var(--surface);border-radius:99px;padding:7px 15px;font-size:11.5px;font-weight:700;color:var(--t3);cursor:pointer;font-family:inherit;transition:.15s}
+  .chip:hover{border-color:var(--brand);color:var(--brand)}
+  .chip.on{background:var(--brand);border-color:var(--brand);color:#fff}
+
+  /* ── Sections & items ── */
+  .sect{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:18px;overflow:hidden}
+  .sect-hd{display:flex;align-items:center;gap:13px;padding:16px 22px;cursor:pointer;user-select:none}
+  .sect-hd:hover{background:#FAFBFF}
+  .sect-ico{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+  .sect-ico svg{width:19px;height:19px}
+  .sect-hd h2{font-size:14.5px;font-weight:800;flex:1}
+  .sect-hd .sub{font-size:11px;color:var(--t4);font-weight:600;margin-top:1px}
+  .sect-prog{width:110px;flex-shrink:0}
+  .sect-prog .track{height:6px;border-radius:99px;background:var(--surface-2);overflow:hidden}
+  .sect-prog .fill{height:100%;border-radius:99px;transition:width .4s}
+  .sect-prog span{font-size:10px;font-weight:700;color:var(--t3)}
+  .caret{transition:.25s;color:var(--t4);flex-shrink:0}
+  .sect.open .caret{transform:rotate(180deg)}
+  .sect-body{display:none;border-top:1px solid var(--line)}
+  .sect.open .sect-body{display:block}
+  .item{display:flex;gap:13px;padding:13px 22px;border-bottom:1px solid var(--surface-2);align-items:flex-start;transition:.15s}
+  .item:last-child{border-bottom:none}
+  .item:hover{background:#FAFBFF}
+  .item.done{background:#F8FDFB}
+  .item.done .it-title{text-decoration:line-through;color:var(--t4)}
+  .cbox{width:20px;height:20px;border:2px solid #CBD5E1;border-radius:6px;cursor:pointer;flex-shrink:0;margin-top:2px;display:flex;align-items:center;justify-content:center;transition:.15s;background:#fff}
+  .cbox:hover{border-color:var(--brand)}
+  .cbox svg{width:12px;height:12px;color:#fff;opacity:0;transform:scale(.4);transition:.15s}
+  .item.done .cbox{background:var(--green);border-color:var(--green)}
+  .item.done .cbox svg{opacity:1;transform:scale(1)}
+  .it-main{flex:1;min-width:0}
+  .it-title{font-size:13px;font-weight:700;color:var(--t2)}
+  .it-desc{font-size:12px;color:var(--t3);margin-top:3px;line-height:1.5}
+  .it-desc code{background:var(--surface-2);padding:1px 6px;border-radius:5px;font-family:Consolas,monospace;font-size:11px;color:#7C3AED}
+  .tags{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap}
+  .tag{font-size:10px;font-weight:800;padding:2px 9px;border-radius:99px;letter-spacing:.03em}
+  .tag.crit{background:var(--red-soft);color:var(--red)}
+  .tag.high{background:var(--amber-soft);color:var(--amber)}
+  .tag.med{background:var(--blue-soft);color:var(--blue)}
+  .tag.owner{background:var(--purple-soft);color:#6D28D9}
+  .empty-msg{display:none;text-align:center;color:var(--t4);font-size:12.5px;padding:26px}
+
+  /* ── Callouts ── */
+  .callout{display:flex;gap:12px;border-radius:12px;padding:14px 18px;margin:0 0 18px;font-size:12.5px;border:1px solid}
+  .callout svg{width:18px;height:18px;flex-shrink:0;margin-top:1px}
+  .co-info{background:var(--blue-soft);border-color:#BFDBFE;color:#1E40AF}
+  .co-warn{background:var(--amber-soft);border-color:#FDE68A;color:#92400E}
+
+  /* ── Footer ── */
+  .ftr{max-width:1180px;margin:0 auto;padding:0 40px 46px;text-align:center;color:var(--t4);font-size:11.5px}
+
+  @media print{
+    body{background:#fff}
+    .hdr{padding:20px;color:#000;background:#fff;border-bottom:2px solid #000}
+    .hdr p,.hdr-meta,.hdr .kicker{color:#333}
+    .ready,.toolbar,.caret,.cbox{display:none !important}
+    .tabs{display:none}
+    .tab-panel{display:block !important;page-break-before:always}
+    .tab-panel:first-of-type{page-break-before:avoid}
+    .sect{box-shadow:none;break-inside:avoid}
+    .sect-body{display:block !important}
+    .item{break-inside:avoid}
+    .ftr{color:#666}
+  }
+  @media(max-width:760px){
+    .hdr,.wrap,.ready{padding-left:18px;padding-right:18px}
+    .tabs{flex-direction:column}
+    .ready-bars{gap:10px}
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════ HEADER ═══════════ -->
+<header class="hdr">
+  <div class="hdr-inner">
+    <span class="kicker"><span class="dot"></span>Deployment Readiness Document</span>
+    <h1>SQL → Databricks Migration Studio</h1>
+    <p>Complete deployment prerequisites for onboarding the Migration Studio application into a client Azure Databricks environment — covering responsibilities on both sides, infrastructure, security, networking, and go-live validation.</p>
+    <div class="hdr-meta">
+      <div class="m"><b>Document</b>Prerequisites &amp; Go-Live Checklist</div>
+      <div class="m"><b>Audience</b>Client Leadership · Platform Team · Delivery Team</div>
+      <div class="m"><b>Cloud</b>Azure Databricks (Premium)</div>
+      <div class="m"><b>Version</b>1.0 &nbsp;·&nbsp; Aug 2026</div>
+    </div>
+  </div>
+</header>
+
+<!-- ═══════════ READINESS ═══════════ -->
+<div class="ready">
+  <div class="ready-card">
+    <div class="ring">
+      <svg width="92" height="92">
+        <circle cx="46" cy="46" r="39" fill="none" stroke="#EEF2F7" stroke-width="9"/>
+        <circle id="ringFill" cx="46" cy="46" r="39" fill="none" stroke="#4F46E5" stroke-width="9" stroke-linecap="round" stroke-dasharray="245" stroke-dashoffset="245"/>
+      </svg>
+      <div class="pct"><span id="globalPct">0%</span><small>READY</small></div>
+    </div>
+    <div class="ready-info">
+      <h3>Overall Deployment Readiness</h3>
+      <p>Tick items as they are completed — progress is saved automatically in this browser and reflected across every tab.</p>
+    </div>
+    <div class="ready-bars">
+      <div class="rbar"><div class="lbl"><span>Our Side</span><span id="pctUs">0%</span></div><div class="track"><div class="fill" id="barUs" style="background:#6366F1;width:0%"></div></div></div>
+      <div class="rbar"><div class="lbl"><span>Client Side</span><span id="pctClient">0%</span></div><div class="track"><div class="fill" id="barClient" style="background:#059669;width:0%"></div></div></div>
+      <div class="rbar"><div class="lbl"><span>Go-Live Steps</span><span id="pctGo">0%</span></div><div class="track"><div class="fill" id="barGo" style="background:#D97706;width:0%"></div></div></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <button class="btn btn-primary" onclick="copySummary()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+        Copy Status Summary
+      </button>
+      <button class="btn btn-ghost" onclick="window.print()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+        Print / PDF
+      </button>
+      <button class="btn btn-ghost" onclick="resetAll()">Reset</button>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <!-- ═══════════ TABS ═══════════ -->
+  <div class="tabs" id="tabBar">
+    <button class="tab active" data-tab="us" onclick="showTab('us')">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      1 · Our Side <span class="cnt" id="cntUs">0/0</span>
+    </button>
+    <button class="tab" data-tab="client" onclick="showTab('client')">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V7l8-4v18M13 21V3l6 3v15"/><path d="M9 9h.01M9 12h.01M9 15h.01M9 18h.01"/></svg>
+      2 · Client Side <span class="cnt" id="cntClient">0/0</span>
+    </button>
+    <button class="tab" data-tab="go" onclick="showTab('go')">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+      3 · Go-Live Checklist <span class="cnt" id="cntGo">0/0</span>
+    </button>
+  </div>
+
+  <!-- ═══════════ TAB 1 · OUR SIDE ═══════════ -->
+  <section class="tab-panel active" id="panel-us">
+
+    <div class="callout co-info">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+      <div><b>Migration Studio delivery team responsibilities.</b> Everything here must be ready <i>before</i> the client environment engagement begins. Items are grouped by deployment phase — filter by priority to build a fast-track plan.</div>
+    </div>
+
+    <div class="toolbar">
+      <div class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input placeholder="Search prerequisites…" oninput="filterItems()">
+      </div>
+      <div class="chips">
+        <button class="chip on" data-f="all" onclick="setFilter(this)">All</button>
+        <button class="chip" data-f="crit" onclick="setFilter(this)">🔴 Critical</button>
+        <button class="chip" data-f="high" onclick="setFilter(this)">🟠 High</button>
+        <button class="chip" data-f="med" onclick="setFilter(this)">🔵 Medium</button>
+      </div>
+    </div>
+
+    <!-- OUR SIDE · PACKAGE -->
+    <div class="sect open">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--brand-soft);color:var(--brand)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><path d="M3.27 6.96L12 12.01l8.73-5.05M12 22.08V12"/></svg>
+        </div>
+        <div style="flex:1"><h2>1.1 Application Package &amp; Release Artifacts</h2><div class="sub">Versioned, tested, and sign-off ready</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="us-101" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Release-tagged application source bundle</div><div class="it-desc">Git-tagged / versioned copy of <code>DBXMigrationApp</code> containing <code>app.yml</code>, <code>databricks.yml</code>, <code>migration_utility/</code>, <code>requirements.txt</code>, and <code>resources/</code>. No local-only or debug files included.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="us-102" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Pinned &amp; tested <code>requirements.txt</code></div><div class="it-desc">All Python dependencies (Flask, gunicorn, databricks-sql-connector, databricks-sdk, azure-*, snowflake / redshift connectors) pinned to versions validated in QA. Confirmed compatible with the Databricks Apps runtime (Python 3.11+).</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="us-103" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">QA / UAT sign-off on the release build</div><div class="it-desc">All panes verified: Settings, Discovery, MetadataFlow, Pipeline Studio, Job Manager/Scheduler, Reports, Progress Tracker, Schema Comparison, Reconciliation, Data Quality, Data Modeling, Health Check, Audit.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="us-104" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Release notes &amp; known-issues list</div><div class="it-desc">Feature summary, fixes included, known limitations (e.g. live profiling limited to SQL-family sources), and workaround notes.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="us-105" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Deployment runbook &amp; rollback plan</div><div class="it-desc">Step-by-step deploy (<code>databricks bundle deploy</code> / Apps UI), environment variable matrix per client, and a tested rollback procedure (previous app version / bundle target).</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">OUR SIDE</span></div></div></div>
+      </div>
+    </div>
+
+    <!-- OUR SIDE · CONFIG -->
+    <div class="sect">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--purple-soft);color:#7C3AED">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        </div>
+        <div style="flex:1"><h2>1.2 Application Configuration Matrix</h2><div class="sub">Per-client environment values — agreed, not improvised on deploy day</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="us-201" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Client-specific <code>app.yml</code> environment matrix</div><div class="it-desc">Final values agreed with client: <code>DATABRICKS_CATALOG</code>, <code>DATABRICKS_SCHEMA</code>, <code>DATABRICKS_SECRET_SCOPE</code>, <code>DATABRICKS_SERVER_HOSTNAME</code>, <code>DATABRICKS_HTTP_PATH</code> / <code>DATABRICKS_SQL_WAREHOUSE_ID</code>, <code>CLOUD_PROVIDER=azure</code>, unique <code>FLASK_SECRET_KEY</code>, cache limits (<code>CATALOG_CACHE_TTL</code>, <code>MAX_TABLES_PER_SCHEMA</code>).</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="us-202" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">AI / Genie serving endpoints mapped for the client</div><div class="it-desc">The app references model-serving endpoints (<code>databricks-claude-opus</code>, <code>-sonnet</code>, <code>-haiku</code> families) for Genie AI features. Confirm client-approved equivalents exist in their workspace and update <code>app.yml</code> resource names + <code>CAN_QUERY</code> permissions accordingly — or agree to disable AI features at launch.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="us-203" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Catalog / schema naming convention sheet</div><div class="it-desc">Mapping of logical layers (landing, bronze, silver, reconciliation, logging, admin/config) to the client's Unity Catalog names — matches the bundle variables in <code>databricks.yml</code> (dev / staging / prod targets).</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="us-204" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Generated notebook templates validated</div><div class="it-desc">Extract / Bronze / Silver / Orchestrator metadata notebooks (Standard PySpark + DLT/SDP variants) tested against the release, including DQ metrics (<code>__dq_metrics</code>) output.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">OUR SIDE</span></div></div></div>
+      </div>
+    </div>
+
+    <!-- OUR SIDE · DEPLOY CAPABILITY -->
+    <div class="sect">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--blue-soft);color:var(--blue)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/></svg>
+        </div>
+        <div style="flex:1"><h2>1.3 Deployment Capability &amp; Access</h2><div class="sub">What we need from the client to execute the deployment</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="us-301" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Deployment identity provisioned in client workspace</div><div class="it-desc">Either a named workspace user or service principal granted <b>Workspace Admin</b> (or CAN_MANAGE on Apps + UC creation rights) for the deployment window, plus <b>CAN_USE</b> on the SQL Warehouse and <b>CAN_QUERY</b> on AI endpoints.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="us-302" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Databricks CLI + toolchain ready</div><div class="it-desc">Databricks CLI ≥ 0.215 (bundle support), Python 3.11/3.12, authenticated profile for the client workspace (<code>databricks auth login</code> or SP with OAuth secret). Network access to <code>*.azuredatabricks.net</code> from the deployment machine.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="us-303" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Smoke-test script &amp; validation dataset</div><div class="it-desc">Automated post-deploy checks: app health <code>/api/v1/… 200</code>, metadata table creation, source connection test, pilot table migration, DQ metric write. Plus a small demo dataset for the client acceptance walkthrough.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="us-304" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Handover pack</div><div class="it-desc">Architecture diagram, admin guide, end-user quick-start, this prerequisites document, support model &amp; escalation matrix, and a recorded walkthrough / accelerator video.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">OUR SIDE</span></div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ TAB 2 · CLIENT SIDE ═══════════ -->
+  <section class="tab-panel" id="panel-client">
+
+    <div class="callout co-warn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+      <div><b>Client environment responsibilities.</b> Delays in these items are the most common cause of deployment slippage — please assign an owner and target date to each section before kickoff.</div>
+    </div>
+
+    <div class="toolbar">
+      <div class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input placeholder="Search prerequisites…" oninput="filterItems()">
+      </div>
+      <div class="chips">
+        <button class="chip on" data-f="all" onclick="setFilter(this)">All</button>
+        <button class="chip" data-f="crit" onclick="setFilter(this)">🔴 Critical</button>
+        <button class="chip" data-f="high" onclick="setFilter(this)">🟠 High</button>
+        <button class="chip" data-f="med" onclick="setFilter(this)">🔵 Medium</button>
+      </div>
+    </div>
+
+    <!-- CLIENT · WORKSPACE -->
+    <div class="sect open">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--green-soft);color:var(--green)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V7l8-4v18M13 21V3l6 3v15"/></svg>
+        </div>
+        <div style="flex:1"><h2>2.1 Azure Subscription &amp; Databricks Workspace</h2><div class="sub">Foundation — without these nothing deploys</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="cl-101" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Azure subscription with capacity &amp; billing</div><div class="it-desc">Active subscription, quota for Azure Databricks + serverless, budget/alerts configured. Data-residency region agreed (workspace region must support <b>Databricks Apps</b>, <b>Serverless SQL Warehouse</b>, and <b>Model Serving</b> if AI features are in scope).</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="cl-102" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title"><b>Azure Databricks Premium workspace</b></div><div class="it-desc">Databricks Apps require the <b>Premium</b> plan. Workspace accessible to the deployment identity; Apps feature available (not blocked by workspace allow-list / IP-access policies being finalised).</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="cl-103" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Serverless SQL Warehouse created &amp; running</div><div class="it-desc">A SQL Warehouse (serverless recommended) for all app queries and generated pipelines. Share the <b>Warehouse ID / HTTP Path</b> with the delivery team. The app identity needs <b>CAN_USE</b> on it.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="cl-104" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Job / pipeline compute allowance</div><div class="it-desc">Permission to create Jobs and (if not serverless) clusters for the deployed metadata pipelines; cluster policies that permit the required VM sizes; <b>serverless</b> jobs enabled where available.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+      </div>
+    </div>
+
+    <!-- CLIENT · UC & STORAGE -->
+    <div class="sect">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--amber-soft);color:var(--amber)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+        </div>
+        <div style="flex:1"><h2>2.2 Unity Catalog, Storage &amp; Landing Zone</h2><div class="sub">Where migrated data and app metadata will live</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="cl-201" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Unity Catalog metastore attached to the workspace</div><div class="it-desc">UC enabled with an assigned metastore. App service principal granted <b>USE CATALOG / USE SCHEMA / CREATE SCHEMA / CREATE TABLE</b> on the catalogs below (or workspace-level metastore privileges via an admin group).</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="cl-202" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Catalogs provisioned (or creation rights granted)</div><div class="it-desc">Six logical catalogs: <code>admin_source</code> (app config &amp; metadata tables), <code>bronze</code>, <code>silver</code>, <code>dev_volumes</code> (landing volumes), <code>reconciliation</code>, <code>loggingdetails</code> — or client-named equivalents recorded in the config matrix.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="cl-203" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">ADLS Gen2 storage account + container</div><div class="it-desc">Storage account with <b>hierarchical namespace</b> enabled and a dedicated container (e.g. <code>datalake</code>) for landing / staging data.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="cl-204" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Access connector &amp; storage credential</div><div class="it-desc">Azure Databricks <b>Access Connector</b> with <b>Storage Blob Data Owner</b> (or Contributor) role on the storage account, plus a UC <b>Storage Credential</b> referencing it.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="cl-205" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">External locations &amp; landing volume</div><div class="it-desc">UC external location over the container and a <b>Volume</b> for the landing path (e.g. <code>abfss://datalake@&lt;account&gt;.dfs.core.windows.net/&lt;env&gt;/landing</code>). Path shared for the app Settings.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="cl-206" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Databricks secret scope created</div><div class="it-desc">Scope (default name <code>migration-studio</code>) created; app identity granted READ on it. Used for source passwords, DevOps PAT, and Databricks token storage.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+      </div>
+    </div>
+
+    <!-- CLIENT · NETWORK & SECURITY -->
+    <div class="sect">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--red-soft);color:var(--red)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+        </div>
+        <div style="flex:1"><h2>2.3 Network, Firewall &amp; Security</h2><div class="sub">The #1 cause of failed source connections</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="cl-301" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Source database firewall opened for Databricks</div><div class="it-desc">Azure SQL / Synapse: allow the <b>SQL Warehouse / serverless compute egress IPs</b> (or "Allow Azure services") so JDBC extraction works. On-prem SQL Server: firewall rules + gateway/VPN path for the Databricks egress range. Test with a connectivity probe before deployment day.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="cl-302" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Egress to external APIs allowed (if used)</div><div class="it-desc">Outbound access from serverless compute / app backend to <code>login.microsoftonline.com</code> (SharePoint tokens), <code>*.sharepoint.com</code>, and target REST API hosts.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="cl-303" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">IP access lists &amp; SSO reviewed for the App URL</div><div class="it-desc">If the workspace enforces IP access lists, ensure business users' networks can reach the deployed App URL; SSO/Entra conditional-access policies tested with a pilot user group.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="cl-304" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Security review &amp; data-residency clearance</div><div class="it-desc">Client security team sign-off on: app service principal scopes, secret scope usage, data landing regions, and any use of external AI model endpoints (data-governance review for Genie AI features).</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+      </div>
+    </div>
+
+    <!-- CLIENT · SOURCE SYSTEMS -->
+    <div class="sect">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--blue-soft);color:var(--blue)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7v10c0 2 3.5 4 8 4s8-2 8-4V7"/><ellipse cx="12" cy="5" rx="8" ry="3"/></svg>
+        </div>
+        <div style="flex:1"><h2>2.4 Source System Access &amp; Credentials</h2><div class="sub">Read-only accounts are sufficient — per source type</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="cl-401" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">SQL Server / Azure SQL / Synapse read account</div><div class="it-desc">SQL login with <b>SELECT</b> + <b>VIEW DEFINITION</b> on source database(s) (needed for procedures/views/UDFs discovery). Server name, database, username ready; password stored to the secret scope on the day.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="cl-402" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Snowflake access (if applicable)</div><div class="it-desc">Account identifier, user, password/keys, virtual warehouse (e.g. <code>MIGRATION_WH</code>) and a role with <b>USAGE</b> on warehouse + <b>SELECT</b>/<b>REFERENCES</b> on target databases.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="cl-403" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Amazon Redshift access (if applicable)</div><div class="it-desc">Cluster endpoint + port, database, user credentials; security group allows Databricks egress.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="cl-404" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">SharePoint source (if applicable)</div><div class="it-desc"><b>Entra ID app registration</b> with client secret, <code>Sites.Read.All</code> (or scoped Sites.Selected) <b>application</b> permission + <b>admin consent granted</b>; tenant ID, client ID, and target site URLs documented.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="cl-405" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">REST API sources (if applicable)</div><div class="it-desc">Base URL(s), auth mode (API key / Bearer / Basic), credentials, and — ideally — an OpenAPI/Swagger URL for automated endpoint discovery.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="cl-406" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Azure DevOps (optional — PR automation)</div><div class="it-desc">Organisation, project, repository, branch, and a <b>PAT</b> with Code (Read &amp; Write) if generated notebooks should be pushed as pull requests for review.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+      </div>
+    </div>
+
+    <!-- CLIENT · USERS -->
+    <div class="sect">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--purple-soft);color:#7C3AED">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+        </div>
+        <div style="flex:1"><h2>2.5 Users, Roles &amp; Governance</h2><div class="sub">Who will use the app from day one</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="cl-501" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">App user list &amp; role mapping</div><div class="it-desc">Named business/technical users with <b>CAN_USE</b> permission on the deployed App. Admin vs Developer roles agreed (app supports <code>migration-studio-admins</code> / <code>migration-studio-developers</code> group conventions).</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="cl-502" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Naming, tagging &amp; cost governance</div><div class="it-desc">Resource naming convention, Azure tags, Databricks budgets/alerts for warehouse + jobs usage attributable to the migration project.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="cl-503" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Change-management window agreed</div><div class="it-desc">Deployment date/time, change ticket raised if required by the client's process, and named contacts for network / DBA / Databricks admin escalation during the window.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ TAB 3 · GO-LIVE CHECKLIST ═══════════ -->
+  <section class="tab-panel" id="panel-go">
+
+    <div class="callout co-info">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+      <div><b>Sequential go-live run.</b> Execute top-to-bottom in one coordinated session (typical duration 2–4 hours once Tab 1 &amp; 2 are complete). Each phase gates the next.</div>
+    </div>
+
+    <div class="toolbar">
+      <div class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input placeholder="Search steps…" oninput="filterItems()">
+      </div>
+      <div class="chips">
+        <button class="chip on" data-f="all" onclick="setFilter(this)">All</button>
+        <button class="chip" data-f="crit" onclick="setFilter(this)">🔴 Critical</button>
+        <button class="chip" data-f="high" onclick="setFilter(this)">🟠 High</button>
+        <button class="chip" data-f="med" onclick="setFilter(this)">🔵 Medium</button>
+      </div>
+    </div>
+
+    <div class="sect open">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--brand-soft);color:var(--brand)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+        </div>
+        <div style="flex:1"><h2>Phase 0 — Pre-flight (Day Before)</h2><div class="sub">Confirm gates — abort early, not mid-deploy</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="go-001" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">All Tab-1 (Our Side) items complete</div><div class="it-desc">Release bundle, config matrix, CLI auth verified against the client workspace with a dry-run (<code>databricks bundle validate</code>).</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">JOINT</span></div></div></div>
+        <div class="item" data-id="go-002" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">All Tab-2 (Client Side) critical items complete</div><div class="it-desc">Premium workspace, warehouse RUNNING, UC catalogs + storage + secret scope ready, source firewall tested from Databricks.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">JOINT</span></div></div></div>
+        <div class="item" data-id="go-003" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Source connectivity probe passed</div><div class="it-desc">From a Databricks notebook on the target warehouse: TCP/JDBC reach to each source system confirmed (avoids the classic deploy-day firewall surprise).</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">JOINT</span></div></div></div>
+      </div>
+    </div>
+
+    <div class="sect">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--blue-soft);color:var(--blue)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
+        </div>
+        <div style="flex:1"><h2>Phase 1 — Deploy the Application</h2><div class="sub">~30 min · Delivery team leads</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="go-101" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Deploy bundle / create the Databricks App</div><div class="it-desc"><code>databricks bundle deploy -t &lt;target&gt;</code> then create the App from the deployed source with the client's <code>app.yml</code> env matrix. App starts with status <b>Running</b>.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="go-102" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">App health check returns HTTP 200</div><div class="it-desc">Open the App URL, confirm login via workspace SSO works and <code>/health</code> responds. Verify no startup errors in app logs.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="go-103" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">User access granted on the App</div><div class="it-desc">Assign <b>CAN_USE</b> to the pilot user group; confirm one pilot user can open the app and sees the dashboard.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+      </div>
+    </div>
+
+    <div class="sect">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--amber-soft);color:var(--amber)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        </div>
+        <div style="flex:1"><h2>Phase 2 — Configure the Application (Settings)</h2><div class="sub">~30 min · Joint, in the app UI</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="go-201" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Databricks connection tested (Settings → Databricks)</div><div class="it-desc">Host + token/SP validated — badge shows <b>Connected ✓</b>.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">JOINT</span></div></div></div>
+        <div class="item" data-id="go-202" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Source database configured &amp; tested</div><div class="it-desc">Settings → Source Database: choose type (Azure SQL / Snowflake / SharePoint / API / …), fill credentials, <b>Test Connection</b> passes, and object/table load works.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">JOINT</span></div></div></div>
+        <div class="item" data-id="go-203" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Storage, catalogs &amp; medallion mapping saved</div><div class="it-desc">Storage account/container/ABFSS path, catalog list (bronze/silver/volumes/recon/logging), metadata catalog + schema, and Existing-Setting layer mapping validated (green ticks).</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">JOINT</span></div></div></div>
+        <div class="item" data-id="go-204" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Optional integrations configured</div><div class="it-desc">Azure DevOps PR automation, AI/Genie endpoints, scheduler defaults, CDC mode &amp; primary keys.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">JOINT</span></div></div></div>
+      </div>
+    </div>
+
+    <div class="sect">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--green-soft);color:var(--green)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg>
+        </div>
+        <div style="flex:1"><h2>Phase 3 — End-to-End Validation (Pilot)</h2><div class="sub">~60 min · One real table, every feature touched</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="go-301" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Discovery live scan succeeds</div><div class="it-desc">Discovery → Live scan returns real objects with complexity scoring from the connected source.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">JOINT</span></div></div></div>
+        <div class="item" data-id="go-302" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">MetadataFlow init + notebooks deploy + pilot run</div><div class="it-desc">Create MetadataFlow (metadata Delta tables created), deploy the 4 notebooks, run one pilot table through Extract → Bronze → Silver; run history shows <b>success</b> and <code>__dq_metrics</code> receives a row with a score.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">JOINT</span></div></div></div>
+        <div class="item" data-id="go-303" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Analytics dashboards show real data</div><div class="it-desc">Reports, Progress Tracker (funnel +1 table), Data Quality (real score from <code>__dq_metrics</code>), Schema Comparison and Reconciliation all render without errors.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">JOINT</span></div></div></div>
+        <div class="item" data-id="go-304" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">AI / Genie feature responds (if in scope)</div><div class="it-desc">Genie AI chat answers a migration question using the configured serving endpoint; if AI is deferred, confirm the feature is gracefully disabled.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">JOINT</span></div></div></div>
+      </div>
+    </div>
+
+    <div class="sect">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--purple-soft);color:#7C3AED">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+        </div>
+        <div style="flex:1"><h2>Phase 4 — Handover &amp; Sign-off</h2><div class="sub">~30 min · Leadership visible</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="go-401" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Handover pack delivered &amp; walkthrough recorded</div><div class="it-desc">Admin guide, user quick-start, architecture deck, this document (completed), and a recorded demo for stakeholders who missed the session.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="go-402" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Support model activated</div><div class="it-desc">Escalation contacts exchanged, issue-tracking channel created, SLA/response expectations confirmed for hypercare period.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">JOINT</span></div></div></div>
+        <div class="item" data-id="go-403" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Client sign-off recorded</div><div class="it-desc">Deployment acceptance signed by the client sponsor; deployment identity's temporary admin rights reviewed/downgraded per least-privilege policy.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<footer class="ftr">
+  SQL → Databricks Migration Studio · Deployment Prerequisites v1.0 · Progress is stored locally in your browser — use <b>Copy Status Summary</b> to share current readiness by email.
+</footer>
+
+<script>
+/* ───────── State & persistence ───────── */
+const KEY='migration_studio_prereq_v1';
+let state={};
+try{state=JSON.parse(localStorage.getItem(KEY)||'{}')}catch(e){state={}}
+const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(state))}catch(e){}};
+
+function toggleItem(box){
+  const item=box.closest('.item');
+  const id=item.dataset.id;
+  item.classList.toggle('done');
+  state[id]=item.classList.contains('done');
+  save();refreshProgress();
+}
+function toggleSect(hd){hd.parentElement.classList.toggle('open')}
+
+/* ───────── Tabs ───────── */
+function showTab(name){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===name));
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id==='panel-'+name));
+}
+
+/* ───────── Progress ───────── */
+const PANELS={us:'#panel-us',client:'#panel-client',go:'#panel-go'};
+function refreshProgress(){
+  let gDone=0,gTot=0;
+  const map={us:['Us','#cntUs','#barUs','#pctUs'],client:['Client','#cntClient','#barClient','#pctClient'],go:['Go','#cntGo','#barGo','#pctGo']};
+  for(const[key,[lbl,cntSel,barSel,pctSel]]of Object.entries(map)){
+    const items=document.querySelectorAll(PANELS[key]+' .item');
+    const done=document.querySelectorAll(PANELS[key]+' .item.done').length;
+    const tot=items.length,pct=tot?Math.round(done/tot*100):0;
+    gDone+=done;gTot+=tot;
+    const cnt=document.querySelector(cntSel);if(cnt)cnt.textContent=done+'/'+tot;
+    const bar=document.querySelector(barSel);if(bar)bar.style.width=pct+'%';
+    const pv=document.querySelector(pctSel);if(pv)pv.textContent=pct+'%';
+    // per-section progress
+    document.querySelectorAll(PANELS[key]+' .sect').forEach(s=>{
+      const si=s.querySelectorAll('.item'),sd=s.querySelectorAll('.item.done').length;
+      const p=si.length?Math.round(sd/si.length*100):0;
+      const f=s.querySelector('.sect-prog .fill'),t=s.querySelector('.sect-prog span');
+      if(f)f.style.width=p+'%';if(t)t.textContent=sd+'/'+si.length;
+    });
+  }
+  const gp=gTot?Math.round(gDone/gTot*100):0;
+  document.getElementById('globalPct').textContent=gp+'%';
+  document.getElementById('ringFill').style.strokeDashoffset=245-245*gp/100;
+  document.getElementById('ringFill').style.stroke=gp>=80?'#059669':gp>=40?'#6366F1':'#D97706';
+}
+/* restore saved state */
+document.querySelectorAll('.item').forEach(it=>{if(state[it.dataset.id])it.classList.add('done')});
+
+/* ───────── Search & filter ───────── */
+let curFilter='all';
+function setFilter(chip){
+  document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
+  chip.classList.add('on');curFilter=chip.dataset.f;filterItems();
+}
+function filterItems(){
+  const panel=document.querySelector('.tab-panel.active');
+  const q=(panel.querySelector('.search input')?.value||'').toLowerCase();
+  panel.querySelectorAll('.item').forEach(it=>{
+    const okP=curFilter==='all'||it.dataset.p===curFilter;
+    const okQ=!q||it.textContent.toLowerCase().includes(q);
+    it.style.display=okP&&okQ?'':'none';
+  });
+  // hide empty sections, keep header visible if section has matches
+  panel.querySelectorAll('.sect').forEach(s=>{
+    const vis=[...s.querySelectorAll('.item')].some(i=>i.style.display!=='none');
+    s.style.display=vis?'':'none';
+    if(vis&&q)s.classList.add('open');
+  });
+}
+
+/* ───────── Copy summary ───────── */
+function copySummary(){
+  const pct=document.getElementById('globalPct').textContent;
+  const rows=[];
+  const names={us:'OUR SIDE',client:'CLIENT SIDE',go:'GO-LIVE CHECKLIST'};
+  for(const[k,label]of Object.entries(names)){
+    const items=document.querySelectorAll(PANELS[k]+' .item');
+    const done=document.querySelectorAll(PANELS[k]+' .item.done');
+    rows.push('');
+    rows.push(label+': '+done.length+'/'+items.length);
+    items.forEach(i=>{
+      const title=i.querySelector('.it-title').textContent.trim();
+      rows.push((i.classList.contains('done')?'[x] ':'[ ] ')+title);
+    });
+  }
+  const txt='MIGRATION STUDIO — DEPLOYMENT READINESS: '+pct+'\n'+'─'.repeat(42)+rows.join('\n');
+  (navigator.clipboard?navigator.clipboard.writeText(txt):Promise.reject()).then(
+    ()=>toast('Status summary copied — ready to paste into email','ok'),
+    ()=>{window.prompt('Copy the summary below:',txt)}
+  );
+}
+function resetAll(){
+  if(!confirm('Reset all checklist progress?'))return;
+  state={};save();
+  document.querySelectorAll('.item').forEach(i=>i.classList.remove('done'));
+  refreshProgress();toast('Checklist reset','warn');
+}
+
+/* ───────── Toast ───────── */
+let toastTimer=null;
+function toast(msg,kind){
+  let t=document.getElementById('prToast');
+  if(!t){t=document.createElement('div');t.id='prToast';
+    t.style.cssText='position:fixed;bottom:26px;left:50%;transform:translateX(-50%);padding:12px 22px;border-radius:12px;font-size:13px;font-weight:700;color:#fff;box-shadow:0 10px 30px rgba(15,23,42,.25);z-index:99;transition:.3s;opacity:0';
+    document.body.appendChild(t);}
+  t.style.background=kind==='warn'?'#D97706':'#059669';
+  t.textContent=msg;t.style.opacity='1';t.style.transform='translateX(-50%) translateY(0)';
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>{t.style.opacity='0';t.style.transform='translateX(-50%) translateY(8px)'},2600);
+}
+
+refreshProgress();
+</script>
+</body>
+</html>
