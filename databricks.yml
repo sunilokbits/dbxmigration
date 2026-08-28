@@ -87,7 +87,10 @@ targets:
     mode: development
     default: true
     workspace:
-      host: https://adb-7405613585789005.5.azuredatabricks.net/
+      # Host intentionally not pinned here — comes from DATABRICKS_HOST
+      # (env var, profile, or CLI login), same as staging/prod/client below.
+      # A hardcoded host here would silently override DATABRICKS_HOST/TOKEN
+      # secrets from any CI system, always deploying to one fixed workspace.
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
 
   staging:
