@@ -125,11 +125,22 @@ stages:
             displayName: Install Databricks CLI
           - bash: |
               set -e
+              curl -fsSL -o /tmp/terraform.zip https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip
+              sudo unzip -o /tmp/terraform.zip -d /usr/local/bin
+            displayName: Install Terraform
+          - bash: |
+              set -e
               databricks bundle deploy -t dev
             displayName: databricks bundle deploy -t dev
             env:
               DATABRICKS_HOST: $(DATABRICKS_HOST)
               DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
+              # The CLI's newer "direct" deployment engine has known gaps for
+              # the apps resource (confirmed: it starts the app's compute but
+              # never creates an actual code Deployment). Force the older,
+              # more mature Terraform engine until direct-engine app support
+              # stabilizes.
+              DATABRICKS_BUNDLE_ENGINE: terraform
 
   # ---------------------------------------------------------------------------
   - stage: DeployStaging
@@ -152,11 +163,17 @@ stages:
             displayName: Install Databricks CLI
           - bash: |
               set -e
+              curl -fsSL -o /tmp/terraform.zip https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip
+              sudo unzip -o /tmp/terraform.zip -d /usr/local/bin
+            displayName: Install Terraform
+          - bash: |
+              set -e
               databricks bundle deploy -t staging
             displayName: databricks bundle deploy -t staging
             env:
               DATABRICKS_HOST: $(DATABRICKS_HOST)
               DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
+              DATABRICKS_BUNDLE_ENGINE: terraform
           - bash: |
               pip install -r requirements.txt
               pytest migration_utility/tests -v -m integration || true
@@ -213,6 +230,11 @@ stages:
                         displayName: Install Databricks CLI
                       - bash: |
                           set -e
+                          curl -fsSL -o /tmp/terraform.zip https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip
+                          sudo unzip -o /tmp/terraform.zip -d /usr/local/bin
+                        displayName: Install Terraform
+                      - bash: |
+                          set -e
                           mkdir -p deploy/clients
                           # CLIENT_CONFIG_JSON is the filled-in client.template.json
                           # (non-secret values) stored as a variable in kv-${{ client }}.
@@ -236,6 +258,7 @@ stages:
                           AZURE_CLIENT_ID: $(AZURE_CLIENT_ID)
                           AZURE_CLIENT_SECRET: $(AZURE_CLIENT_SECRET)
                           AZURE_TENANT_ID: $(AZURE_TENANT_ID)
+                          DATABRICKS_BUNDLE_ENGINE: terraform
                       - publish: deploy/reports
                         artifact: deploy-report-${{ client }}
                         condition: always()

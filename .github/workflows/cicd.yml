@@ -87,10 +87,18 @@ jobs:
           python-version: "3.11"
       - name: Install Databricks CLI
         run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
       - name: databricks bundle deploy -t dev
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          # The CLI's newer "direct" deployment engine has known gaps for the
+          # apps resource (confirmed: it starts the app's compute but never
+          # creates an actual code Deployment). Force the older, more mature
+          # Terraform engine until direct-engine app support stabilizes.
+          DATABRICKS_BUNDLE_ENGINE: terraform
         run: |
           set -e
           databricks bundle deploy -t dev
@@ -111,10 +119,14 @@ jobs:
           python-version: "3.11"
       - name: Install Databricks CLI
         run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
       - name: databricks bundle deploy -t staging
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_BUNDLE_ENGINE: terraform
         run: databricks bundle deploy -t staging
       - name: Run integration tests against staging
         env:
@@ -152,6 +164,9 @@ jobs:
           python-version: "3.11"
       - name: Install Databricks CLI
         run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
       - name: Render client config
         env:
           CLIENT_CONFIG_JSON: ${{ secrets.CLIENT_CONFIG_JSON }}
@@ -172,6 +187,7 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          DATABRICKS_BUNDLE_ENGINE: terraform
         run: |
           set -e
           python deploy/one_click_deploy.py \
