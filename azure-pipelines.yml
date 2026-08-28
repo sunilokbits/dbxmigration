@@ -178,7 +178,7 @@ stages:
   #
   # Compile-time guarded: with an empty `clients` list this stage is omitted
   # entirely (a stage with zero jobs is a hard YAML error, not just "skipped").
-  ${{ if gt(length(parameters.clients), 0) }}:
+  - ${{ if gt(length(parameters.clients), 0) }}:
     - stage: DeployClients
       displayName: "04 · Deploy to client production workspaces"
       dependsOn: DeployStaging
