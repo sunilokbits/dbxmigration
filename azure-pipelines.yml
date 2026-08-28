@@ -181,7 +181,13 @@ stages:
   - ${{ if gt(length(parameters.clients), 0) }}:
     - stage: DeployClients
       displayName: "04 · Deploy to client production workspaces"
-      dependsOn: DeployStaging
+      # Depends on Validate only, NOT DeployDev/DeployStaging: those stages
+      # are gated to run on main-branch pushes, so on a release/* TAG push
+      # they're skipped in this same run, and a dependsOn chain through them
+      # would make this stage skip too (a skipped dependency never
+      # "succeeds"). A tag is expected to be cut from a main commit that
+      # already went through dev/staging in an earlier, separate run.
+      dependsOn: Validate
       condition: and(succeeded(), eq(variables.isReleaseTag, 'true'))
       jobs:
         - ${{ each client in parameters.clients }}:

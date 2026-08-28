@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DBX Migration Studio — GitHub Actions CI/CD Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0f1c;
+    --bg-2:#0d1526;
+    --panel:#101a2e;
+    --panel-2:#0c1424;
+    --border:rgba(255,255,255,0.09);
+    --border-soft:rgba(255,255,255,0.05);
+    --ink:#e9eefb;
+    --muted:#8b98b3;
+    --muted-2:#6b7690;
+    --dev:#4fd1c5;
+    --staging:#f2b84b;
+    --client:#ff6a3d;
+    --gov:#9d8cff;
+    --gh:#79c0ff;
+    --font-display:'Space Grotesk', sans-serif;
+    --font-body:'IBM Plex Sans', sans-serif;
+    --font-mono:'IBM Plex Mono', monospace;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:
+      radial-gradient(ellipse 900px 500px at 15% -10%, rgba(255,106,61,0.08), transparent 60%),
+      radial-gradient(ellipse 900px 600px at 100% 10%, rgba(121,192,255,0.08), transparent 55%),
+      var(--bg);
+    color:var(--ink);
+    font-family:var(--font-body);
+    line-height:1.55;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .wrap{max-width:1160px;margin:0 auto;padding:0 28px 100px;}
+
+  /* ---------- HERO ---------- */
+  .hero{
+    position:relative;
+    padding:72px 28px 56px;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
+    background-size:36px 36px;
+    background-position:center top;
+    border-bottom:1px solid var(--border-soft);
+    overflow:hidden;
+  }
+  .hero::after{
+    content:"";
+    position:absolute; inset:0;
+    background:linear-gradient(180deg, transparent 40%, var(--bg) 96%);
+    pointer-events:none;
+  }
+  .hero-inner{max-width:1160px;margin:0 auto;position:relative;}
+  .eyebrow{
+    font-family:var(--font-mono);
+    font-size:12.5px;
+    letter-spacing:0.14em;
+    text-transform:uppercase;
+    color:var(--gh);
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin-bottom:18px;
+  }
+  .eyebrow::before{
+    content:"";
+    width:7px;height:7px;border-radius:1px;
+    background:var(--gh);
+    box-shadow:0 0 10px var(--gh);
+  }
+  h1{
+    font-family:var(--font-display);
+    font-weight:700;
+    font-size:clamp(32px, 4.4vw, 52px);
+    line-height:1.08;
+    margin:0 0 18px;
+    letter-spacing:-0.01em;
+    max-width:820px;
+  }
+  h1 span{color:var(--client);}
+  .hero p.sub{
+    max-width:660px;
+    color:var(--muted);
+    font-size:16.5px;
+    margin:0;
+  }
+  .hero-tags{
+    display:flex;flex-wrap:wrap;gap:10px;
+    margin-top:28px;
+  }
+  .tag{
+    font-family:var(--font-mono);
+    font-size:12px;
+    color:var(--muted);
+    border:1px solid var(--border);
+    background:var(--panel-2);
+    padding:6px 12px;
+    border-radius:5px;
+  }
+
+  /* ---------- SECTION SHELL ---------- */
+  section{padding:64px 0 0;}
+  .section-head{margin-bottom:30px;}
+  .section-num{
+    font-family:var(--font-mono);
+    font-size:12px;
+    color:var(--muted-2);
+    letter-spacing:0.08em;
+  }
+  h2{
+    font-family:var(--font-display);
+    font-size:28px;
+    font-weight:600;
+    margin:6px 0 10px;
+  }
+  .section-desc{color:var(--muted);max-width:680px;font-size:15px;}
+
+  /* ---------- DIAGRAM ---------- */
+  .diagram-card{
+    background:var(--panel);
+    border:1px solid var(--border);
+    border-radius:10px;
+    padding:20px;
+    overflow-x:auto;
+  }
+  .diagram-card svg{display:block;min-width:900px;width:100%;height:auto;}
+  .diagram text{font-family:var(--font-mono);fill:var(--ink);}
+  .diagram .label-title{font-size:13.5px;font-weight:600;}
+  .diagram .label-sub{font-size:10.5px;fill:var(--muted);}
+  .diagram .box{fill:var(--panel-2);stroke:var(--border);stroke-width:1;}
+  .diagram .box-strong{fill:var(--panel-2);stroke-width:1.4;}
+  .diagram .band{fill:rgba(157,140,255,0.06);stroke:rgba(157,140,255,0.35);stroke-width:1;}
+  .diagram .chip{fill:#0c1424;stroke:var(--border);stroke-width:1;}
+  .diagram .chip-text{font-size:11px;fill:var(--ink);}
+  .diagram .flow{
+    fill:none;stroke:var(--muted-2);stroke-width:1.6;
+    marker-end:url(#arrow);
+  }
+  .diagram .flow-dev{stroke:var(--dev);marker-end:url(#arrow-dev);}
+  .diagram .flow-staging{stroke:var(--staging);marker-end:url(#arrow-staging);}
+  .diagram .flow-client{stroke:var(--client);marker-end:url(#arrow-client);}
+  .diagram .spine{
+    fill:none;stroke:var(--gov);stroke-width:1.6;stroke-dasharray:6 6;
+    animation:flow 1.6s linear infinite;
+  }
+  @keyframes flow{ to{ stroke-dashoffset:-24; } }
+  @media (prefers-reduced-motion: reduce){
+    .diagram .spine{animation:none;}
+  }
+
+  .legend{
+    display:flex;flex-wrap:wrap;gap:18px;
+    margin-top:18px;
+    font-family:var(--font-mono);
+    font-size:12px;
+    color:var(--muted);
+  }
+  .legend span{display:inline-flex;align-items:center;gap:8px;}
+  .legend i{width:9px;height:9px;border-radius:2px;display:inline-block;}
+
+  /* ---------- STEPS ---------- */
+  .steps{
+    position:relative;
+    margin-top:8px;
+    padding-left:38px;
+    border-left:1px solid var(--border);
+  }
+  .step{
+    position:relative;
+    padding:0 0 40px 20px;
+  }
+  .step:last-child{padding-bottom:2px;}
+  .step::before{
+    content:attr(data-n);
+    position:absolute;
+    left:-49px;
+    top:0;
+    width:22px;height:22px;
+    border-radius:50%;
+    background:var(--bg-2);
+    border:1px solid var(--border);
+    color:var(--muted);
+    font-family:var(--font-mono);
+    font-size:11px;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .step h3{
+    font-family:var(--font-display);
+    font-size:17px;
+    font-weight:600;
+    margin:0 0 6px;
+  }
+  .step p{margin:0 0 12px;color:var(--muted);font-size:14.5px;max-width:680px;}
+  .step code.inline{
+    font-family:var(--font-mono);
+    font-size:12.5px;
+    background:var(--panel-2);
+    border:1px solid var(--border);
+    padding:2px 7px;
+    border-radius:4px;
+    color:var(--gh);
+  }
+
+  /* ---------- MOCKUP (illustrative "screenshot") ---------- */
+  .mockup{
+    background:#0d1117;
+    border:1px solid #30363d;
+    border-radius:8px;
+    overflow:hidden;
+    max-width:680px;
+    font-family:var(--font-body);
+    box-shadow:0 8px 24px rgba(0,0,0,0.35);
+  }
+  .mockup-bar{
+    background:#161b22;
+    border-bottom:1px solid #30363d;
+    padding:9px 14px;
+    display:flex;
+    align-items:center;
+    gap:8px;
+    font-family:var(--font-mono);
+    font-size:11px;
+    color:#8b949e;
+  }
+  .mockup-bar .dot{width:9px;height:9px;border-radius:50%;background:#30363d;}
+  .mockup-body{padding:16px 18px;font-size:13px;color:#c9d1d9;}
+  .mockup-row{
+    display:flex;justify-content:space-between;align-items:center;
+    padding:9px 12px;border:1px solid #30363d;border-radius:6px;margin-bottom:8px;
+    background:#0d1117;
+  }
+  .mockup-row:last-child{margin-bottom:0;}
+  .mockup-row .name{font-family:var(--font-mono);font-size:12.5px;color:#e6edf3;}
+  .mockup-row .meta{font-family:var(--font-mono);font-size:11px;color:#6e7681;}
+  .mockup-btn{
+    display:inline-block;font-family:var(--font-mono);font-size:11.5px;
+    background:#238636;color:#fff;padding:5px 12px;border-radius:6px;border:1px solid rgba(240,246,252,0.1);
+  }
+  .mockup-btn.secondary{background:#21262d;color:#c9d1d9;}
+  .mockup-btn.danger{background:#da3633;color:#fff;}
+  .mockup-input{
+    font-family:var(--font-mono);font-size:12px;color:#c9d1d9;
+    background:#0d1117;border:1px solid #30363d;border-radius:6px;
+    padding:7px 10px;width:100%;margin-top:5px;
+  }
+  .mockup-label{font-family:var(--font-mono);font-size:11px;color:#8b949e;margin-top:10px;display:block;}
+  .mockup-check{display:flex;align-items:center;gap:8px;font-size:12.5px;color:#c9d1d9;margin-top:8px;}
+  .mockup-badge{
+    font-family:var(--font-mono);font-size:10.5px;padding:2px 8px;border-radius:10px;
+  }
+  .mockup-badge.success{background:rgba(46,160,67,0.15);color:#3fb950;border:1px solid rgba(46,160,67,0.4);}
+  .mockup-badge.pending{background:rgba(210,153,34,0.15);color:#d29922;border:1px solid rgba(210,153,34,0.4);}
+  .mockup-badge.wait{background:rgba(121,192,255,0.15);color:#79c0ff;border:1px solid rgba(121,192,255,0.4);}
+  .step-caption{
+    font-family:var(--font-mono);font-size:11px;color:var(--muted-2);
+    margin-top:8px;
+  }
+
+  /* ---------- GOVERNANCE GRID ---------- */
+  .grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fit, minmax(250px, 1fr));
+    gap:14px;
+  }
+  .gcard{
+    background:var(--panel);
+    border:1px solid var(--border);
+    border-radius:10px;
+    padding:20px;
+  }
+  .gcard .gi{
+    width:30px;height:30px;
+    border-radius:6px;
+    background:rgba(121,192,255,0.12);
+    border:1px solid rgba(121,192,255,0.3);
+    display:flex;align-items:center;justify-content:center;
+    margin-bottom:14px;
+  }
+  .gcard h4{
+    font-family:var(--font-display);
+    font-size:15.5px;
+    margin:0 0 6px;
+    font-weight:600;
+  }
+  .gcard p{margin:0;color:var(--muted);font-size:13.5px;}
+
+  /* ---------- TABLE ---------- */
+  .ref-table{
+    width:100%;
+    border-collapse:collapse;
+    font-size:13.5px;
+    margin-top:6px;
+  }
+  .ref-table th{
+    text-align:left;
+    font-family:var(--font-mono);
+    font-size:11px;
+    letter-spacing:0.04em;
+    text-transform:uppercase;
+    color:var(--muted-2);
+    padding:10px 14px;
+    border-bottom:1px solid var(--border);
+  }
+  .ref-table td{
+    padding:14px;
+    border-bottom:1px solid var(--border-soft);
+    color:var(--ink);
+    vertical-align:top;
+  }
+  .ref-table code{
+    font-family:var(--font-mono);
+    font-size:12.5px;
+    color:var(--gh);
+    background:var(--panel-2);
+    padding:2px 7px;
+    border-radius:4px;
+  }
+  .dot{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:8px;}
+
+  /* ---------- COMMAND REFERENCE ---------- */
+  .cmd-card{
+    background:var(--panel-2);
+    border:1px solid var(--border);
+    border-radius:10px;
+    padding:22px 24px;
+    font-family:var(--font-mono);
+    font-size:13px;
+    color:var(--muted);
+  }
+  .cmd-card .line{margin-bottom:10px;display:flex;gap:12px;}
+  .cmd-card .line:last-child{margin-bottom:0;}
+  .cmd-card .prompt{color:var(--gov);}
+  .cmd-card .cmd{color:var(--ink);}
+  .cmd-card .comment{color:var(--muted-2);}
+
+  footer{
+    margin-top:80px;
+    padding-top:26px;
+    border-top:1px solid var(--border-soft);
+    color:var(--muted-2);
+    font-size:12.5px;
+    font-family:var(--font-mono);
+  }
+</style>
+</head>
+<body>
+
+  <div class="hero">
+    <div class="hero-inner">
+      <div class="eyebrow">DBX Migration Studio · GitHub Actions CI/CD</div>
+      <h1>End-to-end automation: <span style="color:var(--gh)">GitHub</span> to every client's <span>Databricks workspace</span></h1>
+      <p class="sub">How this repo moves from a push on <code style="font-family:var(--font-mono);color:var(--gh);background:var(--panel-2);padding:2px 7px;border-radius:4px;">main</code> to a fully deployed Databricks App — infra, secrets, Genie Space and all — in dev automatically, and in every client's production workspace behind a one-click approval.</p>
+      <div class="hero-tags">
+        <span class="tag">GitHub Actions</span>
+        <span class="tag">Environments &amp; Environment Secrets</span>
+        <span class="tag">Databricks Asset Bundles (DABs)</span>
+        <span class="tag">one_click_deploy.py</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap">
+
+    <!-- ============ DIAGRAM ============ -->
+    <section>
+      <div class="section-head">
+        <div class="section-num">01 — Architecture</div>
+        <h2>The pipeline, end to end</h2>
+        <p class="section-desc">One workflow file, three trigger paths. A PR only validates. A push to <code style="font-family:var(--font-mono);color:var(--gh);">main</code> deploys to dev automatically. A <code style="font-family:var(--font-mono);color:var(--gh);">release/*</code> tag fans out to every client, each behind its own approval.</p>
+      </div>
+
+      <div class="diagram-card">
+        <svg class="diagram" viewBox="0 0 1200 760" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+              <path d="M0,0 L8,4 L0,8 Z" fill="#6b7690"/>
+            </marker>
+            <marker id="arrow-dev" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+              <path d="M0,0 L8,4 L0,8 Z" fill="#4fd1c5"/>
+            </marker>
+            <marker id="arrow-staging" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+              <path d="M0,0 L8,4 L0,8 Z" fill="#f2b84b"/>
+            </marker>
+            <marker id="arrow-client" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+              <path d="M0,0 L8,4 L0,8 Z" fill="#ff6a3d"/>
+            </marker>
+          </defs>
+
+          <!-- Row 1: repo + triggers -->
+          <rect class="box box-strong" x="30" y="28" width="260" height="90" rx="8" style="stroke:#79c0ff"/>
+          <text class="label-title" x="50" y="60" style="fill:#79c0ff">GitHub repo</text>
+          <text class="label-sub" x="50" y="78">sunilokbits/dbxmigrationapp</text>
+          <text class="label-sub" x="50" y="94">.github/workflows/cicd.yml</text>
+
+          <rect class="box" x="340" y="28" width="230" height="42" rx="6"/>
+          <text class="chip-text" x="356" y="53">pull_request → main</text>
+          <rect class="box" x="340" y="76" width="230" height="42" rx="6"/>
+          <text class="chip-text" x="356" y="101">push → main</text>
+          <rect class="box" x="580" y="28" width="230" height="42" rx="6"/>
+          <text class="chip-text" x="596" y="53">workflow_dispatch</text>
+          <rect class="box" x="580" y="76" width="230" height="42" rx="6"/>
+          <text class="chip-text" x="596" y="101">push tag release/*</text>
+
+          <path class="flow" d="M290,60 L340,49"/>
+          <path class="flow" d="M290,80 L340,97"/>
+          <path class="flow" d="M570,49 L580,49"/>
+          <path class="flow" d="M570,97 L580,97"/>
+
+          <!-- Row 2: validate -->
+          <rect class="box box-strong" x="30" y="160" width="1140" height="60" rx="8" style="stroke:#8b98b3"/>
+          <text class="label-title" x="50" y="184">Job: validate</text>
+          <text class="label-sub" x="50" y="202">databricks bundle validate (dev, staging, client targets) + pytest — runs for every trigger above</text>
+
+          <path class="flow" d="M455,118 L455,160"/>
+          <path class="flow" d="M695,118 L455,160" style="stroke-dasharray:3 4"/>
+
+          <!-- Row 3: fan out -->
+          <path class="flow-dev" d="M300,220 L200,270"/>
+          <path class="flow-staging" d="M600,220 L600,270" style="stroke-dasharray:3 4"/>
+          <path class="flow-client" d="M900,220 L1000,270"/>
+
+          <rect class="chip" x="470" y="228" width="260" height="26" rx="4"/>
+          <text class="chip-text" x="482" y="245">manual: deploy_staging=true only</text>
+
+          <!-- Row 4: jobs -->
+          <rect class="box" x="30" y="280" width="340" height="180" rx="10" style="stroke:#4fd1c5"/>
+          <text class="label-title" x="50" y="312" style="fill:#4fd1c5">Job: deploy-dev</text>
+          <rect class="chip" x="50" y="330" width="290" height="34" rx="5"/>
+          <text class="chip-text" x="62" y="352">Environment: dev</text>
+          <rect class="chip" x="50" y="374" width="290" height="34" rx="5"/>
+          <text class="chip-text" x="62" y="396">bundle deploy -t dev</text>
+          <text class="label-sub" x="50" y="428">Auto — no approval needed</text>
+
+          <rect class="box" x="430" y="280" width="340" height="180" rx="10" style="stroke:#f2b84b"/>
+          <text class="label-title" x="450" y="312" style="fill:#f2b84b">Job: deploy-staging</text>
+          <rect class="chip" x="450" y="330" width="290" height="34" rx="5"/>
+          <text class="chip-text" x="462" y="352">Environment: staging</text>
+          <rect class="chip" x="450" y="374" width="290" height="34" rx="5"/>
+          <text class="chip-text" x="462" y="396">bundle deploy -t staging + tests</text>
+          <text class="label-sub" x="450" y="428">Opt-in via workflow_dispatch input</text>
+
+          <rect class="box" x="830" y="280" width="340" height="180" rx="10" style="stroke:#ff6a3d"/>
+          <text class="label-title" x="850" y="312" style="fill:#ff6a3d">Job: deploy-clients (matrix)</text>
+          <rect class="chip" x="850" y="330" width="290" height="34" rx="5"/>
+          <text class="chip-text" x="862" y="352">Environment: client-&lt;name&gt;</text>
+          <rect class="chip" x="850" y="374" width="290" height="34" rx="5"/>
+          <text class="chip-text" x="862" y="396">one_click_deploy.py --client-config</text>
+          <text class="label-sub" x="850" y="428">One matrix job per client, own approval</text>
+
+          <!-- connectors to governance -->
+          <path class="spine" d="M200,460 L200,500"/>
+          <path class="spine" d="M600,460 L600,500"/>
+          <path class="spine" d="M1000,460 L1000,500"/>
+
+          <!-- Row 5: governance -->
+          <rect class="band" x="30" y="505" width="1140" height="100" rx="10"/>
+          <text class="label-title" x="50" y="533" style="fill:#c9c1ff">Per-environment governance — every Environment above has its own secrets</text>
+          <rect class="chip" x="50" y="547" width="270" height="42" rx="6"/>
+          <text class="chip-text" x="65" y="565">DATABRICKS_HOST / DATABRICKS_TOKEN</text>
+          <text class="label-sub" x="65" y="581">bootstrap PAT, per workspace</text>
+          <rect class="chip" x="335" y="547" width="270" height="42" rx="6"/>
+          <text class="chip-text" x="350" y="565">CLIENT_CONFIG_JSON</text>
+          <text class="label-sub" x="350" y="581">non-secret client config, clients only</text>
+          <rect class="chip" x="620" y="547" width="270" height="42" rx="6"/>
+          <text class="chip-text" x="635" y="565">Required reviewers</text>
+          <text class="label-sub" x="635" y="581">manual approval on client-&lt;name&gt;</text>
+          <rect class="chip" x="905" y="547" width="245" height="42" rx="6"/>
+          <text class="chip-text" x="920" y="565">Everything else automatic</text>
+          <text class="label-sub" x="920" y="581">infra, secrets, Genie, the App</text>
+
+          <path class="spine" d="M600,605 L600,635"/>
+
+          <!-- Row 6: outcome -->
+          <rect class="box" x="30" y="640" width="1140" height="90" rx="10"/>
+          <text class="label-title" x="50" y="673">Result: Databricks App "dbxmigrationapp"</text>
+          <text class="label-sub" x="50" y="693">Created or updated, running in every target workspace — dev, staging, and each approved client — from the exact code that was pushed</text>
+        </svg>
+      </div>
+
+      <div class="legend">
+        <span><i style="background:#79c0ff"></i>GitHub</span>
+        <span><i style="background:#4fd1c5"></i>Dev</span>
+        <span><i style="background:#f2b84b"></i>Staging</span>
+        <span><i style="background:#ff6a3d"></i>Client production</span>
+        <span><i style="background:#9d8cff"></i>Governance</span>
+      </div>
+    </section>
+
+    <!-- ============ SETUP STEPS ============ -->
+    <section>
+      <div class="section-head">
+        <div class="section-num">02 — One-time setup</div>
+        <h2>Steps to wire it up</h2>
+        <p class="section-desc">Do this once per environment. Screens below are illustrative mockups of the GitHub UI, not live screenshots — the menu paths and field names match exactly what you'll see.</p>
+      </div>
+
+      <div class="steps">
+        <div class="step" data-n="1">
+          <h3>Code is already on GitHub</h3>
+          <p>The full repo — app code, <code class="inline">databricks.yml</code>, <code class="inline">deploy/one_click_deploy.py</code>, and this workflow — is pushed to <code class="inline">github.com/sunilokbits/dbxmigrationapp</code> on <code class="inline">main</code>.</p>
+        </div>
+
+        <div class="step" data-n="2">
+          <h3>Create the Environments</h3>
+          <p>Repo → <strong>Settings → Environments → New environment</strong>. Create <code class="inline">dev</code>, <code class="inline">staging</code>, and one <code class="inline">client-&lt;name&gt;</code> per client (e.g. <code class="inline">client-insight</code>).</p>
+          <div class="mockup">
+            <div class="mockup-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;github.com/sunilokbits/dbxmigrationapp/settings/environments</div>
+            <div class="mockup-body">
+              <div class="mockup-row"><span class="name">dev</span><span class="meta">no protection rules</span></div>
+              <div class="mockup-row"><span class="name">staging</span><span class="meta">no protection rules</span></div>
+              <div class="mockup-row"><span class="name">client-insight</span><span class="meta">1 required reviewer</span></div>
+              <div class="mockup-row"><span class="name">client-test-client</span><span class="meta">1 required reviewer</span></div>
+            </div>
+          </div>
+          <div class="step-caption">Settings → Environments — four environments configured</div>
+        </div>
+
+        <div class="step" data-n="3">
+          <h3>Add secrets to dev and staging</h3>
+          <p>Open each environment → <strong>Add environment secret</strong>. Add <code class="inline">DATABRICKS_HOST</code> and <code class="inline">DATABRICKS_TOKEN</code> (the workspace PAT).</p>
+          <div class="mockup">
+            <div class="mockup-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;Environment: dev</div>
+            <div class="mockup-body">
+              <span class="mockup-label">Name</span>
+              <div class="mockup-input">DATABRICKS_TOKEN</div>
+              <span class="mockup-label">Value</span>
+              <div class="mockup-input">••••••••••••••••••••••••••••</div>
+              <div style="margin-top:14px;"><span class="mockup-btn">Add secret</span></div>
+            </div>
+          </div>
+          <div class="step-caption">Environment secrets are encrypted at rest and masked in every log line</div>
+        </div>
+
+        <div class="step" data-n="4">
+          <h3>Add secrets to each client environment</h3>
+          <p>Each <code class="inline">client-&lt;name&gt;</code> environment needs <code class="inline">DATABRICKS_HOST</code>, <code class="inline">DATABRICKS_TOKEN</code>, and <code class="inline">CLIENT_CONFIG_JSON</code> (the filled-in <code class="inline">deploy/client.template.json</code>). Add <code class="inline">DBX_SOURCE_PASSWORD</code> / <code class="inline">AZURE_CLIENT_ID</code> / <code class="inline">AZURE_CLIENT_SECRET</code> / <code class="inline">AZURE_TENANT_ID</code> only if that client needs a source DB password migrated or Azure infra auto-provisioned.</p>
+          <div class="mockup">
+            <div class="mockup-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;Environment: client-insight</div>
+            <div class="mockup-body">
+              <div class="mockup-row"><span class="name">DATABRICKS_HOST</span><span class="mockup-badge success">set</span></div>
+              <div class="mockup-row"><span class="name">DATABRICKS_TOKEN</span><span class="mockup-badge success">set</span></div>
+              <div class="mockup-row"><span class="name">CLIENT_CONFIG_JSON</span><span class="mockup-badge success">set</span></div>
+              <div class="mockup-row"><span class="name">DBX_SOURCE_PASSWORD</span><span class="mockup-badge pending">optional</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="step" data-n="5">
+          <h3>Set the required reviewer on each client environment</h3>
+          <p>On <code class="inline">client-&lt;name&gt;</code>'s settings, enable <strong>Required reviewers</strong> and add whoever should approve that client's release. This is the manual approval gate — one per client, not one shared gate for all.</p>
+          <div class="mockup">
+            <div class="mockup-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;Environment: client-insight — Deployment protection rules</div>
+            <div class="mockup-body">
+              <div class="mockup-check">☑ Required reviewers</div>
+              <div class="mockup-row" style="margin-top:8px;"><span class="name">@sunil.kumar</span><span class="meta">reviewer</span></div>
+              <span class="mockup-label">Wait timer (optional)</span>
+              <div class="mockup-input">0 minutes</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="step" data-n="6">
+          <h3>Set the client list (repository variable)</h3>
+          <p>Repo → <strong>Settings → Secrets and variables → Actions → Variables tab → New repository variable</strong>. Name it <code class="inline">CLIENTS_JSON</code>, value a JSON array of client names, each matching a <code class="inline">client-&lt;name&gt;</code> environment.</p>
+          <div class="mockup">
+            <div class="mockup-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;Settings → Actions → Variables</div>
+            <div class="mockup-body">
+              <span class="mockup-label">Name</span>
+              <div class="mockup-input">CLIENTS_JSON</div>
+              <span class="mockup-label">Value</span>
+              <div class="mockup-input">["insight", "test-client"]</div>
+              <div style="margin-top:14px;"><span class="mockup-btn">Add variable</span></div>
+            </div>
+          </div>
+          <div class="step-caption">Leave this as [] until a client's environment/secrets actually exist</div>
+        </div>
+
+        <div class="step" data-n="7">
+          <h3>Ship it</h3>
+          <p>Merge a PR to <code class="inline">main</code> → <code class="inline">validate</code> then <code class="inline">deploy-dev</code> run automatically. To also hit staging, go to <strong>Actions → DBX Migration Studio CI/CD → Run workflow</strong> and check <code class="inline">deploy_staging</code>. To go live for clients, push a tag: <code class="inline">git tag release/1.0.0 &amp;&amp; git push origin release/1.0.0</code>.</p>
+          <div class="mockup">
+            <div class="mockup-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;Actions → DBX Migration Studio CI/CD</div>
+            <div class="mockup-body">
+              <div class="mockup-row"><span class="name">✓ validate</span><span class="mockup-badge success">success</span></div>
+              <div class="mockup-row"><span class="name">✓ deploy-dev</span><span class="mockup-badge success">success</span></div>
+              <div class="mockup-row"><span class="name">deploy-clients (insight)</span><span class="mockup-badge wait">waiting for review</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="step" data-n="8">
+          <h3>Approve the client deploy</h3>
+          <p>The reviewer added in Step 5 gets a notification and opens the run → <strong>Review deployments</strong> → selects the environment → <strong>Approve and deploy</strong>. Only then does <code class="inline">one_click_deploy.py</code> run against that client's workspace.</p>
+          <div class="mockup">
+            <div class="mockup-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;Review deployments</div>
+            <div class="mockup-body">
+              <div class="mockup-check">☑ client-insight</div>
+              <span class="mockup-label">Leave a comment (optional)</span>
+              <div class="mockup-input">Approved for v1.0.0 release</div>
+              <div style="margin-top:14px;display:flex;gap:8px;">
+                <span class="mockup-btn">Approve and deploy</span>
+                <span class="mockup-btn danger">Reject</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ GOVERNANCE ============ -->
+    <section>
+      <div class="section-head">
+        <div class="section-num">03 — What's automatic vs. manual</div>
+        <h2>Only two things are ever manual</h2>
+      </div>
+      <div class="grid">
+        <div class="gcard">
+          <div class="gi">1</div>
+          <h4>Generating the bootstrap PAT</h4>
+          <p>Someone creates one Databricks PAT per workspace, once, when onboarding it. Nothing can automate this — it's the credential needed to reach a workspace for the first time.</p>
+        </div>
+        <div class="gcard">
+          <div class="gi">2</div>
+          <h4>Approving a client release</h4>
+          <p>The required reviewer on <code class="inline" style="color:inherit">client-&lt;name&gt;</code> clicks Approve. Everything downstream of that click — infra, secrets, Genie Space, the app — runs unattended.</p>
+        </div>
+        <div class="gcard">
+          <div class="gi">◆</div>
+          <h4>Unity Catalog infra</h4>
+          <p>Storage, access connector, catalogs/schemas, the landing volume — created if missing, reused if not, by <code class="inline" style="color:inherit">AutoInfraCreation.py</code>.</p>
+        </div>
+        <div class="gcard">
+          <div class="gi">◆</div>
+          <h4>Secrets</h4>
+          <p>The <code class="inline" style="color:inherit">migration-studio</code> Databricks secret scope is created and populated automatically — source DB password, per-client Flask key, DevOps PAT.</p>
+        </div>
+        <div class="gcard">
+          <div class="gi">◆</div>
+          <h4>Genie Space</h4>
+          <p>Reused if <code class="inline" style="color:inherit">genie_space_id</code> is already set in the client config; otherwise auto-created via the Genie API.</p>
+        </div>
+        <div class="gcard">
+          <div class="gi">◆</div>
+          <h4>The Databricks App</h4>
+          <p><code class="inline" style="color:inherit">databricks bundle deploy -t client</code> creates or updates the app named <code class="inline" style="color:inherit">dbxmigrationapp</code> — same name in every workspace.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ TRIGGER TABLE ============ -->
+    <section>
+      <div class="section-head">
+        <div class="section-num">04 — Trigger reference</div>
+        <h2>What causes what</h2>
+      </div>
+      <table class="ref-table">
+        <tr>
+          <th>Event</th>
+          <th>Jobs that run</th>
+          <th>Target</th>
+          <th>Gate</th>
+        </tr>
+        <tr>
+          <td><code>pull_request → main</code></td>
+          <td>validate</td>
+          <td><span class="dot" style="background:#79c0ff"></span>none deployed</td>
+          <td>none</td>
+        </tr>
+        <tr>
+          <td><code>push → main</code></td>
+          <td>validate → deploy-dev</td>
+          <td><span class="dot" style="background:#4fd1c5"></span>dev</td>
+          <td>none — fully automatic</td>
+        </tr>
+        <tr>
+          <td><code>workflow_dispatch</code> (deploy_staging=true)</td>
+          <td>validate → deploy-dev → deploy-staging</td>
+          <td><span class="dot" style="background:#f2b84b"></span>staging</td>
+          <td>manual trigger, no approval step</td>
+        </tr>
+        <tr>
+          <td><code>push tag release/*</code></td>
+          <td>validate → deploy-clients (matrix)</td>
+          <td><span class="dot" style="background:#ff6a3d"></span>every client in <code>CLIENTS_JSON</code></td>
+          <td>required reviewer per <code>client-&lt;name&gt;</code></td>
+        </tr>
+      </table>
+    </section>
+
+    <!-- ============ COMMAND REFERENCE ============ -->
+    <section>
+      <div class="section-head">
+        <div class="section-num">05 — Quick reference</div>
+        <h2>Core commands</h2>
+      </div>
+      <div class="cmd-card">
+        <div class="line"><span class="prompt">$</span><span class="cmd">git push origin main</span><span class="comment"># triggers validate + deploy-dev</span></div>
+        <div class="line"><span class="prompt">$</span><span class="cmd">gh workflow run cicd.yml -f deploy_staging=true</span><span class="comment"># manually add a staging deploy</span></div>
+        <div class="line"><span class="prompt">$</span><span class="cmd">git tag release/1.0.0 && git push origin release/1.0.0</span><span class="comment"># triggers the client fan-out</span></div>
+        <div class="line"><span class="prompt">$</span><span class="cmd">gh run watch</span><span class="comment"># follow the current run's live status</span></div>
+        <div class="line"><span class="prompt">$</span><span class="cmd">git push origin :refs/tags/release/1.0.0</span><span class="comment"># delete a bad tag (does not undo a deploy)</span></div>
+      </div>
+    </section>
+
+    <footer>
+      Rollback: re-tag the last known-good commit and push it as a new release/* tag — databricks bundle deploy reconciles state, so redeploying an older revision is safe.
+    </footer>
+
+  </div>
+</body>
+</html>

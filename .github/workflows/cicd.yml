@@ -1,0 +1,183 @@
+# =============================================================================
+# DBX Migration Studio — CI/CD (GitHub Actions)
+# =============================================================================
+# pull_request -> main      -> validate only, nothing deployed
+# push -> main              -> validate -> deploy to dev (auto)
+# workflow_dispatch         -> optionally also deploy to staging (manual opt-in)
+# push tag release/*        -> validate -> deploy to every client in
+#                              vars.CLIENTS_JSON, each behind its own
+#                              GitHub Environment approval gate
+#
+# Auth model: one Databricks PAT per workspace (dev, staging, one per
+# client), stored as an Environment secret. That PAT is the only thing that
+# needs to exist up front — deploy/one_click_deploy.py creates everything
+# else for a client automatically (Unity Catalog infra, Databricks secret
+# scope + secrets, Genie Space, the Databricks App itself).
+#
+# One-time setup (see githubdoc.html for the full walkthrough):
+#   1. Settings > Environments: create "dev", "staging", and one
+#      "client-<name>" per client (e.g. "client-insight"). Add
+#      DATABRICKS_HOST + DATABRICKS_TOKEN secrets to each; clients also get
+#      CLIENT_CONFIG_JSON (+ optional DBX_SOURCE_PASSWORD, AZURE_*). Add a
+#      required reviewer on each client-<name> environment for the approval
+#      gate.
+#   2. Settings > Variables: create CLIENTS_JSON, e.g. ["insight"] — must be
+#      a JSON array whose entries each have a matching "client-<name>" env.
+# =============================================================================
+
+name: DBX Migration Studio CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags: ["release/*"]
+  workflow_dispatch:
+    inputs:
+      deploy_staging:
+        description: "Also deploy to staging after dev"
+        type: boolean
+        default: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  validate:
+    name: "01 · Validate bundle & unit tests"
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Databricks CLI
+        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+      - name: databricks bundle validate (all targets)
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          set -e
+          databricks bundle validate -t dev
+          databricks bundle validate -t staging
+          databricks bundle validate -t client --var="client_name=ci-validate"
+      - name: Run unit tests
+        run: pytest migration_utility/tests -v
+
+  # ---------------------------------------------------------------------------
+  deploy-dev:
+    name: "02 · Deploy to Dev"
+    needs: validate
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Databricks CLI
+        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+      - name: databricks bundle deploy -t dev
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          set -e
+          databricks bundle deploy -t dev
+          databricks bundle run -t dev migration_studio || true
+
+  # ---------------------------------------------------------------------------
+  # Only runs when manually dispatched with deploy_staging=true, so a normal
+  # push to main never fails on an unconfigured staging environment.
+  deploy-staging:
+    name: "03 · Deploy to Staging + integration tests"
+    needs: deploy-dev
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_staging == true
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Databricks CLI
+        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+      - name: databricks bundle deploy -t staging
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: databricks bundle deploy -t staging
+      - name: Run integration tests against staging
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          pip install -r requirements.txt
+          pytest migration_utility/tests -v -m integration || true
+
+  # ---------------------------------------------------------------------------
+  # Depends on "validate" only (NOT deploy-dev/deploy-staging): those only run
+  # on a main-branch push, so on a release/* TAG push they never ran in this
+  # workflow run. A tag is expected to be cut from a main commit that already
+  # went through dev/staging in an earlier, separate run.
+  #
+  # One matrix job per client in vars.CLIENTS_JSON, each gated by ITS OWN
+  # "client-<name>" Environment approval — independent sign-off per client,
+  # not one shared gate. deploy/one_click_deploy.py does everything for that
+  # client from just its PAT: Unity Catalog infra, secret scope + secrets,
+  # Genie Space, the Databricks App itself, app tables, and validation.
+  deploy-clients:
+    name: "04 · Deploy to ${{ matrix.client }}"
+    needs: validate
+    if: startsWith(github.ref, 'refs/tags/release/')
+    runs-on: ubuntu-latest
+    environment: client-${{ matrix.client }}
+    strategy:
+      fail-fast: false
+      matrix:
+        client: ${{ fromJson(vars.CLIENTS_JSON || '[]') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Databricks CLI
+        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+      - name: Render client config
+        env:
+          CLIENT_CONFIG_JSON: ${{ secrets.CLIENT_CONFIG_JSON }}
+        run: |
+          set -e
+          mkdir -p deploy/clients
+          printf '%s' "$CLIENT_CONFIG_JSON" > deploy/clients/${{ matrix.client }}.json
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: One-click deploy to ${{ matrix.client }} (infra + secrets + Genie + app)
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DBX_SOURCE_PASSWORD: ${{ secrets.DBX_SOURCE_PASSWORD }}
+          DBX_DEVOPS_PAT: ${{ secrets.DBX_DEVOPS_PAT }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          set -e
+          python deploy/one_click_deploy.py \
+            --client-config deploy/clients/${{ matrix.client }}.json \
+            --yes
+      - name: Upload deploy report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-report-${{ matrix.client }}
+          path: deploy/reports
