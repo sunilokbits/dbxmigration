@@ -523,7 +523,7 @@ def validate_deployment(cfg: dict, secrets_in: dict, genie_space_id: str, report
 
     try:
         apps = list(w.apps.list())
-        app = next((a for a in apps if a.name == "dbxmigrator"), None)
+        app = next((a for a in apps if a.name == "dbxmigrationapp"), None)
         if app:
             state = getattr(getattr(app, "compute_status", None), "state", None) or getattr(app, "app_status", None)
             # Databricks Apps compute state uses ACTIVE (not RUNNING) when healthy;

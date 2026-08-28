@@ -3,8 +3,12 @@
 # =============================================================================
 # feature/* -> PR (validate)              -> nothing deployed
 # main      -> merge                      -> auto-deploy: dev
-# main      -> after dev succeeds         -> auto-deploy: staging + integration tests
+# main      -> after dev succeeds         -> staging (only if deployStaging=true; off by default
+#                                             until kv-staging is configured with real values)
 # release/* -> tag pushed                 -> manual approval -> deploy to every client workspace
+#
+# Run with deployStaging=true (Pipelines > Run pipeline > parameters) once
+# kv-staging has real DATABRICKS_HOST/DATABRICKS_TOKEN values.
 #
 # Auth model: a Databricks PAT per workspace (dev, staging, and one per
 # client), stored as a secret variable in that target's Azure DevOps variable
@@ -43,6 +47,10 @@ parameters:
     default:
       - insight
       - test-client
+  - name: deployStaging
+    displayName: Deploy to Staging (requires kv-staging to be configured)
+    type: boolean
+    default: false
 
 variables:
   - name: pythonVersion
@@ -113,7 +121,7 @@ stages:
           - bash: |
               set -e
               databricks bundle deploy -t dev
-              databricks bundle run -t dev sql_to_databricks_migration_app || true
+              databricks bundle run -t dev migration_studio || true
             displayName: databricks bundle deploy -t dev
             env:
               DATABRICKS_HOST: $(DATABRICKS_HOST)
@@ -123,7 +131,7 @@ stages:
   - stage: DeployStaging
     displayName: "03 · Deploy to Staging + integration tests"
     dependsOn: DeployDev
-    condition: succeeded()
+    condition: and(succeeded(), eq('${{ parameters.deployStaging }}', 'true'))
     jobs:
       - job: DeployStaging
         pool:
