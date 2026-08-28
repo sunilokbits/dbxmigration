@@ -397,7 +397,7 @@ def bundle_deploy(cfg: dict, secrets_in: dict, flask_secret: str, genie_space_id
         report.add("bundle", "App start/redeploy", "pass")
     else:
         report.add("bundle", "App start/redeploy", "warn",
-                    "Non-fatal — start the app manually from the Databricks Apps UI if it isn't RUNNING.",
+                    f"Non-fatal — bundle deploy already starts new Apps; check Apps UI if not RUNNING. {(err or out)[:250]}",
                     required=False)
 
 
@@ -526,7 +526,10 @@ def validate_deployment(cfg: dict, secrets_in: dict, genie_space_id: str, report
         app = next((a for a in apps if a.name == "dbxmigrator"), None)
         if app:
             state = getattr(getattr(app, "compute_status", None), "state", None) or getattr(app, "app_status", None)
-            report.add("validate", "Databricks App status", "pass" if str(state).upper().find("RUNNING") >= 0 else "warn",
+            # Databricks Apps compute state uses ACTIVE (not RUNNING) when healthy;
+            # app_status (if present) uses RUNNING — accept either spelling.
+            healthy = any(k in str(state).upper() for k in ("ACTIVE", "RUNNING"))
+            report.add("validate", "Databricks App status", "pass" if healthy else "warn",
                         f"state={state}", required=False)
         else:
             report.add("validate", "Databricks App status", "warn", "app not found via API yet — check Apps UI",

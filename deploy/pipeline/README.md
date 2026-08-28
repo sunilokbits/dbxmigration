@@ -2,82 +2,83 @@
 
 This project deploys via [`azure-pipelines.yml`](../../azure-pipelines.yml), a
 4-stage pipeline: **Validate → Dev → Staging → Client production workspaces**.
-It follows the same shape as the architecture guide: nothing deploys on a PR,
-`main` auto-promotes through dev and staging, and a tagged `release/*` push
-requires a manual approval before touching any client's production workspace.
+Nothing deploys on a PR; `main` auto-promotes through dev and staging; a
+tagged `release/*` push requires one manual approval, then fans out to every
+client workspace in parallel.
 
-One-time setup, in this order:
+**Auth model:** a Databricks PAT per workspace (dev, staging, one per client).
+That PAT is the only thing that has to exist before the pipeline can reach a
+workspace for the first time. Everything else —  Unity Catalog infra, the
+Databricks secret scope + every secret in it, the Genie Space, and the
+Databricks App itself — is created automatically by
+`deploy/one_click_deploy.py`, which the `DeployClients` stage already calls.
+There is no Key Vault, no service connection, no separate secrets system to
+stand up — just Azure DevOps variable groups holding PATs.
 
-## 1. Create the Azure DevOps project & push the code
+## 1. Create the pipeline
 
-Already done if you're reading this from the repo. Repo:
-`https://dev.azure.com/EMEA-SalesOps/AI Accelerator/_git/DBXMigrationapp`
+**Pipelines → New pipeline → Azure Repos Git → DBXMigrationapp → Existing
+YAML file → `/azure-pipelines.yml`**. Save — don't run yet, steps 2–3 below
+need to exist first or every stage will fail with "variable group not found".
 
-## 2. Branch policies (Project Settings → Repos → Branches → `main`)
+## 2. Environments (Pipelines → Environments)
 
-- Require a pull request before merging to `main`.
-- Require at least 1 reviewer.
-- Require the `Validate` pipeline stage to pass before merge.
+| Environment | Approval check |
+|---|---|
+| `dev` | none |
+| `staging` | none |
+| `clients-prod` | **Approvals** check — add your release approver(s). Every client job in `DeployClients` runs against this one environment, so a single approval gates all of them. |
 
-## 3. Environments (Pipelines → Environments)
+## 3. Variable groups (Pipelines → Library → + Variable group)
 
-Create three:
+One group per target, plain Azure DevOps variables (no Key Vault link needed)
+— mark the ones below as **secret** using the lock icon next to each value:
 
-| Environment | Purpose | Approval check |
+**`kv-dev`** and **`kv-staging`**
+| Variable | Secret? | Value |
 |---|---|---|
-| `dev` | auto-deploy target | none |
-| `staging` | auto-deploy target | none |
-| `clients-prod` | shared gate for **every** client production deploy | **Approvals** check — add the release approver(s) |
+| `DATABRICKS_HOST` | no | that workspace's URL |
+| `DATABRICKS_TOKEN` | **yes** | PAT for that workspace |
 
-The `clients-prod` environment is what the manual-approval gate in the guide
-maps to: every client job in the `DeployClients` stage runs against this one
-environment, so a single approval check protects all of them.
+**`kv-<clientName>`** — one per onboarded client, name must match an entry in
+the `clients` parameter in `azure-pipelines.yml`:
+| Variable | Secret? | Value |
+|---|---|---|
+| `DATABRICKS_HOST` | no | client workspace URL |
+| `DATABRICKS_TOKEN` | **yes** | PAT for that client's workspace |
+| `CLIENT_CONFIG_JSON` | no | full contents of `deploy/client.template.json`, filled in with that client's non-secret values (catalogs, storage account, Azure sub/RG, etc.) |
+| `DBX_SOURCE_PASSWORD` | **yes** | source DB password — omit the variable entirely if no source DB is configured for this client |
+| `DBX_DEVOPS_PAT` | **yes**, optional | only if the app itself needs to call Azure DevOps |
+| `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` / `AZURE_TENANT_ID` | **yes**, optional | only if you want Azure storage/Unity Catalog infra auto-provisioned for this client; omit all three to skip infra creation (`--skip-infra`) |
 
-## 4. Key Vault + variable groups (one per target)
+## 4. List your clients in the pipeline
 
-Each stage pulls a variable group named `kv-<target>`:
+Edit the `clients` parameter at the top of `azure-pipelines.yml`:
+```yaml
+parameters:
+  - name: clients
+    default:
+      - insight
+      - test-client
+```
+Each name needs a matching `kv-<name>` group from step 3.
 
-- `kv-dev`, `kv-staging` — for the two shared internal workspaces.
-- `kv-<clientName>` — one per onboarded client (must match an entry in the
-  `clients` parameter list at the top of `azure-pipelines.yml`).
+## 5. Ship it
 
-For each, create (or reuse) an Azure Key Vault, then in **Pipelines → Library
-→ + Variable group**:
+- Merge a PR to `main` → deploys to `dev`, then `staging`
+- Push a tag like `release/1.0.0` → waits for approval on `clients-prod`,
+  then deploys to every listed client in parallel — infra, secrets, Genie
+  Space, and the Databricks App all created/updated automatically
 
-1. Name it `kv-<target>`.
-2. Toggle **Link secrets from an Azure key vault as variables**.
-3. Pick the subscription (via an ARM service connection using **workload
-   identity federation** — no stored client secret) and the vault.
-4. Authorize these secret names to be pulled in as variables:
+## 6. Onboard a new client later
 
-   | Secret name | Used by | Contents |
-   |---|---|---|
-   | `DATABRICKS-HOST` | dev, staging | workspace URL |
-   | `DATABRICKS-CLIENT-ID` / `DATABRICKS-CLIENT-SECRET` | dev, staging | Databricks OAuth M2M service-principal creds (per-target, least-privilege) |
-   | `DATABRICKS-TOKEN` | staging (integration tests), every client | PAT scoped to that one workspace, used only where the bundle/CLI needs it |
-   | `CLIENT-CONFIG-JSON` | every client | the full contents of that client's `deploy/client.template.json`, filled in (non-secret fields only) |
-   | `DBX-SOURCE-PASSWORD` | every client (if source DB configured) | source database password |
-   | `DBX-DEVOPS-PAT` | every client (optional) | Azure DevOps PAT used by the app itself, if configured |
-   | `AZURE-CLIENT-ID` / `AZURE-CLIENT-SECRET` / `AZURE-TENANT-ID` | every client (optional) | SP used by `AutoInfraCreation.py` to provision that client's Azure/UC infra |
+1. Generate one Databricks PAT for that client's workspace.
+2. Create `kv-<clientName>` variable group with the table from step 3.
+3. Add `<clientName>` to the `clients` list in `azure-pipelines.yml`.
+4. Push a `release/*` tag.
 
-   Azure DevOps maps `SECRET-NAME` → `$(SECRET_NAME)` automatically, which is
-   why the pipeline references `$(CLIENT_CONFIG_JSON)`, `$(DATABRICKS_TOKEN)`, etc.
+## 7. Rollback
 
-## 5. Onboard a new client
-
-1. Create the client's Key Vault (or a new secret set in a shared vault).
-2. Populate the secrets from the table above — `CLIENT-CONFIG-JSON` is just
-   `deploy/client.template.json` with the client's real (non-secret) values.
-3. Create variable group `kv-<clientName>` linked to it.
-4. Create an Azure DevOps service connection for that client's subscription
-   using workload identity federation (Project Settings → Service connections
-   → New → Azure Resource Manager → Workload identity federation).
-5. Add `<clientName>` to the `clients` parameter list in `azure-pipelines.yml`.
-6. Push a `release/*` tag — after `staging` succeeds, the `clients-prod`
-   approval gate fires once and every client (including the new one) deploys.
-
-## 6. Rollback
-
-Same as any other target: re-run the pipeline against the previous `release/*`
-tag, or `git revert` and re-tag. `databricks bundle deploy` reconciles state,
-so redeploying an older revision is safe.
+Re-run the pipeline against the previous `release/*` tag, or `git revert` and
+re-tag. `databricks bundle deploy` reconciles state, so redeploying an older
+revision is safe.

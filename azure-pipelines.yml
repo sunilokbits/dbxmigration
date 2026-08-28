@@ -1,19 +1,26 @@
 # =============================================================================
 # DBX Migration Studio — CI/CD pipeline (Azure DevOps)
 # =============================================================================
-# Mirrors the flow in Migration_Studio deployment guide:
-#   feature/* -> PR (validate)              -> nothing deployed
-#   main      -> merge                      -> auto-deploy: dev
-#   main      -> after dev succeeds         -> auto-deploy: staging + integration tests
-#   release/* -> tag pushed                 -> manual approval -> deploy to every client workspace
+# feature/* -> PR (validate)              -> nothing deployed
+# main      -> merge                      -> auto-deploy: dev
+# main      -> after dev succeeds         -> auto-deploy: staging + integration tests
+# release/* -> tag pushed                 -> manual approval -> deploy to every client workspace
+#
+# Auth model: a Databricks PAT per workspace (dev, staging, and one per
+# client), stored as a secret variable in that target's Azure DevOps variable
+# group. That PAT is the only thing that must exist before the pipeline can
+# reach a workspace for the first time — everything downstream of it
+# (Unity Catalog infra, secret scope + secrets, Genie Space, the Databricks
+# App itself) is created automatically by deploy/one_click_deploy.py.
 #
 # Setup required once, in Azure DevOps (see deploy/pipeline/README.md):
-#   1. Service connections / variable groups per client, each linked to that
-#      client's Azure Key Vault (workload-identity federation — no PATs stored
-#      in ADO). Group naming convention: kv-<clientName>
-#   2. An Environment named "clients-prod" with a manual approval check —
-#      this is what gates the DeployClients stage below.
-#   3. Update the `clients` parameter with the list of onboarded client names.
+#   1. Variable groups: kv-dev, kv-staging, kv-<clientName> (one per client),
+#      each holding that workspace's DATABRICKS_HOST + DATABRICKS_TOKEN (PAT)
+#      as secret variables, plus (for clients) CLIENT_CONFIG_JSON and any
+#      optional secrets the one-click deploy needs.
+#   2. Environments: dev, staging, clients-prod (clients-prod has the manual
+#      approval check — the single gate protecting every client deploy).
+#   3. Update the `clients` parameter below with onboarded client names.
 # =============================================================================
 
 trigger:
@@ -49,6 +56,8 @@ stages:
   # ---------------------------------------------------------------------------
   - stage: Validate
     displayName: "01 · Validate bundle & unit tests"
+    variables:
+      - group: kv-dev
     jobs:
       - job: Validate
         pool:
@@ -75,8 +84,8 @@ stages:
               databricks bundle validate -t client --var="client_name=ci-validate"
             displayName: databricks bundle validate (all targets)
             env:
-              DATABRICKS_HOST: $(DEV_DATABRICKS_HOST)
-              DATABRICKS_TOKEN: $(DEV_DATABRICKS_TOKEN)
+              DATABRICKS_HOST: $(DATABRICKS_HOST)
+              DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
 
           - bash: |
               pytest migration_utility/tests -v
@@ -87,13 +96,13 @@ stages:
     displayName: "02 · Deploy to Dev"
     dependsOn: Validate
     condition: and(succeeded(), eq(variables.isMain, 'true'))
-    variables:
-      - group: kv-dev
     jobs:
       - deployment: DeployDev
         pool:
           vmImage: ubuntu-latest
         environment: dev
+        variables:
+          - group: kv-dev
         strategy:
           runOnce:
             deploy:
@@ -112,21 +121,20 @@ stages:
                   displayName: databricks bundle deploy -t dev
                   env:
                     DATABRICKS_HOST: $(DATABRICKS_HOST)
-                    DATABRICKS_CLIENT_ID: $(DATABRICKS_CLIENT_ID)
-                    DATABRICKS_CLIENT_SECRET: $(DATABRICKS_CLIENT_SECRET)
+                    DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
 
   # ---------------------------------------------------------------------------
   - stage: DeployStaging
     displayName: "03 · Deploy to Staging + integration tests"
     dependsOn: DeployDev
     condition: succeeded()
-    variables:
-      - group: kv-staging
     jobs:
       - deployment: DeployStaging
         pool:
           vmImage: ubuntu-latest
         environment: staging
+        variables:
+          - group: kv-staging
         strategy:
           runOnce:
             deploy:
@@ -144,8 +152,7 @@ stages:
                   displayName: databricks bundle deploy -t staging
                   env:
                     DATABRICKS_HOST: $(DATABRICKS_HOST)
-                    DATABRICKS_CLIENT_ID: $(DATABRICKS_CLIENT_ID)
-                    DATABRICKS_CLIENT_SECRET: $(DATABRICKS_CLIENT_SECRET)
+                    DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
                 - bash: |
                     pip install -r requirements.txt
                     pytest migration_utility/tests -v -m integration || true
@@ -155,11 +162,17 @@ stages:
                     DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
 
   # ---------------------------------------------------------------------------
-  # Deploys the bundle + Unity Catalog infra + secrets into every onboarded
-  # client's own workspace, one job per client, fully in parallel. Each job
-  # only runs after a human approves the "clients-prod" Environment check —
-  # configure that approval once in Project Settings > Environments.
-  # Only fires on a release/* tag, never on a plain main merge.
+  # One job per client, fully in parallel, each gated by the same manual
+  # approval on the "clients-prod" Environment. Only fires on a release/* tag.
+  #
+  # deploy/one_click_deploy.py does EVERYTHING for a client from just its PAT:
+  #   - creates/reuses the Unity Catalog infra (catalogs, volumes, storage)
+  #   - creates the "migration-studio" secret scope and writes every secret
+  #     into it (source DB password, per-client Flask key, DevOps PAT, ...)
+  #   - resolves or auto-creates the client's Genie Space
+  #   - runs `databricks bundle deploy -t client` which creates/updates the
+  #     Databricks App itself
+  #   - initializes app tables and validates the whole deploy
   - stage: DeployClients
     displayName: "04 · Deploy to client production workspaces"
     dependsOn: DeployStaging
@@ -187,11 +200,10 @@ stages:
                     - bash: |
                         set -e
                         mkdir -p deploy/clients
-                        # CLIENT_CONFIG_JSON is a single Key Vault secret (the
-                        # full non-secret client.template.json payload) linked
-                        # into the kv-${{ client }} variable group.
+                        # CLIENT_CONFIG_JSON is the filled-in client.template.json
+                        # (non-secret values) stored as a variable in kv-${{ client }}.
                         printf '%s' "$(CLIENT_CONFIG_JSON)" > deploy/clients/${{ client }}.json
-                      displayName: Render client config from Key Vault
+                      displayName: Render client config
                     - bash: |
                         python -m pip install --upgrade pip
                         pip install -r requirements.txt
@@ -201,8 +213,9 @@ stages:
                         python deploy/one_click_deploy.py \
                           --client-config deploy/clients/${{ client }}.json \
                           --yes
-                      displayName: One-click deploy to ${{ client }}
+                      displayName: One-click deploy to ${{ client }} (infra + secrets + Genie + app)
                       env:
+                        DATABRICKS_HOST: $(DATABRICKS_HOST)
                         DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
                         DBX_SOURCE_PASSWORD: $(DBX_SOURCE_PASSWORD)
                         DBX_DEVOPS_PAT: $(DBX_DEVOPS_PAT)
