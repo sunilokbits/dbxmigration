@@ -175,55 +175,59 @@ stages:
   #   - runs `databricks bundle deploy -t client` which creates/updates the
   #     Databricks App itself
   #   - initializes app tables and validates the whole deploy
-  - stage: DeployClients
-    displayName: "04 · Deploy to client production workspaces"
-    dependsOn: DeployStaging
-    condition: and(succeeded(), eq(variables.isReleaseTag, 'true'))
-    jobs:
-      - ${{ each client in parameters.clients }}:
-          - deployment: Deploy_${{ replace(client, '-', '_') }}
-            displayName: "Deploy to ${{ client }}"
-            pool:
-              vmImage: ubuntu-latest
-            environment: clients-prod
-            variables:
-              - group: kv-${{ client }}
-            strategy:
-              runOnce:
-                deploy:
-                  steps:
-                    - checkout: self
-                    - task: UsePythonVersion@0
-                      inputs:
-                        versionSpec: $(pythonVersion)
-                    - bash: |
-                        curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
-                      displayName: Install Databricks CLI
-                    - bash: |
-                        set -e
-                        mkdir -p deploy/clients
-                        # CLIENT_CONFIG_JSON is the filled-in client.template.json
-                        # (non-secret values) stored as a variable in kv-${{ client }}.
-                        printf '%s' "$(CLIENT_CONFIG_JSON)" > deploy/clients/${{ client }}.json
-                      displayName: Render client config
-                    - bash: |
-                        python -m pip install --upgrade pip
-                        pip install -r requirements.txt
-                      displayName: Install Python dependencies
-                    - bash: |
-                        set -e
-                        python deploy/one_click_deploy.py \
-                          --client-config deploy/clients/${{ client }}.json \
-                          --yes
-                      displayName: One-click deploy to ${{ client }} (infra + secrets + Genie + app)
-                      env:
-                        DATABRICKS_HOST: $(DATABRICKS_HOST)
-                        DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
-                        DBX_SOURCE_PASSWORD: $(DBX_SOURCE_PASSWORD)
-                        DBX_DEVOPS_PAT: $(DBX_DEVOPS_PAT)
-                        AZURE_CLIENT_ID: $(AZURE_CLIENT_ID)
-                        AZURE_CLIENT_SECRET: $(AZURE_CLIENT_SECRET)
-                        AZURE_TENANT_ID: $(AZURE_TENANT_ID)
-                    - publish: deploy/reports
-                      artifact: deploy-report-${{ client }}
-                      condition: always()
+  #
+  # Compile-time guarded: with an empty `clients` list this stage is omitted
+  # entirely (a stage with zero jobs is a hard YAML error, not just "skipped").
+  ${{ if gt(length(parameters.clients), 0) }}:
+    - stage: DeployClients
+      displayName: "04 · Deploy to client production workspaces"
+      dependsOn: DeployStaging
+      condition: and(succeeded(), eq(variables.isReleaseTag, 'true'))
+      jobs:
+        - ${{ each client in parameters.clients }}:
+            - deployment: Deploy_${{ replace(client, '-', '_') }}
+              displayName: "Deploy to ${{ client }}"
+              pool:
+                vmImage: ubuntu-latest
+              environment: clients-prod
+              variables:
+                - group: kv-${{ client }}
+              strategy:
+                runOnce:
+                  deploy:
+                    steps:
+                      - checkout: self
+                      - task: UsePythonVersion@0
+                        inputs:
+                          versionSpec: $(pythonVersion)
+                      - bash: |
+                          curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+                        displayName: Install Databricks CLI
+                      - bash: |
+                          set -e
+                          mkdir -p deploy/clients
+                          # CLIENT_CONFIG_JSON is the filled-in client.template.json
+                          # (non-secret values) stored as a variable in kv-${{ client }}.
+                          printf '%s' "$(CLIENT_CONFIG_JSON)" > deploy/clients/${{ client }}.json
+                        displayName: Render client config
+                      - bash: |
+                          python -m pip install --upgrade pip
+                          pip install -r requirements.txt
+                        displayName: Install Python dependencies
+                      - bash: |
+                          set -e
+                          python deploy/one_click_deploy.py \
+                            --client-config deploy/clients/${{ client }}.json \
+                            --yes
+                        displayName: One-click deploy to ${{ client }} (infra + secrets + Genie + app)
+                        env:
+                          DATABRICKS_HOST: $(DATABRICKS_HOST)
+                          DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
+                          DBX_SOURCE_PASSWORD: $(DBX_SOURCE_PASSWORD)
+                          DBX_DEVOPS_PAT: $(DBX_DEVOPS_PAT)
+                          AZURE_CLIENT_ID: $(AZURE_CLIENT_ID)
+                          AZURE_CLIENT_SECRET: $(AZURE_CLIENT_SECRET)
+                          AZURE_TENANT_ID: $(AZURE_TENANT_ID)
+                      - publish: deploy/reports
+                        artifact: deploy-report-${{ client }}
+                        condition: always()
