@@ -115,9 +115,12 @@ _SAMPLE_TABLES_META = [
 
 
 def _save_model(key, model):
-    """Cache model both in-memory and in SQLite."""
+    """Cache model in-memory; best-effort persist to Delta (never blocks on failure)."""
     _DM_MODELS[key] = model
-    db.save_model(key, model)
+    try:
+        db.save_model(key, model)
+    except Exception as exc:
+        logger.warning("Model persistence skipped (no Databricks SQL connection): %s", exc)
 
 
 def _get_model(key):

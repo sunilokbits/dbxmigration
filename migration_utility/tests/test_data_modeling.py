@@ -12,8 +12,9 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
-# Ensure module is importable
-sys.path.insert(0, os.path.dirname(__file__))
+# Ensure module is importable (data_modeling.py lives in migration_utility/,
+# one directory up from this tests/ folder)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import data_modeling as dm
 
 
@@ -773,7 +774,7 @@ class TestFlaskRoutes(unittest.TestCase):
         cls.client = cls.app.test_client()
 
     def test_catalogs_schemas_endpoint(self):
-        resp = self.client.get("/api/datamodel/catalogs-schemas")
+        resp = self.client.get("/api/v1/datamodel/catalogs-schemas")
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
         self.assertTrue(data["success"])
@@ -781,10 +782,10 @@ class TestFlaskRoutes(unittest.TestCase):
         self.assertIsInstance(data["catalog_schemas"], list)
 
     @patch("data_modeling.list_available_tables", return_value=["employees", "departments"])
-    @patch("app._dm_get_warehouse", return_value="wh-123")
+    @patch("routes.datamodel._dm_get_warehouse", return_value="wh-123")
     def test_tables_endpoint(self, mock_wh, mock_list):
         resp = self.client.post(
-            "/api/datamodel/tables",
+            "/api/v1/datamodel/tables",
             json={"catalog": "bronze", "schema": "hr"},
         )
         self.assertEqual(resp.status_code, 200)
@@ -794,7 +795,7 @@ class TestFlaskRoutes(unittest.TestCase):
 
     def test_tables_endpoint_missing_params(self):
         resp = self.client.post(
-            "/api/datamodel/tables",
+            "/api/v1/datamodel/tables",
             json={"catalog": "", "schema": ""},
         )
         data = resp.get_json()
@@ -802,11 +803,11 @@ class TestFlaskRoutes(unittest.TestCase):
         self.assertIn("required", data["error"].lower())
 
     @patch("data_modeling.fetch_table_metadata")
-    @patch("app._dm_get_warehouse", return_value="wh-123")
+    @patch("routes.datamodel._dm_get_warehouse", return_value="wh-123")
     def test_generate_endpoint(self, mock_wh, mock_fetch):
         mock_fetch.return_value = _sample_tables_meta()
         resp = self.client.post(
-            "/api/datamodel/generate",
+            "/api/v1/datamodel/generate",
             json={"catalog": "bronze", "schema": "hr", "tables": ["sales_transactions", "customer"]},
         )
         self.assertEqual(resp.status_code, 200)
@@ -819,26 +820,26 @@ class TestFlaskRoutes(unittest.TestCase):
 
     def test_generate_endpoint_no_tables(self):
         resp = self.client.post(
-            "/api/datamodel/generate",
+            "/api/v1/datamodel/generate",
             json={"catalog": "bronze", "schema": "hr", "tables": []},
         )
         data = resp.get_json()
         self.assertFalse(data["success"])
 
     @patch("data_modeling.fetch_table_metadata")
-    @patch("app._dm_get_warehouse", return_value="wh-123")
+    @patch("routes.datamodel._dm_get_warehouse", return_value="wh-123")
     def test_edit_endpoint(self, mock_wh, mock_fetch):
         mock_fetch.return_value = _sample_tables_meta()
         # First generate
         gen_resp = self.client.post(
-            "/api/datamodel/generate",
+            "/api/v1/datamodel/generate",
             json={"catalog": "bronze", "schema": "hr", "tables": ["sales_transactions", "customer"]},
         )
         model_id = gen_resp.get_json()["model_id"]
 
         # Now edit
         resp = self.client.post(
-            "/api/datamodel/edit",
+            "/api/v1/datamodel/edit",
             json={
                 "model_id": model_id,
                 "catalog": "bronze",
@@ -856,25 +857,25 @@ class TestFlaskRoutes(unittest.TestCase):
 
     def test_edit_endpoint_missing_model(self):
         resp = self.client.post(
-            "/api/datamodel/edit",
+            "/api/v1/datamodel/edit",
             json={"model_id": "nonexistent", "edits": {}},
         )
         data = resp.get_json()
         self.assertFalse(data["success"])
 
     @patch("data_modeling.fetch_table_metadata")
-    @patch("app._dm_get_warehouse", return_value="wh-123")
+    @patch("routes.datamodel._dm_get_warehouse", return_value="wh-123")
     def test_ddl_endpoint(self, mock_wh, mock_fetch):
         mock_fetch.return_value = _sample_tables_meta()
         # Generate first
         gen_resp = self.client.post(
-            "/api/datamodel/generate",
+            "/api/v1/datamodel/generate",
             json={"catalog": "bronze", "schema": "hr", "tables": ["sales_transactions", "customer"]},
         )
         model_id = gen_resp.get_json()["model_id"]
 
         resp = self.client.post(
-            "/api/datamodel/ddl",
+            "/api/v1/datamodel/ddl",
             json={"model_id": model_id, "catalog": "bronze", "schema": "hr"},
         )
         self.assertEqual(resp.status_code, 200)
