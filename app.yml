@@ -37,17 +37,17 @@ env:
   - name: FLASK_SECRET_KEY
     value: "dbx-migration-studio-secret-key-2026"
 
-  - name: DATABRICKS_SERVER_HOSTNAME
-    value: "adb-7405613585789005.5.azuredatabricks.net"
-
-  - name: DATABRICKS_HTTP_PATH
-    value: "/sql/1.0/warehouses/d01073f7104f07ff"
-
-  - name: DATABRICKS_SQL_WAREHOUSE_ID
-    value: "d01073f7104f07ff"
-
-  - name: DATABRICKS_HOST
-    value: "https://adb-7405613585789005.5.azuredatabricks.net"
+  # DATABRICKS_HOST/DATABRICKS_SERVER_HOSTNAME are intentionally NOT set here.
+  # Databricks Apps auto-injects DATABRICKS_HOST for whatever workspace the
+  # app actually runs in; hardcoding it here previously pointed every
+  # deployment (dev/staging/every client) at one fixed workspace regardless
+  # of where it was actually deployed, causing the app to try connecting
+  # cross-workspace and hang in an OAuth flow that can never complete.
+  #
+  # DATABRICKS_SQL_WAREHOUSE_ID / DATABRICKS_HTTP_PATH are also intentionally
+  # NOT hardcoded here for the same reason (the ID here belonged to a
+  # different workspace) -- set per-environment via the bundle's
+  # resources/migration_app.yml (${var.sql_warehouse_id}) instead.
 
   - name: RUNNING_ON_DBX_APPS
     value: "true"
