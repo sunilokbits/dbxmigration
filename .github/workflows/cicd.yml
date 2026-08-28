@@ -94,7 +94,6 @@ jobs:
         run: |
           set -e
           databricks bundle deploy -t dev
-          databricks bundle run -t dev migration_studio || true
 
   # ---------------------------------------------------------------------------
   # Only runs when manually dispatched with deploy_staging=true, so a normal

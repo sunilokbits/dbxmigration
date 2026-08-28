@@ -126,7 +126,6 @@ stages:
           - bash: |
               set -e
               databricks bundle deploy -t dev
-              databricks bundle run -t dev migration_studio || true
             displayName: databricks bundle deploy -t dev
             env:
               DATABRICKS_HOST: $(DATABRICKS_HOST)
