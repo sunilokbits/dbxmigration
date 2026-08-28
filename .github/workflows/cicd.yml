@@ -101,8 +101,15 @@ jobs:
           DATABRICKS_BUNDLE_ENGINE: terraform
         run: |
           set -e
-          databricks bundle deploy -t dev
-          databricks bundle run -t dev migration_studio
+          OUT=$(databricks bundle deploy -t dev 2>&1 | tee /dev/stderr)
+          # bundle deploy reconciles the App resource's config but does not
+          # itself trigger a code deployment (confirmed: "Resources: ...
+          # unchanged" on runs where files were freshly re-uploaded). Extract
+          # the workspace path it just uploaded to and deploy that snapshot
+          # via the native Apps API command, which -- unlike `bundle run` --
+          # doesn't hit the "Must specify environment variable source" bug.
+          SRC_PATH=$(echo "$OUT" | grep "Uploading bundle files to" | sed -E 's#.*Uploading bundle files to (.*)\.\.\.#\1#')
+          databricks apps deploy dbxmigrationapp --source-code-path "$SRC_PATH" --mode SNAPSHOT
 
   # ---------------------------------------------------------------------------
   # Only runs when manually dispatched with deploy_staging=true, so a normal
