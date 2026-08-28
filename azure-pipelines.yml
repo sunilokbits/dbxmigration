@@ -97,31 +97,27 @@ stages:
     dependsOn: Validate
     condition: and(succeeded(), eq(variables.isMain, 'true'))
     jobs:
-      - deployment: DeployDev
+      - job: DeployDev
         pool:
           vmImage: ubuntu-latest
-        environment: dev
         variables:
           - group: kv-dev
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - checkout: self
-                - task: UsePythonVersion@0
-                  inputs:
-                    versionSpec: $(pythonVersion)
-                - bash: |
-                    curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
-                  displayName: Install Databricks CLI
-                - bash: |
-                    set -e
-                    databricks bundle deploy -t dev
-                    databricks bundle run -t dev sql_to_databricks_migration_app || true
-                  displayName: databricks bundle deploy -t dev
-                  env:
-                    DATABRICKS_HOST: $(DATABRICKS_HOST)
-                    DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
+        steps:
+          - checkout: self
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: $(pythonVersion)
+          - bash: |
+              curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+            displayName: Install Databricks CLI
+          - bash: |
+              set -e
+              databricks bundle deploy -t dev
+              databricks bundle run -t dev sql_to_databricks_migration_app || true
+            displayName: databricks bundle deploy -t dev
+            env:
+              DATABRICKS_HOST: $(DATABRICKS_HOST)
+              DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
 
   # ---------------------------------------------------------------------------
   - stage: DeployStaging
@@ -129,37 +125,33 @@ stages:
     dependsOn: DeployDev
     condition: succeeded()
     jobs:
-      - deployment: DeployStaging
+      - job: DeployStaging
         pool:
           vmImage: ubuntu-latest
-        environment: staging
         variables:
           - group: kv-staging
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - checkout: self
-                - task: UsePythonVersion@0
-                  inputs:
-                    versionSpec: $(pythonVersion)
-                - bash: |
-                    curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
-                  displayName: Install Databricks CLI
-                - bash: |
-                    set -e
-                    databricks bundle deploy -t staging
-                  displayName: databricks bundle deploy -t staging
-                  env:
-                    DATABRICKS_HOST: $(DATABRICKS_HOST)
-                    DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
-                - bash: |
-                    pip install -r requirements.txt
-                    pytest migration_utility/tests -v -m integration || true
-                  displayName: Run integration tests against staging
-                  env:
-                    DATABRICKS_HOST: $(DATABRICKS_HOST)
-                    DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
+        steps:
+          - checkout: self
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: $(pythonVersion)
+          - bash: |
+              curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+            displayName: Install Databricks CLI
+          - bash: |
+              set -e
+              databricks bundle deploy -t staging
+            displayName: databricks bundle deploy -t staging
+            env:
+              DATABRICKS_HOST: $(DATABRICKS_HOST)
+              DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
+          - bash: |
+              pip install -r requirements.txt
+              pytest migration_utility/tests -v -m integration || true
+            displayName: Run integration tests against staging
+            env:
+              DATABRICKS_HOST: $(DATABRICKS_HOST)
+              DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
 
   # ---------------------------------------------------------------------------
   # One job per client, fully in parallel, each gated by the same manual
