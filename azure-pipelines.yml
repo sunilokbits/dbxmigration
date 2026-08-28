@@ -44,9 +44,11 @@ parameters:
   - name: clients
     displayName: Client workspaces to deploy (production)
     type: object
-    default:
-      - insight
-      - test-client
+    # Empty until a client has a real kv-<name> variable group — Azure DevOps
+    # validates every kv-<client> group referenced here exists BEFORE running,
+    # even for stages that end up skipped, so an unconfigured client here
+    # would fail the whole pipeline before Validate/DeployDev even start.
+    default: []
   - name: deployStaging
     displayName: Deploy to Staging (requires kv-staging to be configured)
     type: boolean

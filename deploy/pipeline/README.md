@@ -61,9 +61,13 @@ parameters:
   - name: clients
     default:
       - insight
-      - test-client
 ```
-Each name needs a matching `kv-<name>` group from step 2.
+**Important:** Azure DevOps checks that every `kv-<name>` group referenced here
+exists *before the pipeline runs at all* — even for the `DeployClients` stage,
+which normally only runs on a `release/*` tag. If you list a client whose
+`kv-<name>` group doesn't exist yet (or was deleted), the **entire pipeline
+fails immediately**, including `Validate` and `DeployDev`. Keep this list
+empty (`default: []`) until each client's variable group actually exists.
 
 ## 5. Ship it
 
