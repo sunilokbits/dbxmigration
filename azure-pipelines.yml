@@ -100,6 +100,9 @@ stages:
           - bash: |
               pytest migration_utility/tests -v
             displayName: Run unit tests
+            env:
+              DATABRICKS_HOST: $(DATABRICKS_HOST)
+              DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
 
   # ---------------------------------------------------------------------------
   - stage: DeployDev

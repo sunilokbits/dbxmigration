@@ -68,6 +68,9 @@ jobs:
           databricks bundle validate -t staging
           databricks bundle validate -t client --var="client_name=ci-validate"
       - name: Run unit tests
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: pytest migration_utility/tests -v
 
   # ---------------------------------------------------------------------------
