@@ -6,7 +6,7 @@
 <title>SQL → Databricks Migration Studio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/main.css?v=45">
+<link rel="stylesheet" href="/static/main.css?v=51">
 <link rel="stylesheet" href="/static/supplementary.css?v=49">
 <style>
   /* Force light sidebar - overrides all cached CSS */
@@ -1148,22 +1148,28 @@
 
       <!-- === STATUS OVERVIEW RIBBON === -->
       <div class="cfg-status-ribbon">
-        <div class="cfg-status-pill" id="cfgStatAzure" onclick="cfgToggleAccordion('cfgAccAzure')">
+        <div class="cfg-status-pill" id="cfgStatAzure" onclick="cfgToggleAccordion('cfgAccAzure')" style="--pill-c:var(--blue);">
+          <svg class="cfg-pill-ico" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
           <span class="cfg-dot"></span>Azure
         </div>
-        <div class="cfg-status-pill" id="cfgStatSrc" onclick="cfgToggleAccordion('cfgAccSource')">
+        <div class="cfg-status-pill" id="cfgStatSrc" onclick="cfgToggleAccordion('cfgAccSource')" style="--pill-c:#7C3AED;">
+          <svg class="cfg-pill-ico" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
           <span class="cfg-dot"></span>Source DB
         </div>
-        <div class="cfg-status-pill" id="cfgStatStorage" onclick="cfgToggleAccordion('cfgAccStorage')">
+        <div class="cfg-status-pill" id="cfgStatStorage" onclick="cfgToggleAccordion('cfgAccStorage')" style="--pill-c:var(--green);">
+          <svg class="cfg-pill-ico" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
           <span class="cfg-dot"></span>Storage
         </div>
-        <div class="cfg-status-pill" id="cfgStatUC" onclick="cfgToggleAccordion('cfgAccUC')">
+        <div class="cfg-status-pill" id="cfgStatUC" onclick="cfgToggleAccordion('cfgAccUC')" style="--pill-c:var(--accent-primary);">
+          <svg class="cfg-pill-ico" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
           <span class="cfg-dot"></span>Unity Catalog
         </div>
-        <div class="cfg-status-pill" id="cfgStatCDC" onclick="cfgToggleAccordion('cfgAccCDC')">
+        <div class="cfg-status-pill" id="cfgStatCDC" onclick="cfgToggleAccordion('cfgAccCDC')" style="--pill-c:#f59e0b;">
+          <svg class="cfg-pill-ico" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 10 10-12h-9l1-10z"/></svg>
           <span class="cfg-dot"></span>CDC / SDP
         </div>
-        <div class="cfg-status-pill" id="cfgStatDevOps" onclick="cfgToggleAccordion('cfgAccDevOps')">
+        <div class="cfg-status-pill" id="cfgStatDevOps" onclick="cfgToggleAccordion('cfgAccDevOps')" style="--pill-c:#0078D4;">
+          <svg class="cfg-pill-ico" viewBox="0 0 24 24"><path d="M22 4L12 2 4 5v6c0 5.55 3.84 10.74 8 12 4.16-1.26 8-6.45 8-12V4z"/></svg>
           <span class="cfg-dot"></span>DevOps
         </div>
       </div>
@@ -1198,7 +1204,7 @@
               </select>
             </div>
           </div>
-          <div style="margin-top:12px;padding:10px 14px;background:var(--surface-2);border-radius:8px;border:1px solid var(--border);">
+          <div class="cfg-subcard" style="margin-top:12px;">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
               <div style="font-size:11px;font-weight:700;color:var(--t2);">Databricks Workspace Credentials</div>
               <span id="cfgDbrConnBadge" class="cfg-conn-badge">Not Tested</span>
@@ -1218,7 +1224,7 @@
             </div>
             <div style="margin-top:4px;font-size:9px;color:var(--t4);">Required for infrastructure deployment (Steps 3-6). Saved to deployconfig.json.</div>
           </div>
-          <div style="margin-top:12px;padding:10px 14px;background:var(--surface-2);border-radius:8px;border:1px solid var(--border);">
+          <div class="cfg-subcard" style="margin-top:12px;">
             <div style="font-size:11px;font-weight:700;color:var(--t2);margin-bottom:4px;">
               <svg viewBox="0 0 24 24" style="width:12px;height:12px;vertical-align:-1px;margin-right:4px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
               Azure Service Principal <span style="font-size:9px;font-weight:400;color:var(--t4);margin-left:4px;">(for automated RBAC &amp; infra)</span>
@@ -1241,7 +1247,7 @@
             </div>
             <div id="cfgSpStatus" style="margin-top:6px;font-size:9px;color:var(--t4);"></div>
           </div>
-          <div style="margin-top:12px;padding:10px 14px;background:var(--surface-2);border-radius:8px;border:1px solid var(--border);">
+          <div class="cfg-subcard" style="margin-top:12px;">
             <div style="font-size:11px;font-weight:700;color:var(--t2);margin-bottom:8px;">Metadata Tables Location</div>
             <div style="font-size:10px;color:var(--t4);margin-bottom:6px;">Where the 5 workflow metadata tables are stored. Auto-set on MetadataFlow init.</div>
             <div class="cfg-grid">
@@ -1274,9 +1280,6 @@
                 <option value="redshift">🟥 Redshift</option>
                 <option value="sharepoint">📄 SharePoint</option>
                 <option value="api">🌐 REST API</option>
-                <option value="mysql">🐬 MySQL</option>
-                <option value="postgresql">🐘 PostgreSQL</option>
-                <option value="oracle">🔴 Oracle</option>
               </select>
             </div>
             <div id="cfgSrcServerRow"><label class="lbl" id="cfgSrcServerLabel">Server / Host <span class="cfg-req">*</span></label><input class="inp" id="cfgSrcServer" placeholder="server.database.windows.net" oninput="cfgUpdateStatus()"></div>
@@ -1333,7 +1336,7 @@
             <label class="lbl">Folder Paths <span style="font-weight:400;color:var(--t4);">(one per line)</span></label>
             <textarea class="inp" id="cfgFolders" rows="3" style="font-family:var(--font-mono);font-size:11px;resize:vertical;" placeholder="dev/landing&#10;dev/uc-managed/bronze&#10;dev/uc-managed/silver"></textarea>
           </div>
-          <div style="margin-top:12px;padding:10px 14px;background:var(--surface-2);border-radius:8px;border:1px solid var(--border);">
+          <div class="cfg-subcard" style="margin-top:12px;">
             <div style="font-size:11px;font-weight:700;color:var(--t2);margin-bottom:8px;">
               <svg viewBox="0 0 24 24" style="width:12px;height:12px;vertical-align:-1px;margin-right:4px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
               Access Connector &amp; Storage Credential
@@ -1365,14 +1368,14 @@
               </select>
             </div>
             <div style="margin-top:8px;display:flex;align-items:center;gap:10px;">
-              <button class="btn btn-xs" id="btnApplyRbac" onclick="cfgApplyRbac()" style="background:var(--blue);color:#fff;padding:5px 14px;font-weight:600;font-size:11px;">
+              <button class="btn btn-xs" id="btnApplyRbac" onclick="cfgApplyRbac()" style="background:#7C3AED;color:#fff;padding:5px 14px;font-weight:600;font-size:11px;">
                 <svg viewBox="0 0 24 24" style="width:12px;height:12px;margin-right:4px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                Apply RBAC to App Service Identity
+                Assign RBAC to Service Principal
               </button>
               <span id="rbacStatus" style="font-size:10px;color:var(--t3);"></span>
             </div>
           </div>
-          <div style="margin-top:12px;padding:10px 14px;background:var(--surface-2);border-radius:8px;border:1px solid var(--border);">
+          <div class="cfg-subcard" style="margin-top:12px;">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
               <div style="font-size:11px;font-weight:700;color:var(--t2);">
                 <svg viewBox="0 0 24 24" style="width:12px;height:12px;vertical-align:-1px;margin-right:4px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
@@ -1388,7 +1391,7 @@
       <!-- 4. UNITY CATALOG OBJECTS -->
       <div class="cfg-acc" id="cfgAccUC">
         <button class="cfg-acc-hd" onclick="cfgToggleAccordion('cfgAccUC')">
-          <svg class="cfg-acc-ico" viewBox="0 0 24 24" style="color:var(--blue);"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
+          <svg class="cfg-acc-ico" viewBox="0 0 24 24" style="color:var(--accent-primary);"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
           <span class="cfg-acc-title">Unity Catalog Objects</span>
           <span class="cfg-acc-hint" id="cfgHintUC"></span>
           <svg class="cfg-acc-arrow" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
@@ -1401,7 +1404,7 @@
           <div id="cfgCatalogList"></div>
           <p style="font-size:10px;color:var(--t4);margin:4px 0 0;">Schemas: comma-separated (e.g. default,hr,raw). Leave blank for just &ldquo;default&rdquo;.</p>
 
-          <div style="margin-top:14px;padding:10px 14px;background:var(--surface-2);border-radius:8px;border:1px solid var(--border);">
+          <div class="cfg-subcard" style="margin-top:14px;">
             <div style="font-size:11px;font-weight:700;color:var(--t2);margin-bottom:8px;">
               <svg viewBox="0 0 24 24" style="width:12px;height:12px;vertical-align:-1px;margin-right:4px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
               Volume Configuration
@@ -1419,7 +1422,7 @@
             </div>
           </div>
 
-          <div style="margin-top:14px;padding:10px 14px;background:var(--surface-2);border-radius:8px;border:1px solid var(--border);">
+          <div class="cfg-subcard" style="margin-top:14px;">
             <div style="font-size:11px;font-weight:700;color:var(--t2);margin-bottom:4px;">
               <svg viewBox="0 0 24 24" style="width:12px;height:12px;vertical-align:-1px;margin-right:4px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
               Reconciliation &amp; Logging Tables
@@ -1520,8 +1523,8 @@
       <div class="cfg-acc" id="cfgAccDevOps">
         <button class="cfg-acc-hd" onclick="cfgToggleAccordion('cfgAccDevOps')">
           <svg class="cfg-acc-ico" viewBox="0 0 24 24" style="color:#0078D4;"><path d="M22 4L12 2 4 5v6c0 5.55 3.84 10.74 8 12 4.16-1.26 8-6.45 8-12V4z"/></svg>
-          Azure DevOps — Git Integration
-          <span class="cfg-acc-chv">▾</span>
+          <span class="cfg-acc-title">Azure DevOps — Git Integration</span>
+          <svg class="cfg-acc-arrow" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
         <div class="cfg-acc-body">
           <div style="font-size:11px;color:var(--t3);margin-bottom:12px;">
@@ -1733,7 +1736,7 @@
           </div><!-- /cfgLayerMappingCards -->
 
         <!-- Validation Summary -->
-        <div id="cfgExValidationSummary" style="margin-top:12px;padding:10px 14px;background:var(--surface-2);border-radius:8px;border:1px solid var(--border);display:none;">
+        <div id="cfgExValidationSummary" class="cfg-subcard" style="margin-top:12px;display:none;">
           <div style="font-weight:600;font-size:12px;color:var(--t1);margin-bottom:4px;">Validation Summary</div>
           <div id="cfgExValidationList" style="font-size:11px;color:var(--t2);"></div>
         </div>
@@ -4474,7 +4477,7 @@
 <!-- ════════════════════════════════════════════════════════════════════════════
      JAVASCRIPT — all logic unchanged, just the file
      ════════════════════════════════════════════════════════════════════════════ -->
-<script src="/static/main.js?v=27072026j"></script>
+<script src="/static/main.js?v=27072026m"></script>
 <script src="/static/discovery.js?v=33"></script>
 
 <!-- Post-diagnostic: runs AFTER the main script to verify & add fallback listeners -->

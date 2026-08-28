@@ -77,6 +77,203 @@ def test_databricks_conn():
         logger.error("Test Databricks connection failed: %s", e)
         return jsonify({"success": False, "error": str(e)[:200]})
 
+
+@settings_bp.route("/test-storage-credential", methods=["POST"])
+@login_required
+def test_storage_credential():
+    """Look up a Unity Catalog storage credential and validate it can reach ADLS."""
+    import json as _json
+    try:
+        import requests as req
+        body = request.get_json(force=True)
+        host = (body.get("databricks_host") or "").rstrip("/")
+        token = body.get("databricks_token") or ""
+        cred_name = (body.get("storage_credential_name") or "").strip()
+        test_url = (body.get("test_url") or "").strip()
+
+        if not token or token.startswith("•"):
+            token = get_databricks_token()
+        cfg = get_config()
+        if not host:
+            host = (cfg.get("databricks_host") or "").rstrip("/")
+        if not host or not token:
+            return jsonify({"success": False, "error": "Databricks host and token are required"})
+        if not cred_name:
+            return jsonify({"success": False, "error": "Storage Credential Name (or Access Connector Name) is required"})
+
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # 1) Does the credential exist?
+        get_resp = req.get(
+            f"{host}/api/2.1/unity-catalog/storage-credentials/{cred_name}",
+            headers=headers, timeout=20,
+        )
+        if get_resp.status_code == 404:
+            return jsonify({"success": False, "error": f"Storage credential '{cred_name}' not found in Unity Catalog."})
+        if get_resp.status_code != 200:
+            return jsonify({"success": False, "error": f"Failed to look up credential (HTTP {get_resp.status_code}): {get_resp.text[:200]}"})
+        cred = get_resp.json()
+        credential_id = cred.get("id", "")
+        owner = cred.get("owner", "")
+        access_connector_id = (cred.get("azure_managed_identity") or {}).get("access_connector_id", "")
+
+        # 2) Does an external location already cover the test URL?
+        external_location = ""
+        if test_url:
+            try:
+                loc_resp = req.get(f"{host}/api/2.1/unity-catalog/external-locations", headers=headers, timeout=20)
+                if loc_resp.status_code == 200:
+                    for loc in loc_resp.json().get("external_locations", []):
+                        loc_url = (loc.get("url") or "").rstrip("/")
+                        if loc_url and test_url.rstrip("/").startswith(loc_url):
+                            external_location = loc.get("name", "")
+                            break
+            except Exception:
+                pass  # non-fatal — external location coverage is informational only
+
+        # 3) Validate the credential can actually reach storage (same technique
+        #    AutoInfraCreation.create_storage_credential uses: a force PATCH with
+        #    skip_validation=False triggers Databricks to live-test the connector).
+        if not access_connector_id:
+            return jsonify({
+                "success": False,
+                "error": "Credential has no Azure managed identity / access connector attached.",
+                "credential_id": credential_id, "owner": owner,
+            })
+        validate_resp = req.patch(
+            f"{host}/api/2.1/unity-catalog/storage-credentials/{cred_name}",
+            headers=headers, timeout=45,
+            json={
+                "azure_managed_identity": {"access_connector_id": access_connector_id},
+                "skip_validation": False,
+                "force": True,
+            },
+        )
+        if validate_resp.status_code == 200:
+            return jsonify({
+                "success": True,
+                "message": "Credential can access storage",
+                "credential_name": cred_name, "credential_id": credential_id, "owner": owner,
+                "access_connector_id": access_connector_id, "external_location": external_location,
+                "validation": {"passed": True, "overlap": bool(external_location), "url": test_url},
+            })
+        try:
+            verr = validate_resp.json()
+        except Exception:
+            verr = {"message": validate_resp.text[:300]}
+        err_msg = verr.get("message") or _json.dumps(verr)[:300]
+        return jsonify({
+            "success": False,
+            "error": "Storage access validation failed — RBAC may still be propagating (can take 5-10 min after role assignment).",
+            "detail": err_msg[:300],
+            "credential_id": credential_id, "owner": owner, "access_connector_id": access_connector_id,
+        })
+    except req.exceptions.Timeout:
+        return jsonify({"success": False, "error": "Connection timed out. Check host URL."})
+    except req.exceptions.ConnectionError as e:
+        return jsonify({"success": False, "error": f"Connection error: {str(e)[:100]}"})
+    except Exception as e:
+        logger.error("Test storage credential failed: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)[:200]})
+
+
+@settings_bp.route("/apply-rbac", methods=["POST"])
+@login_required
+def apply_rbac():
+    """Assign an Azure RBAC role to the configured Azure Service Principal on the storage account.
+
+    NOTE: this app runs as a Databricks App (see app.yml), not an Azure App
+    Service — there is no separate "App Service managed identity" resource to
+    target. The only real, resolvable identity available here is the Azure
+    Service Principal already configured above (Tenant ID / Client ID /
+    Client Secret), so that is what this endpoint grants the role to.
+    """
+    role_name = None
+    client_id = None
+    try:
+        body = request.get_json(force=True)
+        role_name = (body.get("role_name") or "Storage Blob Data Owner").strip()
+        cfg = get_config()
+        sub = cfg.get("subscription_id", "")
+        rg = cfg.get("resource_group", "")
+        sa = cfg.get("storage_account", "")
+        tenant_id = cfg.get("azure_tenant_id", "")
+        client_id = cfg.get("azure_client_id", "")
+        client_secret = cfg.get("azure_client_secret", "")
+
+        missing = [label for label, val in [
+            ("Subscription ID", sub), ("Resource Group", rg), ("Storage Account Name", sa),
+            ("Tenant ID", tenant_id), ("Client ID", client_id), ("Client Secret", client_secret),
+        ] if not val]
+        if missing:
+            return jsonify({"success": False, "error": "Missing required fields: " + ", ".join(missing)})
+
+        import requests as req
+        from azure.identity import ClientSecretCredential
+        credential = ClientSecretCredential(tenant_id=tenant_id, client_id=client_id, client_secret=client_secret)
+
+        # 1) Resolve the Service Principal's AAD object ID via Microsoft Graph —
+        #    Azure RBAC role assignments need the object ID, not the app/client ID.
+        graph_token = credential.get_token("https://graph.microsoft.com/.default").token
+        sp_resp = req.get(
+            "https://graph.microsoft.com/v1.0/servicePrincipals",
+            headers={"Authorization": f"Bearer {graph_token}"},
+            params={"$filter": f"appId eq '{client_id}'"},
+            timeout=20,
+        )
+        if sp_resp.status_code != 200:
+            return jsonify({
+                "success": False,
+                "error": f"Could not look up the Service Principal in Microsoft Graph (HTTP {sp_resp.status_code}). "
+                         "It may lack Graph read permissions.",
+                "detail": sp_resp.text[:300],
+                "cli_command": f"az ad sp show --id {client_id} --query id -o tsv",
+            })
+        sp_values = sp_resp.json().get("value", [])
+        if not sp_values:
+            return jsonify({"success": False, "error": f"No Service Principal found for Client ID '{client_id}'."})
+        principal_id = sp_values[0]["id"]
+
+        # 2) Resolve the built-in role definition for the requested role name.
+        from azure.mgmt.authorization import AuthorizationManagementClient
+        import uuid
+        storage_scope = (
+            f"/subscriptions/{sub}/resourceGroups/{rg}"
+            f"/providers/Microsoft.Storage/storageAccounts/{sa}"
+        )
+        auth_client = AuthorizationManagementClient(credential, sub)
+        role_defs = list(auth_client.role_definitions.list(storage_scope, filter=f"roleName eq '{role_name}'"))
+        if not role_defs:
+            return jsonify({"success": False, "error": f"Role definition '{role_name}' not found."})
+        role_def_id = role_defs[0].id
+
+        # 3) Create the role assignment (idempotent — treat "already exists" as success).
+        assignment_name = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{principal_id}:{role_def_id}:{storage_scope}"))
+        try:
+            auth_client.role_assignments.create(
+                storage_scope, assignment_name,
+                {"role_definition_id": role_def_id, "principal_id": principal_id, "principal_type": "ServicePrincipal"},
+            )
+        except Exception as e:
+            if "alreadyexists" not in str(e).lower().replace(" ", ""):
+                raise
+
+        return jsonify({
+            "success": True,
+            "message": f'"{role_name}" assigned to Service Principal ({client_id}) on storage account "{sa}".',
+        })
+    except Exception as e:
+        logger.error("Apply RBAC failed: %s", e, exc_info=True)
+        err = str(e)
+        resp = {"success": False, "error": err[:300]}
+        if "authorizationfailed" in err.lower().replace(" ", "") or "does not have authorization" in err.lower():
+            resp["cli_command"] = (
+                f"az role assignment create --assignee {client_id or '<client-id>'} "
+                f"--role \"{role_name or '<role>'}\" --scope <storage-account-resource-id>"
+            )
+        return jsonify(resp)
+
+
 @settings_bp.route("/settings/catalogs", methods=["GET"])
 @login_required
 def list_catalogs():

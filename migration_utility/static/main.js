@@ -25,7 +25,11 @@ function toast(msg,type='tinfo',dur=3200){
   const icons={tok:'✓',terr:'✕',tinfo:'ℹ'};
   const el=document.createElement('div');
   el.className='toast '+type;
-  el.innerHTML='<span style="font-weight:700;font-size:13px;flex-shrink:0;">'+(icons[type]||'ℹ')+'</span><span>'+msg+'</span>';
+  let safeMsg=String(msg==null?'':msg);
+  if(safeMsg.length>320) safeMsg=safeMsg.slice(0,320)+'… (truncated)';
+  if(type==='terr') dur=Math.max(dur,6000);
+  el.innerHTML='<span style="font-weight:700;font-size:13px;flex-shrink:0;">'+(icons[type]||'ℹ')+'</span><span class="toast-msg"></span>';
+  el.querySelector('.toast-msg').textContent=safeMsg;
   G('toasts').prepend(el);
   setTimeout(()=>{el.classList.add('hiding');setTimeout(()=>el.remove(),220);},dur);
 }
@@ -33,6 +37,39 @@ function showToast(msg,type='info'){
   const map={success:'tok',error:'terr',warning:'tinfo',info:'tinfo'};
   toast(msg,map[type]||'tinfo');
 }
+
+/* ── Themed confirm dialog (replaces native window.confirm, which renders
+   as an unstyled OS dialog with poor contrast) ── */
+function uiConfirm(message,opts={}){
+  return new Promise(resolve=>{
+    const danger=!!opts.danger;
+    const title=opts.title||(danger?'Confirm deletion':'Confirm action');
+    const okLabel=opts.okLabel||(danger?'Delete':'Confirm');
+    const overlay=document.createElement('div');
+    overlay.className='ui-confirm-overlay';
+    overlay.innerHTML=`
+      <div class="ui-confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="uiConfirmTitle">
+        <div class="ui-confirm-icon ${danger?'danger':''}">
+          <svg viewBox="0 0 24 24"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+        </div>
+        <div class="ui-confirm-title" id="uiConfirmTitle">${title}</div>
+        <div class="ui-confirm-msg">${String(message).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>')}</div>
+        <div class="ui-confirm-actions">
+          <button class="btn btn-ghost btn-xs ui-confirm-cancel">Cancel</button>
+          <button class="btn btn-xs ${danger?'ui-confirm-danger-btn':'btn-primary'} ui-confirm-ok">${okLabel}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const cleanup=result=>{overlay.classList.add('closing');setTimeout(()=>overlay.remove(),150);document.removeEventListener('keydown',onKey);resolve(result);};
+    const onKey=e=>{if(e.key==='Escape')cleanup(false);if(e.key==='Enter')cleanup(true);};
+    document.addEventListener('keydown',onKey);
+    overlay.addEventListener('mousedown',e=>{if(e.target===overlay)cleanup(false);});
+    overlay.querySelector('.ui-confirm-cancel').onclick=()=>cleanup(false);
+    overlay.querySelector('.ui-confirm-ok').onclick=()=>cleanup(true);
+    overlay.querySelector('.ui-confirm-ok').focus();
+  });
+}
+window.uiConfirm=uiConfirm;
 
 const TAB_META={
   convert:{title:'Convert SQL Objects to PySpark',sub:'One .py per SP/View · All UDFs bundled into HelperFunction.py',step:1},
@@ -3005,7 +3042,7 @@ async function wfRerunPipeline(groupId){
 }
 
 async function wfDeleteJob(jobId){
-  if(!confirm('Delete this job?'))return;
+  if(!(await uiConfirm('Delete this job?',{danger:true})))return;
   try{
     const r=await fetch('/api/v1/workflow/jobs/'+jobId,{method:'DELETE'});
     const d=await r.json();
@@ -3016,7 +3053,7 @@ async function wfDeleteJob(jobId){
 }
 
 async function wfDeletePipeline(groupId){
-  if(!confirm('Delete this entire pipeline group and all its jobs?'))return;
+  if(!(await uiConfirm('Delete this entire pipeline group and all its jobs?',{danger:true})))return;
   try{
     const r=await fetch('/api/v1/workflow/pipelines/'+groupId,{method:'DELETE'});
     const d=await r.json();
@@ -3265,7 +3302,7 @@ async function wfRefreshWatermarks(){
 }
 
 async function wfResetWatermark(table){
-  if(!confirm('Reset watermark for '+table+'? Next run will do a full load.'))return;
+  if(!(await uiConfirm('Reset watermark for '+table+'? Next run will do a full load.')))return;
   try{
     const r=await fetch('/api/v1/workflow/watermarks/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({table:table})});
     const d=await r.json();
@@ -4174,7 +4211,7 @@ async function cfgApplyRbac(){
   const role=G('cfgRole')?.value||'Storage Blob Data Owner';
   const sa=G('cfgStorageAcct')?.value?.trim();
   if(!sa){toast('Enter a Storage Account Name first','terr');return;}
-  if(!confirm(`Assign "${role}" role to the App Service managed identity on storage account "${sa}"?\n\nThis also assigns to the Access Connector if configured.`)) return;
+  if(!(await uiConfirm(`Assign "${role}" role to the Azure Service Principal (configured above) on storage account "${sa}"?`,{title:'Assign RBAC Role',okLabel:'Assign'}))) return;
   const btn=G('btnApplyRbac');
   const status=G('rbacStatus');
   btn.disabled=true;btn.textContent='Saving config & applying…';
@@ -4190,7 +4227,7 @@ async function cfgApplyRbac(){
     const d=await r.json();
     if(d.success){
       toast('RBAC role assigned successfully','tok');
-      if(status){status.style.cssText='font-size:10px;color:#16a34a;white-space:pre-wrap;max-width:800px;';status.textContent='✅ '+d.message;}
+      if(status){status.style.cssText='font-size:11px;font-weight:600;color:#16a34a;white-space:pre-wrap;max-width:800px;background:#f0fdf4;padding:6px 10px;border-radius:6px;border:1px solid #bbf7d0;margin-top:6px;display:inline-block;';status.textContent='✅ '+d.message;}
     }else{
       // Show CLI fallback command if provided
       if(d.cli_command){
@@ -4201,11 +4238,11 @@ async function cfgApplyRbac(){
         toast('Run the CLI command shown below','terr',6000);
       }else{
         toast(d.error||'Failed to apply RBAC','terr');
-        if(status){status.style.cssText='font-size:10px;color:#dc2626;white-space:pre-wrap;max-width:800px;';status.textContent='❌ '+(d.error||'Failed');}
+        if(status){status.style.cssText='font-size:11px;font-weight:600;color:#dc2626;white-space:pre-wrap;max-width:800px;background:#fef2f2;padding:6px 10px;border-radius:6px;border:1px solid #fecaca;margin-top:6px;display:inline-block;';status.textContent='❌ '+(d.error||'Failed');}
       }
     }
-  }catch(e){toast('Error: '+e.message,'terr');if(status){status.style.cssText='font-size:10px;color:#dc2626;';status.textContent='❌ '+e.message;}}
-  finally{btn.disabled=false;btn.innerHTML='<svg viewBox="0 0 24 24" style="width:12px;height:12px;margin-right:4px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Apply RBAC to App Service Identity';}
+  }catch(e){toast('Error: '+e.message,'terr');if(status){status.style.cssText='font-size:11px;font-weight:600;color:#dc2626;white-space:pre-wrap;max-width:800px;background:#fef2f2;padding:6px 10px;border-radius:6px;border:1px solid #fecaca;margin-top:6px;display:inline-block;';status.textContent='❌ '+e.message;}}
+  finally{btn.disabled=false;btn.innerHTML='<svg viewBox="0 0 24 24" style="width:12px;height:12px;margin-right:4px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Assign RBAC to Service Principal';}
 }
 
 async function cfgTestStorageCredential(){
@@ -4213,7 +4250,13 @@ async function cfgTestStorageCredential(){
   if(!credName){toast('Enter a Storage Credential Name (or Access Connector Name) first','terr');return;}
   const host=(G('cfgDbrHost')?.value||'').trim();
   const token=(G('cfgDbrToken')?.value||'').trim();
-  if(!host||!token){toast('Configure Databricks Host and Token first','terr');return;}
+  if(!host||!token){
+    toast('Databricks Host / PAT Token missing — opening "Azure Subscription & Databricks" section above','terr',5000);
+    const acc=G('cfgAccAzure');
+    if(acc){acc.classList.add('open');acc.scrollIntoView({behavior:'smooth',block:'start'});}
+    (host?G('cfgDbrToken'):G('cfgDbrHost'))?.focus();
+    return;
+  }
   // Build test URL from storage account + container
   const sa=(G('cfgStorageAcct')?.value||'').trim();
   const ct=(G('cfgContainer')?.value||'').trim();
@@ -4230,7 +4273,7 @@ async function cfgTestStorageCredential(){
     })});
     const d=await r.json();
     if(d.success){
-      status.style.cssText='font-size:10px;color:#16a34a;font-weight:600;';
+      status.style.cssText='font-size:11px;font-weight:600;color:#16a34a;background:#f0fdf4;padding:3px 9px;border-radius:20px;border:1px solid #bbf7d0;display:inline-block;';
       status.textContent='✅ '+(d.message||'Credential valid');
       let lines=['Credential: '+d.credential_name,'ID: '+d.credential_id,'Owner: '+d.owner];
       if(d.access_connector_id) lines.push('Access Connector: '+d.access_connector_id);
@@ -4240,7 +4283,7 @@ async function cfgTestStorageCredential(){
       detail.style.display='block';detail.style.borderColor='#16a34a';
       toast('Storage credential is valid','tok');
     }else{
-      status.style.cssText='font-size:10px;color:#dc2626;font-weight:600;';
+      status.style.cssText='font-size:11px;font-weight:600;color:#dc2626;background:#fef2f2;padding:3px 9px;border-radius:20px;border:1px solid #fecaca;display:inline-block;';
       status.textContent='❌ '+(d.error||'Validation failed');
       let lines=[d.error||'Failed'];
       if(d.detail) lines.push(d.detail);
@@ -4252,7 +4295,7 @@ async function cfgTestStorageCredential(){
       toast(d.error||'Storage credential test failed','terr');
     }
   }catch(e){
-    status.style.cssText='font-size:10px;color:#dc2626;';status.textContent='❌ '+e.message;
+    status.style.cssText='font-size:11px;font-weight:600;color:#dc2626;background:#fef2f2;padding:3px 9px;border-radius:20px;border:1px solid #fecaca;display:inline-block;';status.textContent='❌ '+e.message;
     toast('Error: '+e.message,'terr');
   }finally{
     btn.disabled=false;
@@ -4358,7 +4401,7 @@ async function deployInfrastructure(){
   }catch(e){toast('Failed to save config: '+e.message,'terr');return;}
 
   // Confirm
-  if(!confirm('This will create Azure infrastructure resources (Storage Account, Access Connector, External Locations, Catalogs, Volume).\n\nSubscription: '+cfg.subscription_id+'\nStorage: '+cfg.storage_account+'\nRegion: '+cfg.region+'\n\nProceed?')) return;
+  if(!(await uiConfirm('This will create Azure infrastructure resources (Storage Account, Access Connector, External Locations, Catalogs, Volume).\n\nSubscription: '+cfg.subscription_id+'\nStorage: '+cfg.storage_account+'\nRegion: '+cfg.region+'\n\nProceed?',{title:'Create Azure Infrastructure',okLabel:'Proceed'}))) return;
 
   // Show progress panel
   prog.style.display='block';
@@ -5619,7 +5662,7 @@ async function dmEREditCol(tableName, colName, field, value){
 }
 
 async function dmERDelCol(tableName, colName){
-  if(!confirm('Delete column "'+colName+'" from '+tableName+'?'))return;
+  if(!(await uiConfirm('Delete column "'+colName+'" from '+tableName+'?',{danger:true})))return;
   await _dmEdit({column_removes:[{table_name:tableName, column_name:colName}]}, 'Column deleted');
   const node=(_dmErJson&&_dmErJson.nodes||[]).find(n=>n.id===tableName);
   if(node)setTimeout(()=>dmOpenTableEditor(node),200);
@@ -5828,7 +5871,7 @@ async function dmSaveNewView(){
 }
 
 async function dmRemoveView(viewName){
-  if(!confirm('Remove view "'+viewName+'" from model?'))return;
+  if(!(await uiConfirm('Remove view "'+viewName+'" from model?',{danger:true})))return;
   await _dmEdit({view_removes:[{view_name:viewName}]},'View removed');
 }
 
@@ -6865,7 +6908,7 @@ async function dmAddRel(){
 
 // ── Remove Table ────────────────────────────────────────────────────────────
 async function dmRemoveTable(tableName){
-  if(!confirm('Remove table "'+tableName+'" from the model?'))return;
+  if(!(await uiConfirm('Remove table "'+tableName+'" from the model?',{danger:true})))return;
   await _dmEdit({table_removes:[tableName]},tableName+' removed');
 }
 
@@ -6935,7 +6978,7 @@ async function dmToggleColNull(tableName,colName,newVal){
 }
 
 async function dmRemoveCol(tableName,colName){
-  if(!confirm('Remove column "'+colName+'" from '+tableName+'?'))return;
+  if(!(await uiConfirm('Remove column "'+colName+'" from '+tableName+'?',{danger:true})))return;
   await _dmEdit({column_removes:[{table_name:tableName,column_name:colName}]},'Column removed');
 }
 
@@ -7384,7 +7427,7 @@ window.adminSaveEdit=async function(){
 };
 
 window.adminDeleteUser=async function(username){
-  if(!confirm('Delete user "'+username+'"? This cannot be undone.'))return;
+  if(!(await uiConfirm('Delete user "'+username+'"? This cannot be undone.',{danger:true})))return;
   try{
     const r=await fetch('/api/v1/admin/users/'+encodeURIComponent(username),{method:'DELETE'});
     const d=await r.json();
@@ -7644,7 +7687,7 @@ async function schToggle(scheduleId) {
 }
 
 async function schDelete(scheduleId) {
-  if (!confirm('Delete this schedule? This cannot be undone.')) return;
+  if (!(await uiConfirm('Delete this schedule? This cannot be undone.',{danger:true}))) return;
   try {
     const r = await fetch('/api/v1/scheduler/schedules/' + scheduleId, {method: 'DELETE'});
     const d = await r.json();
@@ -7655,7 +7698,7 @@ async function schDelete(scheduleId) {
 }
 
 async function schRunNow(scheduleId) {
-  if (!confirm('Run this schedule now?')) return;
+  if (!(await uiConfirm('Run this schedule now?',{okLabel:'Run Now'}))) return;
   try {
     const r = await fetch('/api/v1/scheduler/run-now/' + scheduleId, {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({})
