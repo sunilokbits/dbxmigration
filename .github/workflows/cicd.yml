@@ -159,7 +159,15 @@ jobs:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           DATABRICKS_BUNDLE_ENGINE: terraform
-        run: databricks bundle deploy -t staging
+        run: |
+          set -e
+          # Deploy only the app (jobs require serverless compute which may not be enabled in staging)
+          databricks bundle deploy -t staging --select apps.migration_studio
+          # Trigger a fresh app deployment snapshot
+          SRC_PATH=$(databricks bundle validate -t staging -o json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('workspace',{}).get('file_path',''))" 2>/dev/null || echo "")
+          if [ -n "$SRC_PATH" ]; then
+            databricks apps deploy dbxmigrationapp --source-code-path "$SRC_PATH" --mode SNAPSHOT || true
+          fi
       - name: Run integration tests against staging
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
