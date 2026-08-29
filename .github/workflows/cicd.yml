@@ -158,11 +158,10 @@ jobs:
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-          DATABRICKS_BUNDLE_ENGINE: terraform
         run: |
           set -e
-          # Deploy only the app (jobs require serverless compute which may not be enabled in staging)
-          databricks bundle deploy -t staging --select apps.migration_studio
+          # Upload files + deploy only the app resource (direct engine required for --select)
+          databricks bundle deploy -t staging --select apps.migration_studio --force-lock
           # Trigger a fresh app deployment snapshot
           SRC_PATH=$(databricks bundle validate -t staging -o json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('workspace',{}).get('file_path',''))" 2>/dev/null || echo "")
           if [ -n "$SRC_PATH" ]; then
