@@ -323,6 +323,18 @@ def push_secrets(cfg: dict, secrets_in: dict, flask_secret: str, report: Report)
         report.add("secrets", f"Secret scope '{scope}'", "fail", str(e)[:200])
         return
 
+    # Grant the App SP READ on the scope so it can fetch secrets at runtime
+    try:
+        app_name = cfg.get("app_name", "dbxmigrationapp")
+        apps = list(w.apps.list())
+        app = next((a for a in apps if a.name == app_name), None)
+        if app and app.service_principal_client_id:
+            sp_id = app.service_principal_client_id
+            w.secrets.put_acl(scope=scope, principal=sp_id, permission="READ")
+            report.add("secrets", "App SP secret-scope ACL", "pass", f"READ granted to {sp_id}")
+    except Exception as e:
+        report.add("secrets", "App SP secret-scope ACL", "warn", str(e)[:200], required=False)
+
     to_store = {"flask-secret-key": flask_secret}
     src_type = (cfg.get("source") or {}).get("source_type", "sqlserver")
     key_by_source = {

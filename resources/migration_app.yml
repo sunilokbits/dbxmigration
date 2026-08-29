@@ -32,6 +32,62 @@ resources:
             value: ${var.flask_secret_key}
           - name: GENIE_SPACE_ID
             value: ${var.genie_space_id}
+      resources:
+        - name: secret-databricks-token
+          secret:
+            scope: migration-studio
+            key: databricks-token
+            permission: READ
+        - name: secret-source-sql-password
+          secret:
+            scope: migration-studio
+            key: source-sql-password
+            permission: READ
+        - name: secret-source-azuresql-password
+          secret:
+            scope: migration-studio
+            key: source-azuresql-password
+            permission: READ
+        - name: secret-source-snowflake-password
+          secret:
+            scope: migration-studio
+            key: source-snowflake-password
+            permission: READ
+        - name: secret-source-redshift-password
+          secret:
+            scope: migration-studio
+            key: source-redshift-password
+            permission: READ
+        - name: secret-source-synapse-password
+          secret:
+            scope: migration-studio
+            key: source-synapse-password
+            permission: READ
+        - name: secret-source-bigquery-password
+          secret:
+            scope: migration-studio
+            key: source-bigquery-password
+            permission: READ
+        - name: secret-source-sharepoint-password
+          secret:
+            scope: migration-studio
+            key: source-sharepoint-password
+            permission: READ
+        - name: secret-source-api-password
+          secret:
+            scope: migration-studio
+            key: source-api-password
+            permission: READ
+        - name: secret-devops-pat
+          secret:
+            scope: migration-studio
+            key: devops-pat
+            permission: READ
+        - name: secret-flask-secret-key
+          secret:
+            scope: migration-studio
+            key: flask-secret-key
+            permission: READ
       permissions:
         - level: CAN_USE
           group_name: users

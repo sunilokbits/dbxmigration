@@ -90,8 +90,30 @@ def get_secret(key: str, scope: str | None = None) -> str:
             _cache[cache_key] = value
         return value
     except Exception as exc:
+        exc_str = str(exc)
+        if "permission" in exc_str.lower() and not getattr(get_secret, "_acl_retry_done", False):
+            get_secret._acl_retry_done = True
+            if _try_self_grant_acl(scope):
+                return get_secret(key, scope)
         logger.warning("Secret fetch failed for %s/%s: %s", scope, key, exc)
         return ""
+
+
+def _try_self_grant_acl(scope: str) -> bool:
+    """One-shot attempt: grant this SP READ on the scope via the scope owner."""
+    ws = _get_ws_client()
+    if ws is None:
+        return False
+    sp_id = os.environ.get("DATABRICKS_CLIENT_ID", "")
+    if not sp_id:
+        return False
+    try:
+        ws.secrets.put_acl(scope=scope, principal=sp_id, permission="READ")
+        logger.info("Self-granted READ ACL on scope %s for SP %s", scope, sp_id)
+        return True
+    except Exception as e:
+        logger.warning("Could not self-grant ACL on %s: %s", scope, e)
+        return False
 
 
 _SOURCE_PASSWORD_SECRET_KEYS = {
