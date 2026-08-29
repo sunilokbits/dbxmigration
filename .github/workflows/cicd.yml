@@ -154,6 +154,20 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
+      - name: Scaffold secret scope and keys
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          set -e
+          databricks secrets create-scope migration-studio 2>/dev/null || true
+          EXISTING=$(databricks secrets list-secrets migration-studio -o json 2>/dev/null | python3 -c "import json,sys; print(' '.join(s['key'] for s in json.load(sys.stdin)))" 2>/dev/null || echo "")
+          databricks secrets put-secret migration-studio databricks-token --string-value "$DATABRICKS_TOKEN"
+          for key in devops-pat flask-secret-key source-sql-password source-azuresql-password source-snowflake-password source-bigquery-password source-redshift-password source-synapse-password source-sharepoint-password source-api-password; do
+            if ! echo " $EXISTING " | grep -q " $key "; then
+              databricks secrets put-secret migration-studio "$key" --string-value "REPLACE_ME"
+            fi
+          done
       - name: databricks bundle deploy -t staging
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
