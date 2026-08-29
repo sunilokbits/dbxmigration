@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # ensure_genie_space.sh — idempotent Genie Space creation
 # Called from CI/CD after secrets are scaffolded and before bundle deploy.
-# Requires: DATABRICKS_HOST, DATABRICKS_TOKEN, pip install databricks-sdk
+# Requires: DATABRICKS_HOST, DATABRICKS_TOKEN
 set -euo pipefail
+
+pip install -q databricks-sdk >/dev/null 2>&1 || true
 
 python3 - <<'PYEOF'
 import os, json
