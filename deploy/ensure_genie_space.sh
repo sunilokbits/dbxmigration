@@ -43,10 +43,18 @@ def main():
 
     # Create the space
     try:
+        import json as _json
+        serialized = _json.dumps({
+            "title": "DBX Migration — Full Workspace",
+            "description": "# DBX Migration Studio Genie Space\nQuery migration metadata, reconciliation, and execution logs.",
+            "warehouse_id": wh_id,
+            "table_identifiers": [],
+        })
         resp = w.api_client.do("POST", "/api/2.0/genie/spaces", body={
             "title": "DBX Migration — Full Workspace",
-            "description": "# DBX Migration Studio auto-created Genie Space\nQuery migration metadata, reconciliation, and execution logs.",
+            "description": "# DBX Migration Studio Genie Space\nQuery migration metadata, reconciliation, and execution logs.",
             "warehouse_id": wh_id,
+            "serialized_space": serialized,
         })
         space_id = resp.get("space_id", "") if isinstance(resp, dict) else ""
         if space_id:
