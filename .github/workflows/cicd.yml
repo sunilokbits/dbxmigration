@@ -139,7 +139,9 @@ jobs:
   deploy-staging:
     name: "03 · Deploy to Staging + integration tests"
     needs: deploy-dev
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy_staging == true
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.deploy_staging == true)
     runs-on: ubuntu-latest
     environment: staging
     steps:
