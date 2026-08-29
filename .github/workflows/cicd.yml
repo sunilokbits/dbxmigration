@@ -174,12 +174,12 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
           set -e
-          # Upload files + deploy only the app resource (direct engine required for --select)
           databricks bundle deploy -t staging --select apps.migration_studio --force-lock
-          # Trigger a fresh app deployment snapshot
+          # Start the app compute if stopped, then deploy source code
+          databricks apps start dbxmigrationapp --no-wait 2>/dev/null || true
           SRC_PATH=$(databricks bundle validate -t staging -o json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('workspace',{}).get('file_path',''))" 2>/dev/null || echo "")
           if [ -n "$SRC_PATH" ]; then
-            databricks apps deploy dbxmigrationapp --source-code-path "$SRC_PATH" --mode SNAPSHOT || true
+            databricks apps deploy dbxmigrationapp --source-code-path "$SRC_PATH" --mode SNAPSHOT --timeout 10m
           fi
       - name: Run integration tests against staging
         env:
