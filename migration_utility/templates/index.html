@@ -1570,6 +1570,28 @@
         </div>
       </div>
 
+      <!-- 7. SECRET VAULT (Databricks Secrets — governed source of truth for passwords/tokens) -->
+      <div class="cfg-acc" id="cfgAccSecrets">
+        <button class="cfg-acc-hd" onclick="cfgToggleAccordion('cfgAccSecrets')">
+          <svg class="cfg-acc-ico" viewBox="0 0 24 24" style="color:#dc2626;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+          <span class="cfg-acc-title">Secret Vault</span>
+          <span class="cfg-acc-hint">Databricks secret scope — the actual source of truth for passwords &amp; tokens</span>
+          <svg class="cfg-acc-arrow" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div class="cfg-acc-body">
+          <p style="font-size:11px;color:var(--t4);margin:0 0 10px;">
+            Shows exactly what this app can read from the <code id="cfgSecretScopeName">migration-studio</code> Databricks secret scope right now.
+            If a value you set in Databricks doesn't show as <strong>Configured</strong> here, the app is reading a different key/scope than you wrote to —
+            set the correct value below instead. Admin role required.
+          </p>
+          <div id="cfgSecretVaultRows" style="display:flex;flex-direction:column;gap:8px;"></div>
+          <button class="btn btn-ghost btn-xs" onclick="loadSecretVault()" style="margin-top:8px;">
+            <svg viewBox="0 0 24 24" style="width:12px;height:12px;"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+            Refresh
+          </button>
+        </div>
+      </div>
+
       </div><!-- /cfgNewSettingPane -->
 
       <!-- === EXISTING SETTING PANE (Medallion Layer Mapping) === -->

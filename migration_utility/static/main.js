@@ -139,7 +139,7 @@ function switchTab(id,btn){
     _wfSyncHiddenFields();
     if(id==='wf-dashboard'||id==='wf-pipelines') wfRefreshAll();
     if(id==='wf-jobs') wfRefreshJobs(),wfRefreshAuditHistory();
-    if(id==='wf-settings') loadDeployConfig();
+    if(id==='wf-settings'){loadDeployConfig();loadSecretVault();}
     if(id==='wf-admin' && typeof adminRefresh==='function') adminRefresh();
     if(id==='wf-progress' && typeof mptRefresh==='function') mptRefresh();
     if(id==='wf-audit' && typeof auditRefresh==='function') auditRefresh();
@@ -4480,6 +4480,60 @@ async function loadDeployConfig(){
       _cfgShowPreview();
     }
   }catch(e){ /* no saved config yet — ignore */ }
+}
+
+/* ── Secret Vault — shows what THIS app can actually read from the Databricks secret scope ── */
+async function loadSecretVault(){
+  const box=G('cfgSecretVaultRows');
+  if(!box) return;
+  box.innerHTML='<div style="font-size:11px;color:var(--t4);">Loading…</div>';
+  try{
+    const r=await fetch('/api/v1/settings/secrets');
+    if(r.status===403){
+      box.innerHTML='<div style="font-size:11px;color:var(--t4);">Admin role required to view/manage secrets.</div>';
+      return;
+    }
+    const d=await r.json();
+    if(!d.success){
+      box.innerHTML='<div style="font-size:11px;color:#dc2626;">'+_esc(d.error||'Failed to load secret status')+'</div>';
+      return;
+    }
+    if(G('cfgSecretScopeName')) G('cfgSecretScopeName').textContent=d.scope||'migration-studio';
+    box.innerHTML=(d.keys||[]).map(k=>{
+      const cfgBadge=k.configured
+        ?'<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:#d1fae5;color:#059669;font-weight:600;">Configured ✓</span>'
+        :'<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:#fee2e2;color:#dc2626;font-weight:600;">Not Set</span>';
+      return '<div style="display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--border);border-radius:8px;">'
+        +'<div style="flex:0 0 200px;"><div style="font-size:11px;font-weight:700;color:var(--t1);">'+_esc(k.key)+'</div>'
+        +'<div style="font-size:9px;color:var(--t4);">'+_esc(k.description||'')+'</div></div>'
+        +cfgBadge
+        +'<input class="inp" type="password" placeholder="set new value…" id="cfgSecretIn_'+_esc(k.key)+'" style="flex:1;height:32px;">'
+        +'<button class="btn btn-primary btn-xs" style="height:32px;" onclick="saveSecretVaultItem('+JSON.stringify(k.key)+')">Save</button>'
+        +'</div>';
+    }).join('')||'<div style="font-size:11px;color:var(--t4);">No known secret keys.</div>';
+  }catch(e){
+    box.innerHTML='<div style="font-size:11px;color:#dc2626;">'+_esc(e.message)+'</div>';
+  }
+}
+
+async function saveSecretVaultItem(key){
+  const input=G('cfgSecretIn_'+key);
+  const value=input?input.value:'';
+  if(!value){toast('Enter a value first','terr');return;}
+  try{
+    const r=await fetch('/api/v1/settings/secrets',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({key,value})});
+    const d=await r.json();
+    if(d.success){
+      toast('\''+key+'\' updated in the Databricks secret scope.','tok');
+      if(input) input.value='';
+      loadSecretVault();
+    }else{
+      toast(d.error||'Failed to save secret','terr');
+    }
+  }catch(e){
+    toast(e.message,'terr');
+  }
 }
 
 // ── Startup self-check ──
