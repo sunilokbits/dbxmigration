@@ -78,20 +78,45 @@ def save_deploy_config():
     Persisting that literal string would clobber the real value already in
     Delta -- restore the previous cached value for any field that still
     looks masked instead of overwriting it.
+
+    Conversely, when a field DOES contain a real, freshly-typed value, write
+    it to the governed Databricks secret scope (set_source_password /
+    set_databricks_token / set_devops_token were previously defined but never
+    called from anywhere -- meaning nothing typed into this page ever reached
+    the secret store, only the plaintext Delta config). Once stored as a
+    secret, drop the plaintext copy from what gets saved to Delta so it isn't
+    kept in two places.
     """
     try:
         from config_cache import save_config, get_config
-        from secrets_helper import is_masked
+        from secrets_helper import is_masked, set_source_password, set_databricks_token, set_devops_token
         data = request.get_json(force=True)
 
         existing = get_config()
         existing_source = existing.get("source", {}) if isinstance(existing.get("source"), dict) else {}
-        if isinstance(data.get("source"), dict) and is_masked(data["source"].get("password")):
-            data["source"]["password"] = existing_source.get("password", "")
-        if is_masked(data.get("databricks_token")):
+
+        if isinstance(data.get("source"), dict):
+            pw = data["source"].get("password", "")
+            if is_masked(pw):
+                data["source"]["password"] = existing_source.get("password", "")
+            elif pw:
+                source_type = data["source"].get("source_type", "sqlserver")
+                if set_source_password(pw, source_type=source_type):
+                    data["source"]["password"] = ""
+
+        tok = data.get("databricks_token", "")
+        if is_masked(tok):
             data["databricks_token"] = existing.get("databricks_token", "")
-        if is_masked(data.get("devops_pat")):
+        elif tok:
+            if set_databricks_token(tok):
+                data["databricks_token"] = ""
+
+        pat = data.get("devops_pat", "")
+        if is_masked(pat):
             data["devops_pat"] = existing.get("devops_pat", "")
+        elif pat:
+            if set_devops_token(pat):
+                data["devops_pat"] = ""
 
         save_config(data)
         return jsonify({"success": True})
