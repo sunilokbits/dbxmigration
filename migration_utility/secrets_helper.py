@@ -18,11 +18,22 @@ _cache_lock = threading.Lock()
 MASKED_VALUE = "••••••••"
 
 
+_UNCONFIGURED_PLACEHOLDER = "REPLACE_ME"
+
+
 def is_masked(val: str | None) -> bool:
     if val is None:
         return False
     v = val.strip()
     if v in (MASKED_VALUE, "********", "***"):
+        return True
+    # CI/CD scaffolds missing secret-scope keys with this literal placeholder
+    # (see azure-pipelines.yml / .github/workflows/cicd.yml) so every expected
+    # key is visible/discoverable in the workspace. Treat it as "not really
+    # configured" everywhere, the same as a masked display value -- otherwise
+    # callers (get_source_password, get_devops_token, etc.) would try to use
+    # the literal string "REPLACE_ME" as a real credential and fail.
+    if v.upper() == _UNCONFIGURED_PLACEHOLDER:
         return True
     if len(v) > 2 and len(set(v)) == 1:
         return True

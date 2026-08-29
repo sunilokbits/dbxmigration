@@ -146,14 +146,13 @@ def get_source_password(source_type: str = "") -> str:
     if not source_type:
         cfg = get_config()
         source_type = cfg.get("source", {}).get("source_type", "sqlserver") if isinstance(cfg.get("source"), dict) else "sqlserver"
-    from secrets_helper import get_source_password as _sp
+    from secrets_helper import get_source_password as _sp, is_masked
     pw = _sp(source_type=source_type)
-    if pw:
+    if pw and not is_masked(pw):
         logger.info("Source password resolved from secrets for %s (%d chars)", source_type, len(pw))
         return pw
     cfg = get_config()
     val = cfg.get("source", {}).get("password", "") if isinstance(cfg.get("source"), dict) else ""
-    from secrets_helper import is_masked
     if is_masked(val):
         logger.warning("Source password is masked in config and not found in secrets")
         return ""
@@ -172,14 +171,13 @@ def get_databricks_token() -> str:
 
 
 def get_devops_token() -> str:
-    from secrets_helper import get_devops_token as _dvt
+    from secrets_helper import get_devops_token as _dvt, is_masked
     tok = _dvt()
-    if tok:
+    if tok and not is_masked(tok):
         logger.info("DevOps PAT resolved from secrets (%d chars)", len(tok))
         return tok
     cfg = get_config()
     val = cfg.get("devops_pat", "")
-    from secrets_helper import is_masked
     if is_masked(val):
         logger.warning("DevOps PAT is masked in config and not found in secrets")
         return ""

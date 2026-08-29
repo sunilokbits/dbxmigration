@@ -1,11 +1,40 @@
 """Settings API — Catalog/Schema listing and access validation for ExistingSetting."""
-from flask import Blueprint, jsonify, request
+from functools import wraps
+
+from flask import Blueprint, jsonify, request, session
 from .auth import login_required
 from config_cache import get_config, get_databricks_token
 from log_config import get_logger
 
 logger = get_logger(__name__)
 settings_bp = Blueprint("settings", __name__, url_prefix="/api/v1")
+
+
+def _admin_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if session.get("role") != "Admin":
+            return jsonify({"success": False, "error": "Admin access required"}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+
+# The only secret keys this app ever reads (see secrets_helper.py:
+# _SOURCE_PASSWORD_SECRET_KEYS, get_databricks_token, get_devops_token).
+# A whitelist so this endpoint can never be used to write an arbitrary
+# key into the secret scope.
+ALLOWED_SECRET_KEYS = {
+    "databricks-token": "Databricks PAT used for API/SQL calls",
+    "devops-pat": "Azure DevOps PAT",
+    "source-sql-password": "SQL Server source password",
+    "source-azuresql-password": "Azure SQL source password",
+    "source-snowflake-password": "Snowflake source password",
+    "source-bigquery-password": "BigQuery source password",
+    "source-redshift-password": "Redshift source password",
+    "source-synapse-password": "Synapse source password",
+    "source-sharepoint-password": "SharePoint source password",
+    "source-api-password": "Generic API source password",
+}
 
 
 @settings_bp.route("/deploy-config", methods=["GET"])
@@ -428,3 +457,59 @@ def validate_access():
         return jsonify({"success": True, "valid": False, "error": "; ".join(errors)})
 
     return jsonify({"success": True, "valid": True, "layer": layer, "message": f"All checks passed for {layer}"})
+
+
+@settings_bp.route("/settings/secrets", methods=["GET"])
+@login_required
+@_admin_required
+def list_secret_status():
+    """Return whether each known secret key is configured — never the value itself."""
+    from secrets_helper import _get_ws_client, is_masked, _SECRET_SCOPE
+
+    ws = _get_ws_client()
+    existing = {}
+    if ws is not None:
+        try:
+            for meta in ws.secrets.list_secrets(scope=_SECRET_SCOPE):
+                existing[meta.key] = meta.last_updated_timestamp
+        except Exception as e:
+            logger.warning("Could not list secrets in scope %s: %s", _SECRET_SCOPE, e)
+
+    from secrets_helper import get_secret
+    keys = []
+    for key, description in ALLOWED_SECRET_KEYS.items():
+        current = get_secret(key) if key in existing else ""
+        keys.append({
+            "key": key,
+            "description": description,
+            "configured": key in existing and current and not is_masked(current),
+            "last_updated": existing.get(key),
+        })
+    return jsonify({"success": True, "scope": _SECRET_SCOPE, "keys": keys})
+
+
+@settings_bp.route("/settings/secrets", methods=["POST"])
+@login_required
+@_admin_required
+def update_secret():
+    """Update one secret's value. Admin-only, audited, whitelisted keys only."""
+    from secrets_helper import set_secret, is_masked
+    from audit import log_action
+
+    data = request.get_json(force=True) or {}
+    key = data.get("key", "")
+    value = data.get("value", "")
+
+    if key not in ALLOWED_SECRET_KEYS:
+        return jsonify({"success": False, "error": f"Unknown secret key: {key}"}), 400
+    if not value or is_masked(value):
+        return jsonify({"success": False, "error": "A real, non-empty value is required"}), 400
+
+    ok = set_secret(key, value)
+    # Never log the secret value itself — only that this key was changed and by whom.
+    log_action("update_secret", resource_type="secret", resource_id=key,
+               details={"description": ALLOWED_SECRET_KEYS[key]})
+
+    if not ok:
+        return jsonify({"success": False, "error": f"Failed to store secret '{key}'"}), 500
+    return jsonify({"success": True, "message": f"'{key}' updated"})
