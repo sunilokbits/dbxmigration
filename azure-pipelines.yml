@@ -150,6 +150,27 @@ stages:
               # more mature Terraform engine until direct-engine app support
               # stabilizes.
               DATABRICKS_BUNDLE_ENGINE: terraform
+          - bash: |
+              set -e
+              # Every secret key migration_utility/secrets_helper.py actually
+              # reads (see _SOURCE_PASSWORD_SECRET_KEYS + get_databricks_token/
+              # get_devops_token). databricks-token is refreshed to the deploy's
+              # own credential every run (safe -- it's the deploy identity, not
+              # client-owned data). Every other key is created EMPTY only if
+              # missing, never overwriting a value a client already set via the
+              # app's Settings page.
+              EXISTING=$(databricks secrets list-secrets migration-studio -o json 2>/dev/null | python3 -c "import json,sys; print(' '.join(s['key'] for s in json.load(sys.stdin)))" 2>/dev/null || echo "")
+              databricks secrets put-secret migration-studio databricks-token --string-value "$DATABRICKS_TOKEN"
+              for key in devops-pat source-sql-password source-azuresql-password source-snowflake-password source-bigquery-password source-redshift-password source-synapse-password source-sharepoint-password source-api-password; do
+                if ! echo " $EXISTING " | grep -q " $key "; then
+                  echo "Scaffolding empty secret: $key"
+                  databricks secrets put-secret migration-studio "$key" --string-value ""
+                fi
+              done
+            displayName: Scaffold secret scope keys
+            env:
+              DATABRICKS_HOST: $(DATABRICKS_HOST)
+              DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
 
   # ---------------------------------------------------------------------------
   - stage: DeployStaging
