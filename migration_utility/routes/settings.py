@@ -40,9 +40,28 @@ ALLOWED_SECRET_KEYS = {
 @settings_bp.route("/deploy-config", methods=["GET"])
 @login_required
 def get_deploy_config():
-    """Return the full config for Settings page pre-fill."""
+    """Return the config for Settings page pre-fill, with secrets masked.
+
+    The returned password/token fields are never the real value -- only
+    MASKED_VALUE when one is actually set. This matters because the
+    frontend pre-fills form fields directly from this response
+    (G('srcPass').value = src.password), and routes/source.py trusts
+    whatever comes back in that field over the real stored secret unless
+    it looks masked or empty. Returning the raw value here previously
+    meant re-submitting an unchanged field would silently re-use a stale
+    plaintext value instead of falling back to the governed secret.
+    """
+    import copy
+    from secrets_helper import MASKED_VALUE
+
     try:
-        cfg = get_config()
+        cfg = copy.deepcopy(get_config())
+        if cfg.get("source", {}).get("password"):
+            cfg["source"]["password"] = MASKED_VALUE
+        if cfg.get("databricks_token"):
+            cfg["databricks_token"] = MASKED_VALUE
+        if cfg.get("devops_pat"):
+            cfg["devops_pat"] = MASKED_VALUE
         return jsonify({"success": True, "config": cfg})
     except Exception as e:
         logger.error("Failed to load config: %s", e)
@@ -52,10 +71,28 @@ def get_deploy_config():
 @settings_bp.route("/deploy-config", methods=["POST"])
 @login_required
 def save_deploy_config():
-    """Save config from Settings page."""
+    """Save config from Settings page.
+
+    The frontend round-trips whatever get_deploy_config() returned, so any
+    password/token field the user didn't retype still contains MASKED_VALUE.
+    Persisting that literal string would clobber the real value already in
+    Delta -- restore the previous cached value for any field that still
+    looks masked instead of overwriting it.
+    """
     try:
-        from config_cache import save_config
+        from config_cache import save_config, get_config
+        from secrets_helper import is_masked
         data = request.get_json(force=True)
+
+        existing = get_config()
+        existing_source = existing.get("source", {}) if isinstance(existing.get("source"), dict) else {}
+        if isinstance(data.get("source"), dict) and is_masked(data["source"].get("password")):
+            data["source"]["password"] = existing_source.get("password", "")
+        if is_masked(data.get("databricks_token")):
+            data["databricks_token"] = existing.get("databricks_token", "")
+        if is_masked(data.get("devops_pat")):
+            data["devops_pat"] = existing.get("devops_pat", "")
+
         save_config(data)
         return jsonify({"success": True})
     except Exception as e:
@@ -76,7 +113,8 @@ def test_databricks_conn():
         host = (body.get("databricks_host") or "").rstrip("/")
         token = body.get("databricks_token") or ""
         # If token is masked, use the real one from secrets
-        if not token or token.startswith("•"):
+        from secrets_helper import is_masked
+        if not token or is_masked(token):
             token = get_databricks_token()
         if not host or not token:
             return jsonify({"success": False, "error": "Host and token required"})
@@ -120,7 +158,8 @@ def test_storage_credential():
         cred_name = (body.get("storage_credential_name") or "").strip()
         test_url = (body.get("test_url") or "").strip()
 
-        if not token or token.startswith("•"):
+        from secrets_helper import is_masked
+        if not token or is_masked(token):
             token = get_databricks_token()
         cfg = get_config()
         if not host:
