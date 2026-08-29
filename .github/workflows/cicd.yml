@@ -132,6 +132,11 @@ jobs:
               databricks secrets put-secret migration-studio "$key" --string-value "REPLACE_ME"
             fi
           done
+      - name: Ensure Genie Space exists
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: bash deploy/ensure_genie_space.sh
 
   # ---------------------------------------------------------------------------
   # Only runs when manually dispatched with deploy_staging=true, so a normal
@@ -168,6 +173,11 @@ jobs:
               databricks secrets put-secret migration-studio "$key" --string-value "REPLACE_ME"
             fi
           done
+      - name: Ensure Genie Space exists
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: bash deploy/ensure_genie_space.sh
       - name: databricks bundle deploy -t staging
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
