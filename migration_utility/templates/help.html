@@ -894,7 +894,7 @@ body{font-family:var(--font);font-size:15px;line-height:1.7;color:var(--t1);back
 
     <div class="steps">
       <div class="step-item"><p><strong>Configure Settings</strong> — In Settings → Azure DevOps section, enter Organization, Project, Repository, and Branch name.</p></div>
-      <div class="step-item"><p><strong>Store PAT in Key Vault</strong> — Store your Azure DevOps Personal Access Token as <code>devops-token</code> secret in Azure Key Vault (e.g. <code>kv-dbxmigrator-west3</code>).</p></div>
+      <div class="step-item"><p><strong>Store PAT in Secret Scope</strong> — Store your Azure DevOps Personal Access Token as <code>devops-pat</code> secret in the Databricks secret scope (scope: <code>migration-studio</code>).</p></div>
       <div class="step-item"><p><strong>Test Connection</strong> — Click "Test Connection" to verify the PAT and repo access. A green success message confirms connectivity.</p></div>
       <div class="step-item"><p><strong>Generate Model</strong> — Go to Data Modeling, generate your Star/Snowflake schema, and review the ER diagram and DDL.</p></div>
       <div class="step-item"><p><strong>Push to DevOps</strong> — Click the "Push to DevOps" button in the ER Diagram toolbar. Enter a commit message and the files are committed atomically.</p></div>
@@ -907,7 +907,7 @@ body{font-family:var(--font);font-size:15px;line-height:1.7;color:var(--t1);back
       </div>
       <div class="feat-card">
         <h4><span class="feat-icon">🔐</span> Key Vault Security</h4>
-        <p>PAT is never stored in config or UI — resolved at runtime from Azure Key Vault secret <code>devops-token</code>.</p>
+        <p>PAT is never stored in config or UI — resolved at runtime from Databricks secret scope key <code>devops-pat</code>.</p>
       </div>
       <div class="feat-card">
         <h4><span class="feat-icon">🌿</span> Auto Branch Creation</h4>
@@ -926,7 +926,7 @@ body{font-family:var(--font);font-size:15px;line-height:1.7;color:var(--t1);back
         <li><strong>Project</strong> — Project name (e.g. <code>AI Accelerator</code>)</li>
         <li><strong>Repository</strong> — Git repository name</li>
         <li><strong>Branch</strong> — Target branch (auto-created if missing, defaults to <code>data-modeling</code>)</li>
-        <li><strong>PAT</strong> — Stored in Key Vault as secret name <code>devops-token</code></li>
+        <li><strong>PAT</strong> — Stored in secret scope as key <code>devops-pat</code></li>
       </ul>
     </div>
   </div>

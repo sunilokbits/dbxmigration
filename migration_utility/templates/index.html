@@ -1557,8 +1557,8 @@
           </div>
           <div style="margin-top:8px;">
             <label class="lbl">Personal Access Token (PAT)</label>
-            <input class="inp" id="cfgDevOpsPat" type="password" placeholder="Stored in Key Vault as devops-token" disabled>
-            <div style="font-size:9px;color:var(--t4);margin-top:3px;">Stored in deployconfig.json as masked. For production, store as <code>devops-token</code> secret in Key Vault.</div>
+            <input class="inp" id="cfgDevOpsPat" type="password" placeholder="Stored as devops-pat in secret scope" disabled>
+            <div style="font-size:9px;color:var(--t4);margin-top:3px;">For production, store as <code>devops-pat</code> secret in the Databricks secret scope.</div>
           </div>
           <div style="margin-top:10px;">
             <button class="btn btn-ghost btn-xs" onclick="cfgTestDevOps()" id="btnTestDevOps" style="border:1px solid #0078D4;color:#0078D4;">

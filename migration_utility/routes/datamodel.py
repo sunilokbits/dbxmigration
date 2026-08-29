@@ -508,7 +508,7 @@ def dm_push_devops():
     if not org or not project or not repo:
         return jsonify({"success": False, "error": "Azure DevOps org, project, and repo are required. Configure in Settings."})
     if not pat:
-        return jsonify({"success": False, "error": "Azure DevOps PAT is required. Store as 'devops-token' in Key Vault or configure in Settings."})
+        return jsonify({"success": False, "error": "Azure DevOps PAT is required. Store as 'devops-pat' in the Databricks secret scope or configure in Settings."})
 
     ddl = d.get("ddl", "")
     er_image_base64 = d.get("er_image_base64", "")
@@ -646,7 +646,7 @@ def dm_test_devops():
     if not org or not project or not repo:
         return jsonify({"success": False, "error": "Organization, project, and repo are required."})
     if not pat:
-        return jsonify({"success": False, "error": "PAT is required. Store as 'devops-token' in Key Vault."})
+        return jsonify({"success": False, "error": "PAT is required. Store as 'devops-pat' in the Databricks secret scope."})
 
     try:
         from devops_connector import test_connection

@@ -3797,7 +3797,7 @@ function _populateConfig(c){
   if(G('cfgDevOpsRepo'))   G('cfgDevOpsRepo').value=c.devops_repo||'';
   if(G('cfgDevOpsBranch')) G('cfgDevOpsBranch').value=c.devops_branch||'main';
   if(G('cfgDevOpsReviewers')) G('cfgDevOpsReviewers').value=c.devops_reviewers||'';
-  if(G('cfgDevOpsPat'))    G('cfgDevOpsPat').value='••••••••••••••••••••••• (Key Vault: devops-token)';
+  if(G('cfgDevOpsPat'))    G('cfgDevOpsPat').value='••••••••••••••••••••••• (Secret: devops-pat)';
   // External locations
   const elList=G('cfgExtLocList'); elList.innerHTML='';
   const elEntries=Object.entries(c.external_locations||{});
