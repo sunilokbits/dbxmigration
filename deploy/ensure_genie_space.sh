@@ -41,9 +41,10 @@ if [ -z "$WH_ID" ]; then
     exit 0
 fi
 
-# Create using the CLI (handles serialized_space internally)
-SPACE_JSON='{"warehouse_id":"'"$WH_ID"'","table_identifiers":[]}'
-databricks genie create-space "$WH_ID" "$SPACE_JSON" \
-    --title "DBX Migration — Full Workspace" \
-    --description "Auto-created by CI/CD. Query migration metadata, reconciliation, and execution logs." \
-    -o json 2>&1 || echo "WARN: Genie Space auto-create not supported in this workspace (non-blocking)"
+# Create using --json with the correct serialized_space format
+TMPFILE=$(mktemp /tmp/genie_create.XXXXXX.json)
+cat > "$TMPFILE" <<EOF
+{"title":"DBX Migration — Full Workspace","description":"Auto-created by CI/CD. Query migration metadata, reconciliation, and execution logs.","warehouse_id":"$WH_ID","serialized_space":"{\"version\":2}"}
+EOF
+databricks genie create-space --json "@$TMPFILE" -o json 2>&1 && echo "Genie Space created successfully" || echo "WARN: Genie Space auto-create not supported in this workspace (non-blocking)"
+rm -f "$TMPFILE"
