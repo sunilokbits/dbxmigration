@@ -357,6 +357,36 @@ def push_secrets(cfg: dict, secrets_in: dict, flask_secret: str, report: Report)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 4b. SQL Warehouse resolution — needed by the app's env vars, Genie Space
+#     creation, and app-tables init; auto-discovered so no manual step is
+#     required when a client config omits sql_warehouse_id.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def resolve_sql_warehouse_id(cfg: dict, secrets_in: dict, report: Report):
+    if cfg.get("sql_warehouse_id"):
+        report.add("warehouse", "SQL Warehouse ID", "pass",
+                    f"using configured id {cfg['sql_warehouse_id']}", required=False)
+        return
+
+    from databricks.sdk import WorkspaceClient
+    w = WorkspaceClient(host=cfg["databricks_host"], token=secrets_in["databricks_token"])
+    try:
+        warehouses = list(w.warehouses.list())
+        running = next((wh for wh in warehouses
+                         if "RUNNING" in str(getattr(wh.state, "value", wh.state)).upper()), None)
+        chosen = running or (warehouses[0] if warehouses else None)
+        if chosen:
+            cfg["sql_warehouse_id"] = chosen.id
+            report.add("warehouse", "SQL Warehouse auto-discover", "pass",
+                        f"using '{chosen.name}' ({chosen.id})", required=False)
+        else:
+            report.add("warehouse", "SQL Warehouse auto-discover", "warn",
+                        "No SQL warehouse found in workspace — create one, then re-run", required=False)
+    except Exception as e:
+        report.add("warehouse", "SQL Warehouse auto-discover", "warn", str(e)[:200], required=False)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # 5. Bundle deploy (App + Jobs)
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -587,6 +617,7 @@ def run_pipeline(cfg: dict, secrets_in: dict, *, skip_infra: bool = False, skip_
     if report.hard_failures:
         return report
 
+    resolve_sql_warehouse_id(cfg, secrets_in, report)
     genie_space_id = "" if skip_genie else resolve_genie_space(cfg, secrets_in, report, non_interactive)
     run_infra(cfg, secrets_in, report)
 

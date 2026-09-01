@@ -90,6 +90,14 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
+      - name: Resolve SQL Warehouse ID
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          WH_ID=$(bash deploy/resolve_sql_warehouse.sh || echo "")
+          echo "SQL_WAREHOUSE_ID=$WH_ID" >> "$GITHUB_ENV"
+          if [ -n "$WH_ID" ]; then echo "Resolved SQL warehouse: $WH_ID"; else echo "WARN: no SQL warehouse found in this workspace"; fi
       - name: databricks bundle deploy -t dev
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
@@ -101,7 +109,7 @@ jobs:
           DATABRICKS_BUNDLE_ENGINE: terraform
         run: |
           set -e
-          OUT=$(databricks bundle deploy -t dev 2>&1 | tee /dev/stderr)
+          OUT=$(databricks bundle deploy -t dev --var="sql_warehouse_id=$SQL_WAREHOUSE_ID" 2>&1 | tee /dev/stderr)
           # bundle deploy reconciles the App resource's config but does not
           # itself trigger a code deployment (confirmed: "Resources: ...
           # unchanged" on runs where files were freshly re-uploaded). Extract
@@ -178,13 +186,21 @@ jobs:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: bash deploy/ensure_genie_space.sh
+      - name: Resolve SQL Warehouse ID
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          WH_ID=$(bash deploy/resolve_sql_warehouse.sh || echo "")
+          echo "SQL_WAREHOUSE_ID=$WH_ID" >> "$GITHUB_ENV"
+          if [ -n "$WH_ID" ]; then echo "Resolved SQL warehouse: $WH_ID"; else echo "WARN: no SQL warehouse found in this workspace"; fi
       - name: databricks bundle deploy -t staging
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
           set -e
-          databricks bundle deploy -t staging --select apps.migration_studio --force-lock
+          databricks bundle deploy -t staging --select apps.migration_studio --force-lock --var="sql_warehouse_id=$SQL_WAREHOUSE_ID"
           # Start the app compute if stopped, then deploy source code
           databricks apps start dbxmigrationapp --no-wait 2>/dev/null || true
           SRC_PATH=$(databricks bundle validate -t staging -o json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('workspace',{}).get('file_path',''))" 2>/dev/null || echo "")
