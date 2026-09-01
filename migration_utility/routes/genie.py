@@ -420,7 +420,7 @@ def _load_spaces():
             with open(path) as f:
                 spaces = json.load(f)
             if spaces:
-                return spaces
+                return _refresh_stale_names(spaces)
         except Exception:
             pass
     try:
@@ -429,11 +429,36 @@ def _load_spaces():
             with open(deploy_path) as f:
                 cfg = json.load(f)
             if cfg.get("genie_spaces"):
-                return cfg["genie_spaces"]
+                return _refresh_stale_names(cfg["genie_spaces"])
     except Exception:
         pass
     # Auto-discover from Databricks Genie API if no local config
     return _discover_workspace_spaces()
+
+
+def _refresh_stale_names(spaces):
+    """Re-fetch titles for cached entries whose name is missing or equals their space_id (stale/legacy cache)."""
+    stale = [s for s in spaces if not s.get("name") or s.get("name") == s.get("space_id")]
+    if not stale:
+        return spaces
+    try:
+        r = requests.get(f"{_HOST}/api/2.0/genie/spaces", headers=_headers(), timeout=10)
+        if r.status_code != 200:
+            return spaces
+        api_spaces = {s["space_id"]: s for s in r.json().get("spaces", []) if s.get("space_id")}
+    except Exception:
+        return spaces
+    changed = False
+    for s in spaces:
+        api_s = api_spaces.get(s.get("space_id"))
+        if api_s and api_s.get("title") and s.get("name") != api_s["title"]:
+            s["name"] = api_s["title"]
+            if api_s.get("description"):
+                s["description"] = api_s["description"]
+            changed = True
+    if changed:
+        _save_spaces(spaces)
+    return spaces
 
 
 def _discover_workspace_spaces():
