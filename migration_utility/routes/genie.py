@@ -12,13 +12,13 @@ genie_bp = Blueprint("genie", __name__)
 
 _HOST = os.environ.get("DATABRICKS_HOST", "").rstrip("/")
 if not _HOST:
-    # Local dev: DATABRICKS_HOST isn't injected as an env var outside the
-    # Databricks Apps runtime — fall back to the host stored in deployconfig.json.
     try:
         from config_cache import get_config as _get_cfg
         _HOST = (_get_cfg().get("databricks_host") or "").rstrip("/")
     except Exception:
         pass
+if _HOST and not _HOST.startswith("http"):
+    _HOST = "https://" + _HOST
 _faq_store = {}
 _mcp_sessions = {}
 _mcp_results = {}  # Async MCP query results: {message_id: {status, result, error}}
@@ -418,7 +418,9 @@ def _load_spaces():
     if os.path.isfile(path):
         try:
             with open(path) as f:
-                return json.load(f)
+                spaces = json.load(f)
+            if spaces:
+                return spaces
         except Exception:
             pass
     try:
@@ -426,10 +428,28 @@ def _load_spaces():
         if os.path.isfile(deploy_path):
             with open(deploy_path) as f:
                 cfg = json.load(f)
-            return cfg.get("genie_spaces", [])
+            if cfg.get("genie_spaces"):
+                return cfg["genie_spaces"]
     except Exception:
         pass
-    return []
+    # Auto-discover from Databricks Genie API if no local config
+    return _discover_workspace_spaces()
+
+
+def _discover_workspace_spaces():
+    """Fetch Genie Spaces from the Databricks API and persist locally."""
+    try:
+        r = requests.get(f"{_HOST}/api/2.0/genie/spaces", headers=_headers(), timeout=10)
+        if r.status_code != 200:
+            return []
+        api_spaces = r.json().get("spaces", [])
+        spaces = [{"space_id": s["space_id"], "name": s.get("title", s["space_id"]),
+                    "description": s.get("description", "")} for s in api_spaces if s.get("space_id")]
+        if spaces:
+            _save_spaces(spaces)
+        return spaces
+    except Exception:
+        return []
 
 
 def _save_spaces(spaces):
