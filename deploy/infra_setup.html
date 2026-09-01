@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Infrastructure Setup — Storage &amp; Unity Catalog</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0f172a;--surface:#1e293b;--surface2:#334155;--border:#475569;--accent:#3b82f6;--green:#22c55e;--red:#ef4444;--yellow:#eab308;--t1:#f1f5f9;--t2:#cbd5e1;--t3:#94a3b8;--mono:'Cascadia Code','Fira Code',monospace;--sans:system-ui,-apple-system,sans-serif}
+body{font-family:var(--sans);background:var(--bg);color:var(--t1);min-height:100vh;padding:24px}
+h1{font-size:22px;font-weight:800;margin-bottom:4px}
+.sub{font-size:12px;color:var(--t3);margin-bottom:24px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px}
+.card h2{font-size:14px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.card h2 .ico{width:20px;height:20px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px}
+label{display:block;font-size:11px;font-weight:600;color:var(--t3);margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px}
+input,select{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--t1);font-size:13px;font-family:var(--sans);outline:none;transition:border .2s}
+input:focus,select:focus{border-color:var(--accent)}
+input::placeholder{color:var(--surface2)}
+.field{margin-bottom:10px}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:10px 24px;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;transition:all .2s}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{background:#2563eb}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed}
+.btn-outline{background:transparent;border:1px solid var(--border);color:var(--t2)}
+.btn-outline:hover{border-color:var(--accent);color:var(--accent)}
+.env-tabs{display:flex;gap:0;margin-bottom:20px;border-radius:10px;overflow:hidden;border:1px solid var(--border)}
+.env-tab{flex:1;text-align:center;padding:10px;font-size:13px;font-weight:700;cursor:pointer;background:var(--surface);color:var(--t3);transition:all .2s;border:none}
+.env-tab.active{background:var(--accent);color:#fff}
+.env-tab:hover:not(.active){background:var(--surface2)}
+.badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:10px;font-weight:700;text-transform:uppercase}
+.badge-dev{background:#1e3a5f;color:#60a5fa}
+.badge-staging{background:#422006;color:#fbbf24}
+.badge-prod{background:#3b0764;color:#c084fc}
+.preview{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-family:var(--mono);font-size:11px;color:var(--t3);margin-top:8px;word-break:break-all}
+.preview strong{color:var(--accent)}
+.chk-row{display:flex;align-items:center;gap:8px;margin-top:8px}
+.chk-row input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent)}
+.chk-row label{margin:0;text-transform:none;font-size:12px;color:var(--t2)}
+.step-pills{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+.step-pill{padding:4px 12px;border-radius:20px;font-size:11px;font-weight:600;border:1px solid var(--border);color:var(--t3);cursor:pointer;user-select:none}
+.step-pill.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.logs{background:#020617;border:1px solid var(--border);border-radius:10px;padding:14px;font-family:var(--mono);font-size:11px;color:var(--t3);max-height:400px;overflow-y:auto;white-space:pre-wrap;line-height:1.6;margin-top:12px}
+.logs .ok{color:var(--green)}
+.logs .err{color:var(--red)}
+.logs .warn{color:var(--yellow)}
+.summary-json{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px;font-family:var(--mono);font-size:12px;color:var(--green);margin-top:12px;white-space:pre-wrap}
+.row{display:flex;gap:12px;align-items:flex-end}
+.sep{height:1px;background:var(--border);margin:16px 0}
+@media(max-width:800px){.grid,.grid3{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<h1>🏗️ Infrastructure Setup — Storage &amp; Unity Catalog</h1>
+<p class="sub">Temporary local tool (port 5656) — provision Azure Storage, Access Connector, and Unity Catalog objects per environment.</p>
+
+<!-- Environment Tabs -->
+<div class="env-tabs" id="envTabs">
+  <button class="env-tab active" onclick="setEnv('dev')">🟢 Dev</button>
+  <button class="env-tab" onclick="setEnv('staging')">🟡 Staging</button>
+  <button class="env-tab" onclick="setEnv('prod')">🟣 Prod</button>
+</div>
+
+<div id="envBadge" style="margin-bottom:16px;"><span class="badge badge-dev">DEV — no suffix</span></div>
+
+<!-- Azure Credentials -->
+<div class="card">
+  <h2><span class="ico" style="background:#1e3a5f;color:#60a5fa;">☁️</span> Azure Credentials</h2>
+  <div class="grid3">
+    <div class="field"><label>Subscription ID *</label><input id="subId" placeholder="97d4958e-..."></div>
+    <div class="field"><label>Resource Group *</label><input id="rg" placeholder="azdb_sunilpoc"></div>
+    <div class="field"><label>Region</label>
+      <select id="region">
+        <option value="centralindia">Central India</option>
+        <option value="eastus">East US</option>
+        <option value="eastus2">East US 2</option>
+        <option value="westus2">West US 2</option>
+        <option value="westus3">West US 3</option>
+        <option value="westeurope">West Europe</option>
+        <option value="uksouth">UK South</option>
+      </select>
+    </div>
+  </div>
+  <div class="sep"></div>
+  <div style="font-size:11px;color:var(--t3);margin-bottom:8px;">Service Principal (optional — if DefaultAzureCredential isn't available):</div>
+  <div class="grid3">
+    <div class="field"><label>Tenant ID</label><input id="tenantId" placeholder="72f988bf-..."></div>
+    <div class="field"><label>Client ID</label><input id="clientId" placeholder="a1b2c3d4-..."></div>
+    <div class="field"><label>Client Secret</label><input id="clientSecret" type="password" placeholder="secret"></div>
+  </div>
+</div>
+
+<!-- Databricks -->
+<div class="card">
+  <h2><span class="ico" style="background:#7c2d12;color:#f97316;">⚡</span> Databricks Workspace</h2>
+  <div class="grid">
+    <div class="field"><label>Host URL *</label><input id="dbrHost" placeholder="https://adb-xxx.azuredatabricks.net"></div>
+    <div class="field"><label>PAT Token *</label><input id="dbrToken" type="password" placeholder="dapi..."></div>
+  </div>
+</div>
+
+<!-- Storage -->
+<div class="card">
+  <h2><span class="ico" style="background:#052e16;color:var(--green);">🗄️</span> Storage Account</h2>
+  <div class="grid3">
+    <div class="field"><label>Storage Account Name (base) *</label><input id="saBase" placeholder="sqltodatabrciksmig" oninput="updatePreview()"></div>
+    <div class="field"><label>Container *</label><input id="container" value="datalake" oninput="updatePreview()"></div>
+    <div class="field"><label>Resolved Name</label><input id="saResolved" readonly style="color:var(--accent);font-weight:700;"></div>
+  </div>
+  <div class="preview" id="abfssPreview">abfss://...</div>
+</div>
+
+<!-- Access Connector -->
+<div class="card">
+  <h2><span class="ico" style="background:#1e1b4b;color:#818cf8;">🔗</span> Access Connector &amp; RBAC</h2>
+  <div class="grid3">
+    <div class="field"><label>Access Connector Name (base) *</label><input id="acBase" placeholder="sqltodatabrciks_access_mig"></div>
+    <div class="field"><label>Storage Credential Name (base)</label><input id="scBase" placeholder="(defaults to connector name)"></div>
+    <div class="field"><label>RBAC Role</label>
+      <select id="role">
+        <option>Storage Blob Data Owner</option>
+        <option>Storage Blob Data Contributor</option>
+        <option>Storage Blob Data Reader</option>
+      </select>
+    </div>
+  </div>
+</div>
+
+<!-- Catalogs -->
+<div class="card">
+  <h2><span class="ico" style="background:#172554;color:#60a5fa;">📚</span> Unity Catalog — Catalogs &amp; Schemas</h2>
+  <div class="grid3">
+    <div class="field"><label>Bronze Catalog (base)</label><input id="catBronze" value="bronze" oninput="updatePreview()"></div>
+    <div class="field"><label>Silver Catalog (base)</label><input id="catSilver" value="silver" oninput="updatePreview()"></div>
+    <div class="field"><label>Volumes Catalog (base)</label><input id="catVolumes" value="dev_volumes" oninput="updatePreview()"></div>
+  </div>
+  <div class="field" style="margin-top:8px;"><label>Default Schema</label><input id="defSchema" value="hr" style="max-width:200px;"></div>
+  <div class="preview" id="catPreview"></div>
+  <div class="sep"></div>
+  <div class="chk-row">
+    <input type="checkbox" id="chkMeta">
+    <label for="chkMeta">Also create app-owned metadata catalogs (admin_source, reconciliation, loggingdetails)</label>
+  </div>
+  <div id="metaCats" style="display:none;margin-top:10px;">
+    <div class="grid3">
+      <div class="field"><label>Admin Catalog</label><input id="catAdmin" value="admin_source"></div>
+      <div class="field"><label>Reconciliation Catalog</label><input id="catRecon" value="reconciliation"></div>
+      <div class="field"><label>Logging Catalog</label><input id="catLogging" value="loggingdetails"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Steps to run -->
+<div class="card">
+  <h2>🚀 Steps to Execute</h2>
+  <div class="step-pills" id="stepPills">
+    <span class="step-pill on" data-step="1" onclick="toggleStep(this)">1. Storage Account</span>
+    <span class="step-pill on" data-step="2" onclick="toggleStep(this)">2. Access Connector</span>
+    <span class="step-pill on" data-step="3" onclick="toggleStep(this)">3. Storage Credential</span>
+    <span class="step-pill on" data-step="4" onclick="toggleStep(this)">4. External Locations</span>
+    <span class="step-pill on" data-step="5" onclick="toggleStep(this)">5. Catalogs + Schemas</span>
+    <span class="step-pill on" data-step="6" onclick="toggleStep(this)">6. Volume</span>
+  </div>
+  <div class="row">
+    <button class="btn btn-primary" id="btnRun" onclick="runSetup()">▶ Run Selected Steps</button>
+    <button class="btn btn-outline" onclick="clearLogs()">Clear Logs</button>
+    <span id="statusText" style="font-size:12px;color:var(--t3);margin-left:8px;"></span>
+  </div>
+  <div class="logs" id="logBox">Ready — fill in the fields above, select steps, and click Run.</div>
+</div>
+
+<!-- Summary -->
+<div class="card" id="summaryCard" style="display:none;">
+  <h2>📋 client.json Summary — Copy This</h2>
+  <div class="summary-json" id="summaryJson"></div>
+</div>
+
+<script>
+let _env='dev';
+const $=id=>document.getElementById(id);
+const SUFFIXES={dev:{cat:'',sa:''},staging:{cat:'_staging',sa:'stg'},prod:{cat:'_prod',sa:'prod'}};
+
+function setEnv(e){
+  _env=e;
+  document.querySelectorAll('.env-tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.env-tab')[['dev','staging','prod'].indexOf(e)].classList.add('active');
+  const labels={dev:'DEV — no suffix',staging:'STAGING — _staging / stg suffix',prod:'PROD — _prod / prod suffix'};
+  $('envBadge').innerHTML='<span class="badge badge-'+e+'">'+labels[e]+'</span>';
+  updatePreview();
+}
+
+function updatePreview(){
+  const suf=SUFFIXES[_env];
+  const sa=($('saBase').value||'xxx')+suf.sa;
+  const ctr=$('container').value||'datalake';
+  $('saResolved').value=sa.toLowerCase();
+  const base='abfss://'+ctr+'@'+sa.toLowerCase()+'.dfs.core.windows.net';
+  $('abfssPreview').innerHTML='Base: <strong>'+base+'</strong><br>Landing: '+base+'/'+_env+'/landing<br>Bronze: '+base+'/'+_env+'/uc-managed/bronze<br>Silver: '+base+'/'+_env+'/uc-managed/silver';
+  const b=($('catBronze').value||'bronze')+suf.cat;
+  const s=($('catSilver').value||'silver')+suf.cat;
+  const v=($('catVolumes').value||'dev_volumes')+suf.cat;
+  $('catPreview').innerHTML='<strong>'+b+'</strong>.'+($('defSchema').value||'hr')+' &nbsp;|&nbsp; <strong>'+s+'</strong>.'+($('defSchema').value||'hr')+' &nbsp;|&nbsp; <strong>'+v+'</strong>.'+($('defSchema').value||'hr');
+}
+
+$('chkMeta').onchange=function(){$('metaCats').style.display=this.checked?'block':'none';};
+
+function toggleStep(el){el.classList.toggle('on');}
+
+function getSteps(){
+  return Array.from(document.querySelectorAll('.step-pill.on')).map(p=>parseInt(p.dataset.step));
+}
+
+let _poll=null;
+
+async function runSetup(){
+  const steps=getSteps();
+  if(!steps.length){alert('Select at least one step');return;}
+  if(!$('subId').value||!$('rg').value||!$('saBase').value||!$('acBase').value){alert('Fill required fields (Subscription, RG, Storage Account, Access Connector)');return;}
+  if(steps.some(s=>s>=3)&&(!$('dbrHost').value||!$('dbrToken').value)){alert('Steps 3-6 need Databricks Host + Token');return;}
+  $('btnRun').disabled=true;
+  $('statusText').textContent='Running…';
+  $('logBox').textContent='Starting…\n';
+  $('summaryCard').style.display='none';
+
+  const body={
+    environment:_env,
+    subscription_id:$('subId').value.trim(),
+    resource_group:$('rg').value.trim(),
+    region:$('region').value,
+    storage_account_base:$('saBase').value.trim(),
+    container:$('container').value.trim(),
+    access_connector_base:$('acBase').value.trim(),
+    storage_credential_base:$('scBase').value.trim(),
+    role_assignment:$('role').value,
+    catalog_bronze_base:$('catBronze').value.trim(),
+    catalog_silver_base:$('catSilver').value.trim(),
+    catalog_volumes_base:$('catVolumes').value.trim(),
+    default_schema:$('defSchema').value.trim()||'hr',
+    include_metadata:$('chkMeta').checked,
+    catalog_admin:$('catAdmin').value.trim(),
+    catalog_recon:$('catRecon').value.trim(),
+    catalog_logging:$('catLogging').value.trim(),
+    databricks_host:$('dbrHost').value.trim(),
+    databricks_token:$('dbrToken').value.trim(),
+    azure_tenant_id:$('tenantId').value.trim(),
+    azure_client_id:$('clientId').value.trim(),
+    azure_client_secret:$('clientSecret').value.trim(),
+    steps:steps,
+  };
+  try{
+    await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  }catch(e){$('logBox').textContent+='Fetch error: '+e.message;$('btnRun').disabled=false;return;}
+  _poll=setInterval(pollLogs,1000);
+}
+
+async function pollLogs(){
+  try{
+    const r=await fetch('/api/logs');
+    const d=await r.json();
+    const box=$('logBox');
+    box.innerHTML=d.lines.map(l=>{
+      if(l.includes('[ERROR]'))return'<span class="err">'+esc(l)+'</span>';
+      if(l.includes('[WARN]'))return'<span class="warn">'+esc(l)+'</span>';
+      if(l.includes('✅')||l.includes('complete'))return'<span class="ok">'+esc(l)+'</span>';
+      return esc(l);
+    }).join('\n');
+    box.scrollTop=box.scrollHeight;
+    if(!d.running){
+      clearInterval(_poll);_poll=null;
+      $('btnRun').disabled=false;
+      $('statusText').textContent='Done';
+      showSummary();
+    }
+  }catch(e){}
+}
+
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+function clearLogs(){$('logBox').textContent='Ready.';$('statusText').textContent='';}
+
+function showSummary(){
+  const suf=SUFFIXES[_env];
+  const sa=($('saBase').value+suf.sa).toLowerCase();
+  const obj={
+    storage_account:sa,
+    container:$('container').value,
+    access_connector:$('acBase').value+suf.cat,
+    storage_credential_name:($('scBase').value||$('acBase').value)+suf.cat,
+    catalog_bronze:$('catBronze').value+suf.cat,
+    catalog_silver:$('catSilver').value+suf.cat,
+    catalog_volumes:$('catVolumes').value+suf.cat,
+    default_schema:$('defSchema').value||'hr',
+    landing_path:'abfss://'+$('container').value+'@'+sa+'.dfs.core.windows.net/'+_env+'/landing',
+  };
+  if($('chkMeta').checked){
+    obj.catalog_admin=$('catAdmin').value;
+    obj.catalog_recon=$('catRecon').value;
+    obj.catalog_logging=$('catLogging').value;
+  }
+  $('summaryJson').textContent=JSON.stringify(obj,null,2);
+  $('summaryCard').style.display='block';
+}
+
+updatePreview();
+</script>
+</body>
+</html>
