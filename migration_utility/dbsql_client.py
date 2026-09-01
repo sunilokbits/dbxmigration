@@ -24,7 +24,21 @@ def _auto_discover_warehouse_id():
         return _discovered_warehouse_id
     try:
         from databricks.sdk import WorkspaceClient
-        w = WorkspaceClient()
+        # Try with the stored PAT first (deploy user has warehouse access),
+        # fall back to default SP credentials if no PAT is available.
+        host = os.environ.get("DATABRICKS_HOST", "").rstrip("/")
+        if host and not host.startswith("http"):
+            host = "https://" + host
+        token = None
+        try:
+            from secrets_helper import get_databricks_token
+            token = get_databricks_token()
+        except Exception:
+            pass
+        if host and token:
+            w = WorkspaceClient(host=host, token=token)
+        else:
+            w = WorkspaceClient()
         warehouses = list(w.warehouses.list())
         running = next((wh for wh in warehouses
                         if "RUNNING" in str(getattr(wh.state, "value", wh.state)).upper()), None)

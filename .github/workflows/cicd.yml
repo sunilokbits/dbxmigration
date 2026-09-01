@@ -98,6 +98,21 @@ jobs:
           WH_ID=$(bash deploy/resolve_sql_warehouse.sh || echo "")
           echo "SQL_WAREHOUSE_ID=$WH_ID" >> "$GITHUB_ENV"
           if [ -n "$WH_ID" ]; then echo "Resolved SQL warehouse: $WH_ID"; else echo "WARN: no SQL warehouse found in this workspace"; fi
+      - name: Inject SQL Warehouse ID into app.yml
+        if: env.SQL_WAREHOUSE_ID != ''
+        run: |
+          sed -i "/^  - name: DATABRICKS_SQL_WAREHOUSE_ID/{n;s|value: .*|value: \"$SQL_WAREHOUSE_ID\"|;}" app.yml
+          echo "Injected DATABRICKS_SQL_WAREHOUSE_ID=$SQL_WAREHOUSE_ID into app.yml"
+      - name: Grant SP warehouse access
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        if: env.SQL_WAREHOUSE_ID != ''
+        run: |
+          SP_NAME=$(databricks apps get dbxmigrationapp -o json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('service_principal_name',''))" 2>/dev/null || echo "")
+          if [ -n "$SP_NAME" ]; then
+            databricks warehouses set-permissions "$SQL_WAREHOUSE_ID" --json "{\"access_control_list\":[{\"service_principal_name\":\"$SP_NAME\",\"permission_level\":\"CAN_USE\"}]}" 2>/dev/null && echo "Granted CAN_USE to $SP_NAME" || echo "WARN: Could not grant SP warehouse access (non-blocking)"
+          fi
       - name: databricks bundle deploy -t dev
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
@@ -194,6 +209,21 @@ jobs:
           WH_ID=$(bash deploy/resolve_sql_warehouse.sh || echo "")
           echo "SQL_WAREHOUSE_ID=$WH_ID" >> "$GITHUB_ENV"
           if [ -n "$WH_ID" ]; then echo "Resolved SQL warehouse: $WH_ID"; else echo "WARN: no SQL warehouse found in this workspace"; fi
+      - name: Inject SQL Warehouse ID into app.yml
+        if: env.SQL_WAREHOUSE_ID != ''
+        run: |
+          sed -i "/^  - name: DATABRICKS_SQL_WAREHOUSE_ID/{n;s|value: .*|value: \"$SQL_WAREHOUSE_ID\"|;}" app.yml
+          echo "Injected DATABRICKS_SQL_WAREHOUSE_ID=$SQL_WAREHOUSE_ID into app.yml"
+      - name: Grant SP warehouse access
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        if: env.SQL_WAREHOUSE_ID != ''
+        run: |
+          SP_NAME=$(databricks apps get dbxmigrationapp -o json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('service_principal_name',''))" 2>/dev/null || echo "")
+          if [ -n "$SP_NAME" ]; then
+            databricks warehouses set-permissions "$SQL_WAREHOUSE_ID" --json "{\"access_control_list\":[{\"service_principal_name\":\"$SP_NAME\",\"permission_level\":\"CAN_USE\"}]}" 2>/dev/null && echo "Granted CAN_USE to $SP_NAME" || echo "WARN: Could not grant SP warehouse access (non-blocking)"
+          fi
       - name: databricks bundle deploy -t staging
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
