@@ -1,0 +1,81 @@
+# DBX Migration Studio — App Documentation
+
+## Overview
+DBX Migration Studio is an end-to-end SQL-to-Databricks migration accelerator built as a Databricks Native App. It automates migrating SQL Server data estates into the Databricks Lakehouse.
+
+## Architecture
+SQL Server → Azure Data Lake Storage Gen2 → Bronze Layer → Silver Layer → Gold Layer
+All managed by Unity Catalog (admin_source.configtables)
+
+## Modules
+1. Discovery — Scan SQL Server, score complexity, build dependency graph
+2. Convert to PySpark — AI-powered T-SQL → PySpark notebook conversion
+3. MetadataFlow — Provision Unity Catalog + Delta metadata tables
+4. Pipeline Studio — Create Bronze/Silver/Gold medallion pipelines
+5. Job Manager — Create and monitor Lakeflow Jobs
+6. Job Scheduler — Cron/interval/one-time scheduling
+7. Reports & Analytics — Migration dashboards, progress charts
+8. Reconciliation — Source vs target row-count comparison
+9. Data Quality — Completeness, accuracy, consistency, freshness checks
+10. Schema Comparison — Column-level type drift detection
+11. Self-Healing Bot — Intelligent failure detection and auto-recovery
+12. User Management — RBAC (Admin, Operator, Viewer)
+13. Genie AI — Natural language queries across all data
+14. DevOps Integration — Azure DevOps CI/CD
+
+## Connected Catalogs & Tables
+
+### admin_source.configtables
+- wf_job_metadata — migration jobs (source_table, target_table, status, row_count, error_msg)
+- wf_pipeline_metadata — pipeline definitions (catalog, schema, layer, pipeline_id)
+- wf_run_history — pipeline runs (job_name, start/end time, rows_read, rows_written, status, duration_mins)
+- wf_scheduler_config — cron schedules (job_name, schedule, enabled, next_run)
+- wf_source_tables — discovered source tables (schema, table_name, row_count, complexity_score)
+- wf_watermark_metadata — incremental watermarks (table_name, last_loaded_value)
+
+### admin_source.migration_app
+- migration_jobs — live job tracker (job_id, source, target, state, rows_migrated, error)
+- audit_log — user actions (user_email, action, entity, timestamp, details)
+- user_roles — RBAC (user_email, role, granted_by, granted_at)
+
+### bronze.hr (Raw ingestion)
+bronze_customers, bronze_products, bronze_categories, bronze_stores, bronze_fact_sales_orders, bronze_invoices, bronze_payments, bronze_dimemployee, bronze_dimdepartment, bronze_dimjobrole
+
+### silver.hr (Cleaned/enriched)
+customers, products, stores, fact_sales_orders, invoices, payments, dimemployee, dimdepartment, dimjobrole, dimlocation
+
+### Operations
+- loggingdetails.hr.executionlog — pipeline execution logs
+- reconciliation.hr.reconcilationdetails — source vs target reconciliation
+
+### Samples
+- samples.nyctaxi.trips — NYC taxi data
+- samples.tpch.orders — TPC-H benchmark
+
+## Getting Started (5-Step Workflow)
+1. Configure — Set SQL Server connection, Databricks host, storage, Unity Catalog
+2. Discover — Scan SQL Server for tables, SPs, views, UDFs
+3. Convert — AI-generate PySpark notebooks from T-SQL objects
+4. Deploy Pipelines — MetadataFlow → Pipeline Studio → Job Manager
+5. Validate — Reconciliation + Data Quality checks
+
+## Tech Stack
+- Frontend: Flask + Vanilla JS (Databricks Apps)
+- Backend: Python Flask (17 route modules)
+- Pipelines: Lakeflow Spark Declarative Pipelines + Auto Loader
+- Orchestration: Lakeflow Jobs
+- Storage: Azure Data Lake Storage Gen2
+- Secrets: Databricks Secret Scopes
+- AI: Databricks Genie Conversations API
+
+## ETL Notebooks
+- 00_Setup_Secrets, 00_Meta_Orchestrator
+- 01_Landing_Zone, 01_Meta_Extract
+- 02_Bronze, 02_Meta_Bronze
+- 03_Silver, 03_Meta_Silver
+- 04_Meta_Reconciliation
+- 05_Meta_ExecutionLog
+
+## Data Flow
+SQL Server → Landing Zone (ADLS) → Bronze (Auto Loader) → Silver (cleaned) → Gold
+With reconciliation, execution logging, and watermark tracking at each stage.
