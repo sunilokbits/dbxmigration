@@ -14,14 +14,40 @@ logger = get_logger(__name__)
 _local = threading.local()
 _init_lock = threading.Lock()
 _tables_initialised = False
+_discovered_warehouse_id = None
+
+
+def _auto_discover_warehouse_id():
+    """Find a SQL warehouse in the workspace when none is configured via env vars."""
+    global _discovered_warehouse_id
+    if _discovered_warehouse_id is not None:
+        return _discovered_warehouse_id
+    try:
+        from databricks.sdk import WorkspaceClient
+        w = WorkspaceClient()
+        warehouses = list(w.warehouses.list())
+        running = next((wh for wh in warehouses
+                        if "RUNNING" in str(getattr(wh.state, "value", wh.state)).upper()), None)
+        chosen = running or (warehouses[0] if warehouses else None)
+        if chosen:
+            _discovered_warehouse_id = chosen.id
+            logger.info("Auto-discovered SQL warehouse: %s (%s)", chosen.name, chosen.id)
+            return chosen.id
+    except Exception as e:
+        logger.warning("SQL warehouse auto-discovery failed: %s", e)
+    _discovered_warehouse_id = ""
+    return ""
 
 
 def _get_config():
-    """Read SQL warehouse config from environment."""
+    """Read SQL warehouse config from environment, auto-discovering if needed."""
+    warehouse_id = os.environ.get("DATABRICKS_SQL_WAREHOUSE_ID", "")
+    if not warehouse_id:
+        warehouse_id = _auto_discover_warehouse_id()
     return {
         "server_hostname": os.environ.get("DATABRICKS_SERVER_HOSTNAME", os.environ.get("DATABRICKS_HOST", "")),
         "http_path": os.environ.get("DATABRICKS_HTTP_PATH", ""),
-        "warehouse_id": os.environ.get("DATABRICKS_SQL_WAREHOUSE_ID", ""),
+        "warehouse_id": warehouse_id,
         "catalog": os.environ.get("DATABRICKS_CATALOG", "admin_source"),
         "schema": os.environ.get("DATABRICKS_SCHEMA", "migration_app"),
     }

@@ -65,17 +65,28 @@ def _chk_databricks_auth():
 
 
 def _chk_sql_warehouse():
-    from dbsql_client import execute_query, get_catalog_schema
+    from dbsql_client import execute_query, get_catalog_schema, _auto_discover_warehouse_id
+    wh_id = os.environ.get("DATABRICKS_SQL_WAREHOUSE_ID", "")
+    discovered = False
+    if not wh_id:
+        wh_id = _auto_discover_warehouse_id()
+        discovered = True
+    if not wh_id and not os.environ.get("DATABRICKS_HTTP_PATH"):
+        return ("No SQL warehouse found — set DATABRICKS_SQL_WAREHOUSE_ID or create a SQL warehouse in the workspace",
+                "fail", "Go to SQL Warehouses in Databricks, create/start one, then re-run.")
     try:
         rows = execute_query("SELECT 1 AS ok")
-    except RuntimeError:
-        return ("Databricks SQL env vars not set (DATABRICKS_SERVER_HOSTNAME / DATABRICKS_HTTP_PATH)",
-                "fail", "Provided automatically via app.yml when deployed to Databricks Apps — for local runs, export them from Settings → Databricks.")
+    except Exception as e:
+        msg = str(e)[:200]
+        if "STOPPED" in msg.upper() or "START" in msg.upper():
+            return (f"SQL warehouse '{wh_id}' is stopped", "fail", "Start the warehouse in Databricks SQL Warehouses, then re-run.")
+        return (f"SQL warehouse connection failed: {msg}", "fail", "Check warehouse status and permissions.")
     cat, sch = get_catalog_schema()
     ok = bool(rows) and rows[0].get("ok") == 1
     if not ok:
-        return "Warehouse query returned no result", "fail", "Check DATABRICKS_HTTP_PATH / warehouse ID configuration."
-    return f"SQL Warehouse reachable — app catalog '{cat}.{sch}' in use", "pass", ""
+        return "Warehouse query returned no result", "fail", "Check warehouse configuration."
+    src = "auto-discovered" if discovered else "configured"
+    return f"SQL Warehouse reachable ({src}: {wh_id}) — catalog '{cat}.{sch}' in use", "pass", ""
 
 
 def _chk_unity_catalog():
@@ -202,12 +213,57 @@ def _chk_dependencies():
     return f"All {len(ok)} application dependencies installed", "pass", ""
 
 
+def _chk_genie_space():
+    """Check whether a Genie Space is configured and reachable."""
+    space_id = os.environ.get("GENIE_SPACE_ID", "").strip()
+    try:
+        from config_cache import get_config as _gc
+        if not space_id:
+            space_id = (_gc().get("genie_space_id") or "").strip()
+    except Exception:
+        pass
+    # Try live discovery from workspace
+    host = os.environ.get("DATABRICKS_HOST", "").rstrip("/")
+    if host and not host.startswith("http"):
+        host = "https://" + host
+    spaces_found = []
+    if host:
+        try:
+            from secrets_helper import get_databricks_token
+            token = get_databricks_token()
+            import requests as _req
+            r = _req.get(f"{host}/api/2.0/genie/spaces",
+                         headers={"Authorization": f"Bearer {token}"}, timeout=10)
+            if r.status_code == 200:
+                spaces_found = r.json().get("spaces", [])
+        except Exception:
+            pass
+    if spaces_found:
+        titles = ", ".join(s.get("title", s.get("space_id", "?"))[:40] for s in spaces_found[:3])
+        count = len(spaces_found)
+        if space_id:
+            match = next((s for s in spaces_found if s.get("space_id") == space_id), None)
+            if match:
+                return (f"Genie Space configured: '{match.get('title', space_id)}' ({space_id[:12]}…)",
+                        "pass", "")
+            return (f"Configured Genie Space ID '{space_id[:12]}…' not found among {count} space(s): {titles}",
+                    "warn", "Verify the GENIE_SPACE_ID env var or pick a valid space from the Genie AI panel.")
+        return (f"{count} Genie Space(s) available in workspace: {titles}",
+                "pass", "")
+    if space_id:
+        return (f"Genie Space ID configured ({space_id[:12]}…) but could not verify via API",
+                "warn", "The space may still work — open the Genie AI panel to test.")
+    return ("No Genie Space found — Genie AI chat will not be available",
+            "warn", "Create a Genie Space in Databricks (Genie → New Space), or re-deploy via the CI/CD pipeline which auto-creates one.")
+
+
 def _collect_checks():
     return [
         _mk("databricks_auth", "Databricks Workspace Access", "Access", _chk_databricks_auth),
         _mk("sql_warehouse", "SQL Warehouse Connectivity", "Access", _chk_sql_warehouse),
         _mk("unity_catalog", "Unity Catalog Catalogs", "Access", _chk_unity_catalog, required=False),
         _mk("secret_scope", "Secret Scope", "Access", _chk_secret_scope, required=False),
+        _mk("genie_space", "Genie AI Space", "Components", _chk_genie_space, required=False),
         _mk("storage", "Storage / Landing Zone", "Components", _chk_storage_access, required=False),
         _mk("azure_sub", "Azure Subscription Access", "Components", _chk_azure_subscription, required=False),
         _mk("dependencies", "Dependency Installation", "Dependencies", _chk_dependencies),
