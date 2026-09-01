@@ -110,23 +110,7 @@ jobs:
         if: env.SQL_WAREHOUSE_ID != ''
         run: |
           pip install -q requests databricks-sdk >/dev/null 2>&1 || true
-          python3 -c "
-import json, requests, os
-from databricks.sdk import WorkspaceClient
-w = WorkspaceClient()
-app = next((a for a in w.apps.list() if a.name == 'dbxmigrationapp'), None)
-if app and app.service_principal_client_id:
-    sp_app_id = app.service_principal_client_id
-    host = os.environ['DATABRICKS_HOST'].rstrip('/')
-    token = os.environ['DATABRICKS_TOKEN']
-    wh_id = os.environ.get('SQL_WAREHOUSE_ID', '')
-    r = requests.patch(f'{host}/api/2.0/permissions/sql/warehouses/{wh_id}',
-        headers={'Authorization': f'Bearer {token}'},
-        json={'access_control_list': [{'service_principal_name': sp_app_id, 'permission_level': 'CAN_USE'}]})
-    print(f'Granted CAN_USE to {sp_app_id}: {r.status_code}')
-else:
-    print('WARN: could not find app SP (non-blocking)')
-" 2>/dev/null || echo "WARN: Could not grant SP warehouse access (non-blocking)"
+          python3 deploy/grant_sp_warehouse.py || echo "WARN: Could not grant SP warehouse access (non-blocking)"
       - name: databricks bundle deploy -t dev
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
@@ -235,23 +219,7 @@ else:
         if: env.SQL_WAREHOUSE_ID != ''
         run: |
           pip install -q requests databricks-sdk >/dev/null 2>&1 || true
-          python3 -c "
-import json, requests, os
-from databricks.sdk import WorkspaceClient
-w = WorkspaceClient()
-app = next((a for a in w.apps.list() if a.name == 'dbxmigrationapp'), None)
-if app and app.service_principal_client_id:
-    sp_app_id = app.service_principal_client_id
-    host = os.environ['DATABRICKS_HOST'].rstrip('/')
-    token = os.environ['DATABRICKS_TOKEN']
-    wh_id = os.environ.get('SQL_WAREHOUSE_ID', '')
-    r = requests.patch(f'{host}/api/2.0/permissions/sql/warehouses/{wh_id}',
-        headers={'Authorization': f'Bearer {token}'},
-        json={'access_control_list': [{'service_principal_name': sp_app_id, 'permission_level': 'CAN_USE'}]})
-    print(f'Granted CAN_USE to {sp_app_id}: {r.status_code}')
-else:
-    print('WARN: could not find app SP (non-blocking)')
-" 2>/dev/null || echo "WARN: Could not grant SP warehouse access (non-blocking)"
+          python3 deploy/grant_sp_warehouse.py || echo "WARN: Could not grant SP warehouse access (non-blocking)"
       - name: databricks bundle deploy -t staging
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
