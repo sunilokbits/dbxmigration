@@ -113,7 +113,7 @@ def _get_azure_credential(cfg=None):
     if _CACHED_CREDENTIAL is not None:
         return _CACHED_CREDENTIAL
 
-    from azure.identity import DefaultAzureCredential, InteractiveBrowserCredential
+    from azure.identity import DefaultAzureCredential
 
     try:
         cred = DefaultAzureCredential()
@@ -122,14 +122,18 @@ def _get_azure_credential(cfg=None):
         _log("Authenticated via DefaultAzureCredential.")
         _CACHED_CREDENTIAL = cred
         return cred
-    except Exception:
-        _log("DefaultAzureCredential unavailable — opening browser for interactive login…", "WARN")
-
-    cred = InteractiveBrowserCredential()
-    cred.get_token("https://management.azure.com/.default")  # triggers browser
-    _log("Authenticated via interactive browser login.")
-    _CACHED_CREDENTIAL = cred
-    return cred
+    except Exception as e:
+        # This code always runs inside a Flask request (local dev server or the
+        # deployed Databricks App) — there is no interactive browser session to
+        # complete an OAuth redirect back to, so InteractiveBrowserCredential
+        # would previously fail with an opaque "Failed to open a browser" OS
+        # error. Fail fast with an actionable message instead.
+        raise RuntimeError(
+            "No Azure credentials available (DefaultAzureCredential failed: "
+            f"{e}). Fill in Tenant ID, Client ID and Client Secret under "
+            "Settings \u2192 Azure Service Principal, or run 'az login' on the "
+            "machine hosting this app."
+        ) from e
 
 
 def _databricks_api(method, path, cfg, payload=None):
