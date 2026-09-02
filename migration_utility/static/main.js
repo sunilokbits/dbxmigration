@@ -4439,19 +4439,26 @@ async function deployInfrastructure(){
   if(!cfg.subscription_id||!cfg.storage_account){
     toast('Subscription ID and Storage Account are required','terr');return;
   }
-  const infraMode=(G('cfgInfraMode')?.value||'existing');
+  let infraMode=(G('cfgInfraMode')?.value||'existing');
   // Creating Azure resources (Storage Account, Access Connector, RBAC) goes
   // through Azure Resource Manager, which a Databricks PAT cannot authenticate
-  // to — block early with a precise message instead of failing mid-deploy.
+  // to. Rather than blocking, auto-fallback to "Use existing infrastructure"
+  // when no Service Principal is configured — that's almost always what's
+  // actually wanted when Storage Account/Access Connector already exist
+  // (e.g. an older saved config still has infra_mode="create" from before
+  // this dropdown existed).
   if(infraMode==='create'){
     const missing=[['Tenant ID',cfg.azure_tenant_id],['Client ID',cfg.azure_client_id],['Client Secret',cfg.azure_client_secret]]
       .filter(([,v])=>!(v||'').trim()).map(([n])=>n);
     if(missing.length){
-      toast('Azure Service Principal required to create new infrastructure — missing: '+missing.join(', '),'terr',7000);
-      cfgToggleAccordion('cfgAccAzure');
-      (!cfg.azure_tenant_id?G('cfgTenantId'):(!cfg.azure_client_id?G('cfgClientId'):G('cfgClientSecret')))?.focus();
-      return;
+      toast('No Azure Service Principal configured — switching to "Use existing infrastructure" (Unity Catalog only, no new Azure resources).','tinfo',6000);
+      infraMode='existing';
+      cfg.infra_mode='existing';
+      if(G('cfgInfraMode')) G('cfgInfraMode').value='existing';
+      if(typeof cfgInfraModeChanged==='function') cfgInfraModeChanged();
     }
+  }
+  if(infraMode==='create'){
     if(!cfg.resource_group){ toast('Resource Group is required to create new infrastructure','terr');return; }
     if(!cfg.access_connector){ toast('Access Connector Name is required to create new infrastructure','terr');return; }
   }
