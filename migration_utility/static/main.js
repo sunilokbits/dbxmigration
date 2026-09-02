@@ -3944,29 +3944,57 @@ window.cfgDeriveAbfss=function(){
   } else {
     if(preview) preview.style.display='none';
   }
+  cfgAutoFillDependents();
+};
+
+/* Fill every field that derives from Storage Account/Container, but only
+   when the user hasn't typed a value of their own — keeps Storage &
+   Unity Catalog sections effectively "zero manual input" beyond account
+   name + container. */
+window.cfgAutoFillDependents=function(){
+  const acct=(G('cfgStorageAcct')||{}).value||'';
+  const cont=(G('cfgContainer')||{}).value||'';
+  if(!acct||!cont) return;
+  const base='abfss://'+cont+'@'+acct+'.dfs.core.windows.net';
+  const fillIfEmpty=(id,val)=>{const f=G(id);if(f&&!f.value.trim())f.value=val;};
+  fillIfEmpty('cfgAccessConnector', acct+'_access');
+  fillIfEmpty('cfgStorageCredName', acct+'_cred');
+  fillIfEmpty('cfgVolName', 'landing');
+  fillIfEmpty('cfgVolCatalog', (Object.keys((_cachedDeployConfig||{}).catalogs||{})[0])||'dev_volumes');
+  fillIfEmpty('cfgVolSchema', 'default');
+  fillIfEmpty('cfgVolPath', base+'/dev/landing');
+  fillIfEmpty('cfgReconLocation', base+'/dev/uc-managed');
+  fillIfEmpty('cfgLogLocation', base+'/dev/uc-managed');
+  document.querySelectorAll('[data-extloc] .cfg-extloc-url').forEach(f=>{if(!f.value.trim())f.value=base;});
+  document.querySelectorAll('[data-catalog]').forEach(row=>{
+    const nameInp=row.querySelector('.cfg-cat-name');
+    const locInp=row.querySelector('.cfg-cat-loc');
+    const catName=(nameInp&&nameInp.value.trim())||'';
+    if(locInp&&!locInp.value.trim()) locInp.value=base+'/dev/uc-managed'+(catName?'/'+catName:'');
+  });
 };
 window.cfgAutoFillVolPath=function(){
   const acct=(G('cfgStorageAcct')||{}).value||'';
   const cont=(G('cfgContainer')||{}).value||'';
-  if(!acct||!cont){alert('Please fill Storage Account and Container first.');return;}
+  if(!acct||!cont){toast('Please fill Storage Account and Container first.','terr');return;}
   const f=G('cfgVolPath');if(f)f.value='abfss://'+cont+'@'+acct+'.dfs.core.windows.net/dev/landing';
 };
 window.cfgAutoFillLoc=function(fieldId){
   const acct=(G('cfgStorageAcct')||{}).value||'';
   const cont=(G('cfgContainer')||{}).value||'';
-  if(!acct||!cont){alert('Please fill Storage Account and Container first.');return;}
+  if(!acct||!cont){toast('Please fill Storage Account and Container first.','terr');return;}
   const f=G(fieldId);if(f)f.value='abfss://'+cont+'@'+acct+'.dfs.core.windows.net/dev/uc-managed';
 };
 window.cfgAutoFillInput=function(inputEl){
   const acct=(G('cfgStorageAcct')||{}).value||'';
   const cont=(G('cfgContainer')||{}).value||'';
-  if(!acct||!cont){alert('Please fill Storage Account and Container first.');return;}
+  if(!acct||!cont){toast('Please fill Storage Account and Container first.','terr');return;}
   if(inputEl)inputEl.value='abfss://'+cont+'@'+acct+'.dfs.core.windows.net';
 };
 window.cfgAutoFillCatLoc=function(row){
   const acct=(G('cfgStorageAcct')||{}).value||'';
   const cont=(G('cfgContainer')||{}).value||'';
-  if(!acct||!cont){alert('Please fill Storage Account and Container first.');return;}
+  if(!acct||!cont){toast('Please fill Storage Account and Container first.','terr');return;}
   const nameInp=row.querySelector('.cfg-cat-name');
   const catName=(nameInp&&nameInp.value.trim())||'';
   const locInp=row.querySelector('.cfg-cat-loc');
@@ -4006,6 +4034,7 @@ function _addExtLocRow(name,url){
     '<div style="display:flex;gap:6px;align-items:flex-end;"><div style="flex:1;"><label class="lbl">ABFSS URL <button type=button class=cfg-auto-btn onclick="cfgAutoFillInput(this.closest(\'[data-extloc]\').querySelector(\'.cfg-extloc-url\'))">Auto-fill</button></label><input class="inp cfg-extloc-url" placeholder="abfss://..." value="'+(url||'')+'"></div>'+
     '<button class="btn btn-ghost btn-xs" onclick="this.closest(\'.cfg-grid\').remove()" style="margin-bottom:2px;color:var(--red);" title="Remove">&times;</button></div>';
   G('cfgExtLocList').appendChild(d);
+  if(typeof cfgAutoFillDependents==='function') cfgAutoFillDependents();
 }
 function cfgAddExtLoc(){ _addExtLocRow('',''); }
 
@@ -4017,6 +4046,7 @@ function _addCatalogRow(name,loc,schemas){
     '<div style="display:flex;gap:6px;align-items:flex-end;"><div style="flex:1;"><label class="lbl">Schemas</label><input class="inp cfg-cat-schemas" placeholder="default,hr,raw" value="'+(schemas||'default')+'"></div>'+
     '<button class="btn btn-ghost btn-xs" onclick="this.closest(\'.cfg-grid-3\').remove()" style="margin-bottom:2px;color:var(--red);" title="Remove">&times;</button></div>';
   G('cfgCatalogList').appendChild(d);
+  if(typeof cfgAutoFillDependents==='function') cfgAutoFillDependents();
 }
 function cfgAddCatalog(){ _addCatalogRow('','','default'); }
 

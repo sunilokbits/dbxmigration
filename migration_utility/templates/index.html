@@ -1325,7 +1325,8 @@
           <svg class="cfg-acc-arrow" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
         <div class="cfg-acc-body">
-          <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;">
+          <p style="font-size:10px;color:var(--t4);margin:0 0 10px;">Only these two fields are required here — everything else in this section (Access Connector, Storage Credential, Volume, and Locations) is derived automatically.</p>
+          <div class="cfg-grid" style="grid-template-columns:2fr 1fr;">
             <div><label class="lbl">Storage Account Name <span class="cfg-req">*</span></label><input class="inp" id="cfgStorageAcct" placeholder="e.g. sqltodatabrciksmig" oninput="cfgDeriveAbfss();cfgUpdateStatus()"></div>
             <div><label class="lbl">Container Name <span class="cfg-req">*</span></label><input class="inp" id="cfgContainer" placeholder="e.g. datalake" oninput="cfgDeriveAbfss()"></div>
           </div>
@@ -1340,13 +1341,14 @@
             <div style="font-size:11px;font-weight:700;color:var(--t2);margin-bottom:8px;">
               <svg viewBox="0 0 24 24" style="width:12px;height:12px;vertical-align:-1px;margin-right:4px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
               Access Connector &amp; Storage Credential
+              <span style="font-weight:400;font-size:9px;color:var(--t4);margin-left:6px;">Auto-filled from Storage Account name — override only if needed</span>
             </div>
             <div class="cfg-grid">
-              <div><label class="lbl">Access Connector Name</label><input class="inp" id="cfgAccessConnector" placeholder="e.g. sqltodatabrciks_access_mig"></div>
-              <div><label class="lbl">Storage Credential Name <span style="font-weight:400;color:var(--t4);">(Unity Catalog)</span></label><input class="inp" id="cfgStorageCredName" placeholder="e.g. ac-sqltodatabricks" oninput="cfgUpdateStatus()"></div>
+              <div><label class="lbl">Access Connector Name <span style="font-weight:400;color:var(--t4);">(optional)</span></label><input class="inp" id="cfgAccessConnector" placeholder="auto-filled from Storage Account"></div>
+              <div><label class="lbl">Storage Credential Name <span style="font-weight:400;color:var(--t4);">(optional)</span></label><input class="inp" id="cfgStorageCredName" placeholder="auto-filled from Storage Account" oninput="cfgUpdateStatus()"></div>
             </div>
             <div style="margin-top:6px;font-size:9px;color:var(--t4);line-height:1.4;">
-              The Storage Credential is used by Unity Catalog to access ADLS. If left blank, the Access Connector name is used.<br>
+              Both are derived automatically once you enter a Storage Account name above. If left blank, the Access Connector name is used as the credential.<br>
               Use <strong>Test</strong> below to validate the credential can reach your storage account.
             </div>
             <div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
@@ -1400,16 +1402,16 @@
           <div class="cfg-subcard" style="margin-top:14px;">
             <div style="font-size:11px;font-weight:700;color:var(--t2);margin-bottom:8px;">
               <svg viewBox="0 0 24 24" style="width:12px;height:12px;vertical-align:-1px;margin-right:4px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
-              Volume Configuration
+              Volume Configuration <span style="font-weight:400;font-size:9px;color:var(--t4);">(all fields below auto-fill once Storage Account is set)</span>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
-              <div><label class="lbl">Volume Name</label><input class="inp" id="cfgVolName" placeholder="e.g. landing"></div>
-              <div><label class="lbl">Catalog</label><input class="inp" id="cfgVolCatalog" placeholder="e.g. dev_volumes"></div>
+            <div class="cfg-grid-3">
+              <div><label class="lbl">Volume Name</label><input class="inp" id="cfgVolName" placeholder="landing"></div>
+              <div><label class="lbl">Catalog</label><input class="inp" id="cfgVolCatalog" placeholder="auto-filled"></div>
               <div><label class="lbl">Schema</label><input class="inp" id="cfgVolSchema" placeholder="default" value="default"></div>
             </div>
             <div style="margin-top:8px;">
-              <label class="lbl">Storage Location (ABFSS)
-                <button type="button" class="cfg-auto-btn" onclick="cfgAutoFillVolPath()" title="Auto-fill from storage account">Auto-fill</button>
+              <label class="lbl">Storage Location (ABFSS) <span style="font-weight:400;color:var(--t4);">(optional — auto-filled)</span>
+                <button type="button" class="cfg-auto-btn" onclick="cfgAutoFillVolPath()" title="Re-derive from storage account">Re-derive</button>
               </label>
               <input class="inp" id="cfgVolPath" placeholder="abfss://container@account.dfs.core.windows.net/path">
             </div>
@@ -1426,27 +1428,27 @@
               <button class="cfg-sub-tab" id="cfgSubLog" onclick="cfgSwitchSubTab('log')">Execution Logging</button>
             </div>
             <div id="cfgSubReconPanel">
-              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+              <div class="cfg-grid-3">
                 <div><label class="lbl">Catalog</label><input class="inp" id="cfgReconCatalog" placeholder="reconciliation" value="reconciliation"></div>
                 <div><label class="lbl">Schema</label><input class="inp" id="cfgReconSchema" placeholder="hr" value="hr"></div>
                 <div><label class="lbl">Table Name</label><input class="inp" id="cfgReconTable" placeholder="ReconcilationDetails" value="ReconcilationDetails"></div>
               </div>
               <div style="margin-top:6px;">
-                <label class="lbl">Managed Location (ABFSS)
-                  <button type="button" class="cfg-auto-btn" onclick="cfgAutoFillLoc('cfgReconLocation')" title="Auto-derive from storage account">Auto-fill</button>
+                <label class="lbl">Managed Location (ABFSS) <span style="font-weight:400;color:var(--t4);">(optional — auto-filled)</span>
+                  <button type="button" class="cfg-auto-btn" onclick="cfgAutoFillLoc('cfgReconLocation')" title="Re-derive from storage account">Re-derive</button>
                 </label>
                 <input class="inp" id="cfgReconLocation" placeholder="abfss://container@account.dfs.core.windows.net/path">
               </div>
             </div>
             <div id="cfgSubLogPanel" style="display:none;">
-              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+              <div class="cfg-grid-3">
                 <div><label class="lbl">Catalog</label><input class="inp" id="cfgLogCatalog" placeholder="logging" value="logging"></div>
                 <div><label class="lbl">Schema</label><input class="inp" id="cfgLogSchema" placeholder="hr" value="hr"></div>
                 <div><label class="lbl">Table Name</label><input class="inp" id="cfgLogTable" placeholder="ExecutionLog" value="ExecutionLog"></div>
               </div>
               <div style="margin-top:6px;">
-                <label class="lbl">Managed Location (ABFSS)
-                  <button type="button" class="cfg-auto-btn" onclick="cfgAutoFillLoc('cfgLogLocation')" title="Auto-derive from storage account">Auto-fill</button>
+                <label class="lbl">Managed Location (ABFSS) <span style="font-weight:400;color:var(--t4);">(optional — auto-filled)</span>
+                  <button type="button" class="cfg-auto-btn" onclick="cfgAutoFillLoc('cfgLogLocation')" title="Re-derive from storage account">Re-derive</button>
                 </label>
                 <input class="inp" id="cfgLogLocation" placeholder="abfss://container@account.dfs.core.windows.net/path">
               </div>
