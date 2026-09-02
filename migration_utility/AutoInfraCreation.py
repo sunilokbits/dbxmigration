@@ -320,6 +320,40 @@ def _configured_storage_folders(cfg):
     return folders
 
 
+def _managed_storage_folders(cfg):
+    """Relative paths Unity Catalog owns as catalog managed storage roots."""
+    managed_cfg = {
+        "storage_account": cfg.get("storage_account"),
+        "container": cfg.get("container"),
+        "folders": [],
+        "catalogs": cfg.get("catalogs"),
+        "reconciliation": cfg.get("reconciliation"),
+        "logging": cfg.get("logging"),
+        "volume_catalog": cfg.get("volume_catalog"),
+        "volume_catalog_location": cfg.get("volume_catalog_location"),
+        "volume_path": cfg.get("volume_path"),
+    }
+    managed = _configured_storage_folders(managed_cfg)
+    volume_path_folder = _configured_storage_folders({
+        "storage_account": cfg.get("storage_account"),
+        "container": cfg.get("container"),
+        "folders": [cfg.get("volume_path") or ""],
+    })
+    return [folder for folder in managed if folder not in volume_path_folder]
+
+
+def _is_managed_storage_path(folder, managed_folders):
+    """True when UC already materializes this path as managed storage."""
+    for managed in managed_folders:
+        if folder == managed:
+            return True
+        if folder.startswith(managed + "/"):
+            return True
+        if managed.startswith(folder + "/"):
+            return True
+    return False
+
+
 def _directory_hierarchy(folders):
     """Expand leaf directories into unique parent-first ADLS paths."""
     hierarchy = []
@@ -811,9 +845,13 @@ def create_folders(cfg):
             "Check the Create Unity Catalogs step and configured schema names.")
 
     failures = []
+    managed_folders = _managed_storage_folders(cfg)
     for folder in _directory_hierarchy(folders):
         folder = folder.strip().strip("/")
         if not folder:
+            continue
+        if _is_managed_storage_path(folder, managed_folders):
+            _log(f"Folder '{folder}' is Unity Catalog managed storage — created with its catalog.", "INFO")
             continue
         full_path = f"{base}/{folder}"
         tmp_name = "mkdir_tmp_" + uuid.uuid4().hex[:10]
@@ -823,7 +861,8 @@ def create_folders(cfg):
             "volume_type": "EXTERNAL", "storage_location": full_path,
             "comment": "temporary — used only to materialize the ADLS directory, safe to ignore/delete",
         })
-        if ok or "already exists" in json.dumps(body).lower():
+        body_text = json.dumps(body).lower()
+        if ok or "already exists" in body_text or "location_overlap" in body_text:
             _log(f"  Folder '{folder}' created.")
             if ok:
                 _databricks_api(

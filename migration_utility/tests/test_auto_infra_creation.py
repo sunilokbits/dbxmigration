@@ -9,15 +9,73 @@ import AutoInfraCreation
 
 
 class TestInfraOrchestration(unittest.TestCase):
+    def _staging_cfg(self):
+        base = "abfss://datalake@sa.dfs.core.windows.net"
+        return {
+            "storage_account": "sa",
+            "container": "datalake",
+            "folders": [],
+            "metadata_catalog": "dbx_admin_source",
+            "metadata_schema": "sales",
+            "catalogs": {
+                "dbx_bronze": {"location": f"{base}/dev/uc-managed/dbx_bronze", "schemas": ["sales"]},
+                "dbx_silver": {"location": f"{base}/dev/uc-managed/dbx_silver", "schemas": ["sales"]},
+                "dbx_admin_source": {"location": f"{base}/dev/uc-managed/dbx_admin_source", "schemas": ["sales"]},
+            },
+            "reconciliation": {"catalog": "dbx_reconciliation", "schema": "sales",
+                               "location": f"{base}/dev/uc-managed/dbx_reconciliation"},
+            "logging": {"catalog": "dbx_logging", "schema": "sales",
+                        "location": f"{base}/dev/uc-managed/dbx_logging"},
+            "volume_catalog": "dbx_volumes",
+            "volume_schema": "sales",
+            "volume_name": "dbx_landing",
+            "volume_path": f"{base}/dev/dbx_landing",
+        }
+
+    def test_create_folders_skips_catalog_managed_storage_roots(self):
+        cfg = self._staging_cfg()
+
+        with patch.object(AutoInfraCreation, "_databricks_api", return_value=(True, {})) as mock_api:
+            AutoInfraCreation.create_folders(cfg)
+
+        materialized = [
+            call.args[3]["storage_location"]
+            for call in mock_api.call_args_list
+            if call.args[0] == "POST" and call.args[1].endswith("/volumes")
+        ]
+        self.assertEqual(
+            materialized,
+            ["abfss://datalake@sa.dfs.core.windows.net/dev/dbx_landing"],
+        )
+
+    def test_create_folders_treats_location_overlap_as_success(self):
+        cfg = self._staging_cfg()
+        overlap = {
+            "error_code": "INVALID_PARAMETER_VALUE",
+            "message": "Input path url overlaps with managed storage",
+            "details": [{"reason": "LOCATION_OVERLAP"}],
+        }
+
+        def api_response(method, path, _cfg, payload=None):
+            if method == "GET":
+                return True, {}
+            if path.endswith("/volumes"):
+                return False, overlap
+            return True, {}
+
+        with patch.object(AutoInfraCreation, "_databricks_api", side_effect=api_response):
+            AutoInfraCreation.create_folders(cfg)
+
     def test_create_folders_falls_back_to_an_existing_catalog_schema(self):
         cfg = {
             "storage_account": "sa",
             "container": "datalake",
+            "folders": ["dev/landing"],
             "metadata_catalog": "missing_admin",
             "metadata_schema": "configtables",
             "catalogs": {
                 "dbx_bronze": {
-                    "location": "abfss://datalake@sa.dfs.core.windows.net/dev/bronze",
+                    "location": "abfss://datalake@sa.dfs.core.windows.net/dev/uc-managed/dbx_bronze",
                     "schemas": ["sales"],
                 }
             },
@@ -40,14 +98,9 @@ class TestInfraOrchestration(unittest.TestCase):
         cfg = {
             "storage_account": "sa",
             "container": "datalake",
-            "folders": [],
+            "folders": ["dev/landing/raw"],
             "metadata_catalog": "admin_source",
             "metadata_schema": "configtables",
-            "catalogs": {
-                "dbx_admin_source": {
-                    "location": "abfss://datalake@sa.dfs.core.windows.net/dev/uc-managed/dbx_admin_source"
-                }
-            },
         }
 
         with patch.object(AutoInfraCreation, "_databricks_api", return_value=(True, {})) as mock_api:
@@ -60,8 +113,8 @@ class TestInfraOrchestration(unittest.TestCase):
         ]
         self.assertEqual(created_paths, [
             "abfss://datalake@sa.dfs.core.windows.net/dev",
-            "abfss://datalake@sa.dfs.core.windows.net/dev/uc-managed",
-            "abfss://datalake@sa.dfs.core.windows.net/dev/uc-managed/dbx_admin_source",
+            "abfss://datalake@sa.dfs.core.windows.net/dev/landing",
+            "abfss://datalake@sa.dfs.core.windows.net/dev/landing/raw",
         ])
 
     def test_directory_hierarchy_expands_full_paths_parent_first(self):
