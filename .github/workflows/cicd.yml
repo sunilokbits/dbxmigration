@@ -55,23 +55,54 @@ jobs:
         run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
       - name: Install Python dependencies
         run: |
+          set -e
           python -m pip install --upgrade pip
+          echo "::group::pip install -r requirements.txt"
           pip install -r requirements.txt
+          echo "::endgroup::"
           pip install pytest
+          # Every requirement is unpinned (>=), so a new upstream release can
+          # silently create an incompatible set. Report it without failing the
+          # build, since preinstalled runner packages can also trip this.
+          echo "::group::pip check"
+          pip check || echo "::warning::pip check reported dependency conflicts (see above)"
+          echo "::endgroup::"
       - name: databricks bundle validate (all targets)
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
           set -e
-          databricks bundle validate -t dev
-          databricks bundle validate -t staging
-          databricks bundle validate -t client --var="client_name=ci-validate"
+          for target in dev staging; do
+            echo "::group::databricks bundle validate -t $target"
+            databricks bundle validate -t "$target" \
+              || { echo "::error::bundle validate failed for target $target"; exit 1; }
+            echo "::endgroup::"
+          done
+          echo "::group::databricks bundle validate -t client"
+          databricks bundle validate -t client --var="client_name=ci-validate" \
+            || { echo "::error::bundle validate failed for target client"; exit 1; }
+          echo "::endgroup::"
       - name: Run unit tests
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-        run: pytest migration_utility/tests -v
+        run: |
+          set +e
+          pytest migration_utility/tests -v | tee /tmp/pytest_output.log
+          CODE=${PIPESTATUS[0]}
+          # snowflake-connector-python + pyarrow are known to segfault during
+          # native-library cleanup at interpreter shutdown (exit 139) *after*
+          # all tests already passed. Only fail the step for genuine test
+          # failures/errors, not this unrelated post-test-suite crash.
+          if grep -qE "^[0-9]+ (failed|error)" /tmp/pytest_output.log; then
+            exit 1
+          fi
+          if [ "$CODE" -eq 139 ] && grep -qE "^[0-9]+ passed" /tmp/pytest_output.log; then
+            echo "All tests passed; ignoring known post-test-suite segfault (exit 139)."
+            exit 0
+          fi
+          exit $CODE
 
   # ---------------------------------------------------------------------------
   deploy-dev:
