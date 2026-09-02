@@ -199,6 +199,33 @@ def _get_azure_credential(cfg=None):
         ) from e
 
 
+def _azure_credentials_available(cfg):
+    """True if an Azure Resource Manager credential can be obtained."""
+    try:
+        _get_azure_credential(cfg)
+        return True
+    except Exception as e:
+        _log(f"Azure credentials unavailable — Azure steps will be skipped. ({e})", "WARN")
+        return False
+
+
+def _derive_connector_id(cfg):
+    """Build the Access Connector's ARM resource ID from config alone.
+
+    Lets the Unity Catalog steps (3-6) run with only a Databricks PAT when the
+    connector was pre-created outside this app — a PAT authenticates to the
+    Databricks API, never to Azure Resource Manager, so Steps 0-2 can't run
+    without Azure credentials.
+    """
+    sub = (cfg.get("subscription_id") or "").strip()
+    rg = (cfg.get("resource_group") or "").strip()
+    ac = (cfg.get("access_connector") or "").strip()
+    if not (sub and rg and ac):
+        return ""
+    return (f"/subscriptions/{sub}/resourceGroups/{rg}"
+            f"/providers/Microsoft.Databricks/accessConnectors/{ac}")
+
+
 def _databricks_api(method, path, cfg, payload=None):
     """Call Databricks REST API. Returns (success:bool, data:dict)."""
     import requests
@@ -1024,27 +1051,73 @@ def run_all_streaming(cfg):
         all_steps.append(entry)
         return entry, result
 
-    # Step 0 — Verify Azure credentials via SDK
-    yield {"event": "step", "step": 0, "name": "Set Azure Subscription",
-           "status": "running", "message": "Authenticating via Azure SDK…", "logs": ""}
-    entry, _ = _do_step(0, "Set Azure Subscription", set_subscription, cfg)
-    yield entry
+    azure_ready = _azure_credentials_available(cfg)
 
-    # Step 1 — Storage
-    yield {"event": "step", "step": 1, "name": "Create Storage Account + Container + Folders",
-           "status": "running", "message": "Creating storage…", "logs": ""}
-    entry, _ = _do_step(1, "Create Storage Account + Container + Folders", create_storage, cfg)
-    yield entry
+    if not azure_ready:
+        # A Databricks PAT authenticates to the Databricks API only — never to
+        # Azure Resource Manager. Rather than failing Steps 0-2 three times with
+        # the same opaque credential-chain dump, skip them with one actionable
+        # message and let the PAT-only Unity Catalog steps proceed against
+        # pre-existing Azure resources.
+        skip_msg = (
+            "Skipped — no Azure credentials. A Databricks PAT cannot create Azure "
+            "resources. Either fill Tenant ID / Client ID / Client Secret under "
+            "Settings → Azure Service Principal, or pre-create the Storage Account "
+            "and Access Connector (e.g. via the src/notebooks/00_Setup_Infrastructure.py "
+            "notebook or the Azure portal) — Steps 3-6 below will then use them."
+        )
+        for skip_step, skip_name in (
+            (0, "Set Azure Subscription"),
+            (1, "Create Storage Account + Container + Folders"),
+            (2, "Create Access Connector + RBAC"),
+        ):
+            skip_entry = {"event": "step", "step": skip_step, "name": skip_name,
+                          "status": "skipped", "message": skip_msg, "logs": ""}
+            all_steps.append(skip_entry)
+            yield skip_entry
+        connector_id = None
+    else:
+        # Step 0 — Verify Azure credentials via SDK
+        yield {"event": "step", "step": 0, "name": "Set Azure Subscription",
+               "status": "running", "message": "Authenticating via Azure SDK…", "logs": ""}
+        entry, _ = _do_step(0, "Set Azure Subscription", set_subscription, cfg)
+        yield entry
 
-    # Step 2 — Access Connector
-    yield {"event": "step", "step": 2, "name": "Create Access Connector + RBAC",
-           "status": "running", "message": "Creating access connector…", "logs": ""}
-    entry, connector_id = _do_step(2, "Create Access Connector + RBAC", create_access_connector, cfg)
-    yield entry
+        # Step 1 — Storage
+        yield {"event": "step", "step": 1, "name": "Create Storage Account + Container + Folders",
+               "status": "running", "message": "Creating storage…", "logs": ""}
+        entry, _ = _do_step(1, "Create Storage Account + Container + Folders", create_storage, cfg)
+        yield entry
+
+        # Step 2 — Access Connector
+        yield {"event": "step", "step": 2, "name": "Create Access Connector + RBAC",
+               "status": "running", "message": "Creating access connector…", "logs": ""}
+        entry, connector_id = _do_step(2, "Create Access Connector + RBAC", create_access_connector, cfg)
+        yield entry
 
     # Steps 3-6 require Databricks credentials
     if cfg.get("databricks_host") and cfg.get("databricks_token"):
-        # Steps 3 & 4 need connector_id from Step 2
+        # Steps 3 & 4 need the Access Connector's ARM resource ID. Normally
+        # Step 2 returns it, but that step needs Azure (ARM) credentials which
+        # a Databricks PAT cannot provide. When the connector already exists
+        # (e.g. created by hand in the Azure portal), its resource ID is fully
+        # determined by subscription/resource group/name — so derive it and let
+        # the PAT-only Unity Catalog steps continue.
+        if not connector_id:
+            connector_id = _derive_connector_id(cfg)
+            if connector_id:
+                derived_entry = {
+                    "event": "step", "step": 2,
+                    "name": "Create Access Connector + RBAC",
+                    "status": "skipped",
+                    "message": ("Azure step skipped — using existing Access Connector "
+                                f"'{cfg.get('access_connector')}'. Ensure it exists and has "
+                                "'Storage Blob Data Owner' on the storage account."),
+                    "logs": f"[derived] Access Connector ID: {connector_id}\n",
+                }
+                all_steps.append(derived_entry)
+                yield derived_entry
+
         if not connector_id:
             skip_msg = ("Access Connector ID not available (Step 2 failed). "
                         "Cannot create Storage Credential or External Locations.")
