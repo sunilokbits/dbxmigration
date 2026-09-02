@@ -16,6 +16,7 @@ import json
 import time
 import uuid
 import argparse
+from urllib.parse import urlparse
 from datetime import datetime
 
 
@@ -267,6 +268,58 @@ def _databricks_api(method, path, cfg, payload=None):
     return ok, body
 
 
+def _volume_catalog_storage_root(cfg):
+    """Return a managed-storage root that does not overlap the external volume."""
+    configured = (cfg.get("volume_catalog_location") or "").strip().rstrip("/")
+    if configured:
+        return configured
+
+    volume_path = (cfg.get("volume_path") or "").strip().rstrip("/")
+    catalog = (cfg.get("volume_catalog") or "").strip()
+    parsed = urlparse(volume_path)
+    if not (parsed.scheme and parsed.netloc and catalog):
+        return ""
+
+    path_parts = [part for part in parsed.path.split("/") if part]
+    environment_root = path_parts[0] if len(path_parts) > 1 else ""
+    suffix = f"/{environment_root}/uc-managed/{catalog}" if environment_root else f"/uc-managed/{catalog}"
+    return f"{parsed.scheme}://{parsed.netloc}{suffix}"
+
+
+def _configured_storage_folders(cfg):
+    """Collect explicit folders plus directories implied by configured ABFSS paths."""
+    folders = []
+
+    def add_folder(value):
+        value = (value or "").strip()
+        if not value:
+            return
+        if "://" not in value:
+            folder = value.strip("/")
+        else:
+            parsed = urlparse(value)
+            expected_account = (cfg.get("storage_account") or "").lower()
+            expected_container = (cfg.get("container") or "datalake").lower()
+            actual_container, _, host = parsed.netloc.partition("@")
+            if expected_container and actual_container.lower() != expected_container:
+                return
+            if expected_account and not host.lower().startswith(expected_account + "."):
+                return
+            folder = parsed.path.strip("/")
+        if folder and folder not in folders:
+            folders.append(folder)
+
+    for folder in cfg.get("folders") or []:
+        add_folder(folder)
+    for catalog_cfg in (cfg.get("catalogs") or {}).values():
+        add_folder(catalog_cfg if isinstance(catalog_cfg, str) else catalog_cfg.get("location"))
+    add_folder((cfg.get("reconciliation") or {}).get("location"))
+    add_folder((cfg.get("logging") or {}).get("location"))
+    add_folder(_volume_catalog_storage_root(cfg))
+    add_folder(cfg.get("volume_path"))
+    return folders
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Step 0 — Verify Azure Credentials  (Python SDK — no CLI needed)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -364,7 +417,7 @@ def create_storage(cfg):
             raise
 
     # 1c — Folders (directories in ADLS)
-    for folder in cfg.get("folders", []):
+    for folder in _configured_storage_folders(cfg):
         _log(f"Creating folder '{folder}'…")
         try:
             dir_client = fs_client.create_directory(folder)
@@ -711,7 +764,7 @@ def create_folders(cfg):
     underlying cloud files/directory, so the folder is left behind.
     """
     _log("═══ Step 4b: Ensure Folder Paths Exist ═══")
-    folders = cfg.get("folders") or []
+    folders = _configured_storage_folders(cfg)
     if not folders:
         _log("No folder paths configured — skipping.", "INFO")
         return
@@ -932,6 +985,20 @@ def create_volume(cfg):
         vol_path = re.sub(r'@[^.]+\.dfs\.core\.windows\.net', f'@{expected_sa}.dfs.core.windows.net', vol_path)
         _log(f"Auto-corrected volume path: {old_path} → {vol_path}", "WARN")
 
+    catalog_root = _volume_catalog_storage_root({**cfg, "volume_path": vol_path})
+    catalog_payload = {"name": catalog, "comment": "External volumes catalog"}
+    if catalog_root:
+        catalog_payload["storage_root"] = catalog_root
+    _log(f"Ensuring volume catalog '{catalog}' exists → {catalog_root or 'metastore default'}")
+    cok, cbody = _databricks_api(
+        "POST", "/api/2.1/unity-catalog/catalogs", cfg, catalog_payload)
+    if cok:
+        _log(f"Catalog '{catalog}' created.")
+    elif "already exists" in json.dumps(cbody).lower():
+        _log(f"Catalog '{catalog}' already exists — OK.", "INFO")
+    else:
+        raise RuntimeError(f"Failed to create volume catalog '{catalog}': {cbody}")
+
     # Auto-create the schema if it doesn't exist
     _log(f"Ensuring schema '{catalog}.{schema}' exists…")
     schema_payload = {
@@ -950,8 +1017,7 @@ def create_volume(cfg):
     elif "already exists" in json.dumps(sbody).lower():
         _log(f"Schema '{catalog}.{schema}' already exists — OK.", "INFO")
     else:
-        _log(f"Failed to create schema '{catalog}.{schema}': {sbody}", "ERROR")
-        _log("Volume creation may fail if the schema doesn't exist.", "WARN")
+        raise RuntimeError(f"Failed to create schema '{catalog}.{schema}': {sbody}")
 
     _log(f"Creating volume '{catalog}.{schema}.{vol_name}' → {vol_path}")
     payload = {
@@ -975,10 +1041,10 @@ def create_volume(cfg):
         )
         if ok:
             _log(f"Volume '{vol_name}' created.")
-            break
+            return
         elif "already exists" in json.dumps(body).lower():
             _log(f"Volume '{vol_name}' already exists — skipping.", "INFO")
-            break
+            return
         elif ("cloud_storage" in json.dumps(body).lower()
               or "access" in json.dumps(body).lower()
               or "abfs" in json.dumps(body).lower()):
@@ -987,11 +1053,11 @@ def create_volume(cfg):
                      f"(RBAC still propagating) — waiting 20s…", "WARN")
                 time.sleep(20)
             else:
-                _log(f"Failed to create volume after {max_attempts} attempts "
-                     f"(storage access denied — check RBAC): {body}", "ERROR")
+                raise RuntimeError(
+                    f"Failed to create volume after {max_attempts} attempts "
+                    f"(storage access denied — check RBAC): {body}")
         else:
-            _log(f"Failed to create volume: {body}", "ERROR")
-            break
+            raise RuntimeError(f"Failed to create volume '{catalog}.{schema}.{vol_name}': {body}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1111,7 +1177,7 @@ def run_all_api(cfg):
         # Always materialize configured folder paths when present; storage
         # access may already exist in pre-created infrastructure, and this step
         # is what makes the Azure folder markers appear in ADLS.
-        if cfg.get("folders"):
+        if _configured_storage_folders(cfg):
             _run_step(4, "Create Folder Paths", create_folders, cfg)
 
         # Steps 5 & 6 use Databricks API directly — no connector_id needed
@@ -1291,7 +1357,7 @@ def run_all_streaming(cfg):
                 all_steps.append(skip_entry)
                 yield skip_entry
 
-        if cfg.get("folders"):
+        if _configured_storage_folders(cfg):
             yield {"event": "step", "step": 4, "name": "Create Folder Paths",
                    "status": "running", "message": "Materializing ADLS directories…", "logs": ""}
             entry, _ = _do_step(4, "Create Folder Paths", create_folders, cfg)

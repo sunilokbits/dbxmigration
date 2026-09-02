@@ -9,6 +9,78 @@ import AutoInfraCreation
 
 
 class TestInfraOrchestration(unittest.TestCase):
+    def test_storage_folders_are_derived_when_explicit_list_is_empty(self):
+        cfg = {
+            "storage_account": "sa",
+            "container": "datalake",
+            "folders": [],
+            "catalogs": {
+                "dbx_bronze": {
+                    "location": "abfss://datalake@sa.dfs.core.windows.net/dev/uc-managed/dbx_bronze"
+                }
+            },
+            "reconciliation": {
+                "location": "abfss://datalake@sa.dfs.core.windows.net/dev/reconciliation"
+            },
+            "logging": {
+                "location": "abfss://datalake@sa.dfs.core.windows.net/dev/logging"
+            },
+            "volume_catalog": "dbx_volumes",
+            "volume_path": "abfss://datalake@sa.dfs.core.windows.net/dev/dbx_landing",
+        }
+
+        self.assertEqual(
+            AutoInfraCreation._configured_storage_folders(cfg),
+            [
+                "dev/uc-managed/dbx_bronze",
+                "dev/reconciliation",
+                "dev/logging",
+                "dev/uc-managed/dbx_volumes",
+                "dev/dbx_landing",
+            ],
+        )
+
+    def test_create_volume_creates_missing_catalog_before_schema(self):
+        cfg = {
+            "storage_account": "sa",
+            "container": "datalake",
+            "volume_name": "dbx_landing",
+            "volume_catalog": "dbx_volumes",
+            "volume_schema": "sales",
+            "volume_path": "abfss://datalake@sa.dfs.core.windows.net/dev/dbx_landing",
+        }
+
+        with patch.object(AutoInfraCreation, "_databricks_api", return_value=(True, {})) as mock_api:
+            AutoInfraCreation.create_volume(cfg)
+
+        calls = mock_api.call_args_list
+        self.assertEqual(calls[0].args[1], "/api/2.1/unity-catalog/catalogs")
+        self.assertEqual(calls[0].args[3]["name"], "dbx_volumes")
+        self.assertEqual(
+            calls[0].args[3]["storage_root"],
+            "abfss://datalake@sa.dfs.core.windows.net/dev/uc-managed/dbx_volumes",
+        )
+        self.assertEqual(calls[1].args[1], "/api/2.1/unity-catalog/schemas")
+        self.assertEqual(calls[2].args[1], "/api/2.1/unity-catalog/volumes")
+
+    def test_create_volume_raises_when_catalog_creation_fails(self):
+        cfg = {
+            "storage_account": "sa",
+            "container": "datalake",
+            "volume_name": "dbx_landing",
+            "volume_catalog": "dbx_volumes",
+            "volume_schema": "sales",
+            "volume_path": "abfss://datalake@sa.dfs.core.windows.net/dev/dbx_landing",
+        }
+
+        with patch.object(
+            AutoInfraCreation,
+            "_databricks_api",
+            return_value=(False, {"error_code": "PERMISSION_DENIED"}),
+        ):
+            with self.assertRaises(RuntimeError):
+                AutoInfraCreation.create_volume(cfg)
+
     def test_run_all_streaming_materializes_folder_paths_before_catalogs(self):
         cfg = {
             "infra_mode": "existing",
