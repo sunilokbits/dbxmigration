@@ -142,6 +142,23 @@ jobs:
         run: |
           pip install -q requests databricks-sdk >/dev/null 2>&1 || true
           python3 deploy/grant_sp_warehouse.py || echo "WARN: Could not grant SP warehouse access (non-blocking)"
+      - name: Adopt pre-existing secret scope (dev)
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          # The scope can already exist in the workspace - created by an earlier
+          # deploy, by one_click_deploy.py, or on demand by secrets_helper. It is
+          # then absent from this bundle's Terraform state, so a plain deploy dies
+          # with "Scope migration-studio already exists". Bind adopts it instead.
+          if databricks secrets list-scopes -o json 2>/dev/null \
+             | python3 -c "import json,sys; sys.exit(0 if any(s.get('name')=='migration-studio' for s in json.load(sys.stdin).get('scopes',[])) else 1)" 2>/dev/null; then
+            echo "Scope migration-studio exists - binding it to the bundle"
+            databricks bundle deployment bind migration_studio_secrets migration-studio -t dev --auto-approve \
+              || echo "NOTE: bind skipped (already managed by this bundle)"
+          else
+            echo "Scope migration-studio not present - bundle will create it"
+          fi
       - name: databricks bundle deploy -t dev
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
@@ -161,6 +178,9 @@ jobs:
           # via the native Apps API command, which -- unlike `bundle run` --
           # doesn't hit the "Must specify environment variable source" bug.
           SRC_PATH=$(echo "$OUT" | grep "Uploading bundle files to" | sed -E 's#.*Uploading bundle files to (.*)\.\.\.#\1#')
+          # A freshly created app sits STOPPED; `apps deploy` rejects anything not
+          # running, so start it and wait for compute before shipping the code.
+          bash deploy/wait_for_app.sh dbxmigration
           databricks apps deploy dbxmigration --source-code-path "$SRC_PATH" --mode SNAPSHOT
       - name: Scaffold secret scope keys
         env:
@@ -259,7 +279,7 @@ jobs:
           set -e
           databricks bundle deploy -t staging --select apps.migration_studio --force-lock --var="sql_warehouse_id=$SQL_WAREHOUSE_ID"
           # Start the app compute if stopped, then deploy source code
-          databricks apps start dbxmigration --no-wait 2>/dev/null || true
+          bash deploy/wait_for_app.sh dbxmigration
           SRC_PATH=$(databricks bundle validate -t staging -o json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('workspace',{}).get('file_path',''))" 2>/dev/null || echo "")
           if [ -n "$SRC_PATH" ]; then
             databricks apps deploy dbxmigration --source-code-path "$SRC_PATH" --mode SNAPSHOT --timeout 10m
