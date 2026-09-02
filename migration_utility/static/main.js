@@ -3761,6 +3761,7 @@ function _collectConfig(){
     })(),
     metadata_catalog: G('cfgMetaCatalog')?.value?.trim()||'',
     metadata_schema:  G('cfgMetaSchema')?.value?.trim()||'',
+    infra_mode:       G('cfgInfraMode')?.value||'create',
     azure_tenant_id:  G('cfgTenantId')?.value?.trim()||'',
     azure_client_id:  G('cfgClientId')?.value?.trim()||'',
     azure_client_secret: G('cfgClientSecret')?.value||'',
@@ -3787,6 +3788,8 @@ function _populateConfig(c){
   if(G('cfgStorageCredName')) G('cfgStorageCredName').value=c.storage_credential_name||'';
   if(G('cfgStorageTestAuthMode')) G('cfgStorageTestAuthMode').value=c.storage_credential_test_auth_mode||'pat';
   if(typeof cfgStorageTestAuthModeChanged==='function') cfgStorageTestAuthModeChanged();
+  if(G('cfgInfraMode')) G('cfgInfraMode').value=c.infra_mode||'create';
+  if(typeof cfgInfraModeChanged==='function') cfgInfraModeChanged();
   G('cfgTenantId').value=c.azure_tenant_id||'';
   G('cfgClientId').value=c.azure_client_id||'';
   G('cfgClientSecret').value=c.azure_client_secret||'';
@@ -4016,6 +4019,13 @@ window.cfgTogglePw=function(fieldId,btn){
   const isP=f.type==='password';f.type=isP?'text':'password';
   if(btn)btn.title=isP?'Hide':'Show';
 };
+window.cfgInfraModeChanged=function(){
+  const mode=(G('cfgInfraMode')||{}).value||'create';
+  const btn=G('btnDeployInfra');
+  if(btn) btn.title = mode==='create'
+    ? 'Creates Storage Account, Access Connector + RBAC, then configures Unity Catalog. Requires an Azure Service Principal.'
+    : 'Skips Azure resource creation — only configures Unity Catalog against existing resources. Works with just a Databricks PAT.';
+};
 window.cfgStorageTestAuthModeChanged=function(){
   const mode=(G('cfgStorageTestAuthMode')||{}).value||'pat';
   const hint=G('cfgStorageTestModeHint');
@@ -4093,6 +4103,7 @@ function cfgDltModeChange(){
 try{_wfLayerAutoInit();}catch(e){}
 try{cfgDltModeChange();}catch(e){}
 try{cfgStorageTestAuthModeChanged();}catch(e){}
+try{cfgInfraModeChanged();}catch(e){}
 
 async function cfgTestSourceConn(){
   const badge=G('cfgSrcConnBadge');
@@ -4428,6 +4439,22 @@ async function deployInfrastructure(){
   if(!cfg.subscription_id||!cfg.storage_account){
     toast('Subscription ID and Storage Account are required','terr');return;
   }
+  const infraMode=(G('cfgInfraMode')?.value||'create');
+  // Creating Azure resources (Storage Account, Access Connector, RBAC) goes
+  // through Azure Resource Manager, which a Databricks PAT cannot authenticate
+  // to — block early with a precise message instead of failing mid-deploy.
+  if(infraMode==='create'){
+    const missing=[['Tenant ID',cfg.azure_tenant_id],['Client ID',cfg.azure_client_id],['Client Secret',cfg.azure_client_secret]]
+      .filter(([,v])=>!(v||'').trim()).map(([n])=>n);
+    if(missing.length){
+      toast('Azure Service Principal required to create new infrastructure — missing: '+missing.join(', '),'terr',7000);
+      cfgToggleAccordion('cfgAccAzure');
+      (!cfg.azure_tenant_id?G('cfgTenantId'):(!cfg.azure_client_id?G('cfgClientId'):G('cfgClientSecret')))?.focus();
+      return;
+    }
+    if(!cfg.resource_group){ toast('Resource Group is required to create new infrastructure','terr');return; }
+    if(!cfg.access_connector){ toast('Access Connector Name is required to create new infrastructure','terr');return; }
+  }
   try{
     const sr=await fetch('/api/v1/deploy-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
     const sd=await sr.json();
@@ -4435,18 +4462,29 @@ async function deployInfrastructure(){
   }catch(e){toast('Failed to save config: '+e.message,'terr');return;}
 
   // Confirm
-  if(!(await uiConfirm('This will create Azure infrastructure resources (Storage Account, Access Connector, External Locations, Catalogs, Volume).\n\nSubscription: '+cfg.subscription_id+'\nStorage: '+cfg.storage_account+'\nRegion: '+cfg.region+'\n\nProceed?',{title:'Create Azure Infrastructure',okLabel:'Proceed'}))) return;
+  const confirmMsg = infraMode==='create'
+    ? ('This will CREATE new Azure resources and assign RBAC:\n'
+       +'  • Storage Account + Container + Folders\n'
+       +'  • Access Connector (+ Storage Blob Data Owner role)\n'
+       +'  • Storage Credential, External Locations, Catalogs, Volume\n\n'
+       +'Subscription: '+cfg.subscription_id+'\nResource Group: '+cfg.resource_group
+       +'\nStorage: '+cfg.storage_account+'\nRegion: '+cfg.region+'\n\nProceed?')
+    : ('This will use EXISTING Azure resources and only configure Unity Catalog:\n'
+       +'  • Storage Credential, External Locations, Catalogs, Volume\n\n'
+       +'Storage: '+cfg.storage_account+'\nAccess Connector: '+(cfg.access_connector||'(from storage credential)')
+       +'\n\nProceed?');
+  if(!(await uiConfirm(confirmMsg,{title:infraMode==='create'?'Create Azure Infrastructure':'Configure Unity Catalog',okLabel:'Proceed'}))) return;
 
   // Show progress panel
   prog.style.display='block';
   stepsEl.innerHTML='';
-  logsEl.textContent='Connecting to Azure…\n';
+  logsEl.textContent=(infraMode==='create'?'Connecting to Azure…\n':'Connecting to Databricks…\n');
   summaryEl.textContent='Running…';
   summaryEl.style.color='var(--amber)';
   btn.disabled=true; btn.textContent='Deploying…';
 
   // SSE URL — all config (including creds) is read from deployconfig.json on the server
-  const sseUrl='/api/v1/deploy-infra-stream';
+  const sseUrl='/api/v1/deploy-infra-stream?mode='+encodeURIComponent(infraMode);
 
   const statusIcons={
     running:'<span style="color:var(--amber);font-weight:700;" class="cfg-spin">&#9881;</span>',

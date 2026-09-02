@@ -491,10 +491,12 @@ def create_storage_credential(cfg, connector_id):
     cred_name = cfg.get("storage_credential_name") or cfg["access_connector"]
 
     # Re-binding an existing credential to a different connector needs
-    # Contributor on that connector (PERMISSION_DENIED otherwise). If the
-    # credential already exists, keep whatever connector it's bound to.
+    # Contributor on that connector (PERMISSION_DENIED otherwise). Without an
+    # Azure credential the connector ID is only inferred, so keep whatever
+    # binding the credential already has; in "create" mode the Service
+    # Principal owns the connector it just made, so updating is safe.
     existing_connector_id = _lookup_credential_connector_id(cfg, cred_name)
-    if existing_connector_id:
+    if existing_connector_id and (cfg.get("infra_mode") or "create").strip().lower() != "create":
         if connector_id and existing_connector_id != connector_id:
             _log(f"Storage credential '{cred_name}' is already bound to a different "
                  f"Access Connector — keeping the existing binding.", "INFO")
@@ -1082,7 +1084,25 @@ def run_all_streaming(cfg):
         all_steps.append(entry)
         return entry, result
 
+    infra_mode = (cfg.get("infra_mode") or "create").strip().lower()
     azure_ready = _azure_credentials_available(cfg)
+
+    if infra_mode == "create" and not azure_ready:
+        # "Create new infrastructure" was explicitly chosen, so silently
+        # skipping the Azure steps would leave nothing to build against.
+        err_msg = (
+            "Cannot create Azure resources — no Azure credentials. Fill Tenant ID / "
+            "Client ID / Client Secret under Settings → Azure Service Principal (it "
+            "needs Contributor + User Access Administrator on the resource group), or "
+            "switch the deploy mode to 'Use existing infrastructure'."
+        )
+        err_entry = {"event": "step", "step": 0, "name": "Set Azure Subscription",
+                     "status": "error", "message": err_msg, "logs": ""}
+        all_steps.append(err_entry)
+        yield err_entry
+        yield {"event": "done", "success": False, "steps": all_steps,
+               "summary": "Azure Service Principal required to create new infrastructure"}
+        return
 
     if not azure_ready:
         # A Databricks PAT authenticates to the Databricks API only — never to
