@@ -676,6 +676,84 @@ def create_external_locations(cfg, credential_name):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  Step 4b — Materialize folder paths in cloud storage (PAT-only)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _anchor_catalog_schema(cfg):
+    """Pick any existing catalog.schema to temporarily host a volume against —
+    used only to force ADLS to create a directory (see create_folders below).
+    Prefers the metadata catalog, falls back to the volume catalog, then the
+    first entry in the general catalogs list."""
+    mc, ms = cfg.get("metadata_catalog", ""), cfg.get("metadata_schema", "")
+    if mc and ms:
+        return mc, ms
+    vc, vs = cfg.get("volume_catalog", ""), cfg.get("volume_schema", "")
+    if vc and vs:
+        return vc, vs
+    for cat_name, cat_cfg in (cfg.get("catalogs") or {}).items():
+        schemas = cat_cfg.get("schemas", ["default"]) if isinstance(cat_cfg, dict) else ["default"]
+        if cat_name and schemas:
+            return cat_name, schemas[0]
+    return "", ""
+
+
+def create_folders(cfg):
+    """Create the ADLS Gen2 directory markers listed under cfg["folders"].
+
+    ADLS Gen2 folders are explicit entries (not just blob-name prefixes) and
+    must be created before they'll list/show up — that's normally done via
+    the Storage SDK in Step 1, which needs Azure (ARM) credentials. Without
+    them (PAT-only "existing infrastructure" mode), Unity Catalog itself is
+    the only thing with access to the storage account (via the Access
+    Connector's managed identity) — so briefly register an EXTERNAL VOLUME
+    at each path (which makes Databricks materialize the directory) and then
+    drop the volume immediately. Dropping a volume never deletes the
+    underlying cloud files/directory, so the folder is left behind.
+    """
+    _log("═══ Step 4b: Ensure Folder Paths Exist ═══")
+    folders = cfg.get("folders") or []
+    if not folders:
+        _log("No folder paths configured — skipping.", "INFO")
+        return
+
+    sa = cfg.get("storage_account", "")
+    ctr = cfg.get("container", "datalake")
+    if not sa:
+        _log("No storage account configured — cannot derive folder paths.", "WARN")
+        return
+    base = f"abfss://{ctr}@{sa}.dfs.core.windows.net"
+
+    anchor_cat, anchor_schema = _anchor_catalog_schema(cfg)
+    if not (anchor_cat and anchor_schema):
+        _log("No catalog/schema available to anchor folder creation — "
+             "create at least one catalog first. Skipping.", "WARN")
+        return
+
+    for folder in folders:
+        folder = folder.strip().strip("/")
+        if not folder:
+            continue
+        full_path = f"{base}/{folder}"
+        tmp_name = "mkdir_tmp_" + uuid.uuid4().hex[:10]
+        _log(f"Materializing folder '{folder}'…")
+        ok, body = _databricks_api("POST", "/api/2.1/unity-catalog/volumes", cfg, {
+            "name": tmp_name, "catalog_name": anchor_cat, "schema_name": anchor_schema,
+            "volume_type": "EXTERNAL", "storage_location": full_path,
+            "comment": "temporary — used only to materialize the ADLS directory, safe to ignore/delete",
+        })
+        if ok or "already exists" in json.dumps(body).lower():
+            _log(f"  Folder '{folder}' created.")
+            if ok:
+                _databricks_api(
+                    "DELETE",
+                    f"/api/2.1/unity-catalog/volumes/{anchor_cat}.{anchor_schema}.{tmp_name}?force=true",
+                    cfg,
+                )
+        else:
+            _log(f"  Could not materialize folder '{folder}': {body}", "WARN")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  Step 5 — Create Catalogs  (Databricks Unity Catalog API)
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -945,6 +1023,8 @@ def run_all(cfg):
         cred_name = create_storage_credential(cfg, connector_id)
         # Step 4 — External Locations
         create_external_locations(cfg, cred_name)
+        # Step 4b — Materialize ADLS folder paths for configured catalogs/volumes
+        create_folders(cfg)
         # Step 5 — Catalogs
         create_catalogs(cfg)
         # Step 6 — Volume
@@ -1027,6 +1107,12 @@ def run_all_api(cfg):
                               "status": "skipped",
                               "message": "Storage Credential not available (Step 3 failed)",
                               "logs": ""})
+
+        # Always materialize configured folder paths when present; storage
+        # access may already exist in pre-created infrastructure, and this step
+        # is what makes the Azure folder markers appear in ADLS.
+        if cfg.get("folders"):
+            _run_step(4, "Create Folder Paths", create_folders, cfg)
 
         # Steps 5 & 6 use Databricks API directly — no connector_id needed
         _run_step(5, "Create Unity Catalogs", create_catalogs, cfg)
@@ -1204,6 +1290,12 @@ def run_all_streaming(cfg):
                               "message": "Storage Credential not available (Step 3 failed)", "logs": ""}
                 all_steps.append(skip_entry)
                 yield skip_entry
+
+        if cfg.get("folders"):
+            yield {"event": "step", "step": 4, "name": "Create Folder Paths",
+                   "status": "running", "message": "Materializing ADLS directories…", "logs": ""}
+            entry, _ = _do_step(4, "Create Folder Paths", create_folders, cfg)
+            yield entry
 
         # Steps 5 & 6 use Databricks REST API directly — no connector_id needed
         yield {"event": "step", "step": 5, "name": "Create Unity Catalogs",
