@@ -199,6 +199,23 @@ def _get_azure_credential(cfg=None):
         ) from e
 
 
+def _lookup_credential_connector_id(cfg, cred_name):
+    """Return the Access Connector ID already bound to an existing UC storage
+    credential, or "" if there isn't one.
+
+    Authoritative (and PAT-only): reuses whatever connector the credential was
+    actually created with, instead of guessing a resource ID from config that
+    may name a connector which doesn't exist.
+    """
+    if not cred_name:
+        return ""
+    ok, body = _databricks_api(
+        "GET", f"/api/2.1/unity-catalog/storage-credentials/{cred_name}", cfg)
+    if not ok or not isinstance(body, dict):
+        return ""
+    return (body.get("azure_managed_identity") or {}).get("access_connector_id", "")
+
+
 def _azure_credentials_available(cfg):
     """True if an Azure Resource Manager credential can be obtained."""
     try:
@@ -472,6 +489,20 @@ def create_storage_credential(cfg, connector_id):
     _log("═══ Step 3: Register Storage Credential ═══")
 
     cred_name = cfg.get("storage_credential_name") or cfg["access_connector"]
+
+    # Re-binding an existing credential to a different connector needs
+    # Contributor on that connector (PERMISSION_DENIED otherwise). If the
+    # credential already exists, keep whatever connector it's bound to.
+    existing_connector_id = _lookup_credential_connector_id(cfg, cred_name)
+    if existing_connector_id:
+        if connector_id and existing_connector_id != connector_id:
+            _log(f"Storage credential '{cred_name}' is already bound to a different "
+                 f"Access Connector — keeping the existing binding.", "INFO")
+            _log(f"  existing : {existing_connector_id}", "INFO")
+            _log(f"  configured: {connector_id}", "INFO")
+        _log(f"Storage credential '{cred_name}' already exists — reusing it "
+             f"(connector: {existing_connector_id.rsplit('/', 1)[-1]}).")
+        return cred_name
 
     if not connector_id:
         _log("No connector_id provided — cannot create storage credential.", "ERROR")
@@ -1104,16 +1135,20 @@ def run_all_streaming(cfg):
         # determined by subscription/resource group/name — so derive it and let
         # the PAT-only Unity Catalog steps continue.
         if not connector_id:
-            connector_id = _derive_connector_id(cfg)
+            cred_name = cfg.get("storage_credential_name") or cfg.get("access_connector")
+            connector_id = _lookup_credential_connector_id(cfg, cred_name)
+            source = "existing storage credential"
+            if not connector_id:
+                connector_id = _derive_connector_id(cfg)
+                source = "config (Subscription / Resource Group / Access Connector name)"
             if connector_id:
                 derived_entry = {
                     "event": "step", "step": 2,
                     "name": "Create Access Connector + RBAC",
                     "status": "skipped",
-                    "message": ("Azure step skipped — using existing Access Connector "
-                                f"'{cfg.get('access_connector')}'. Ensure it exists and has "
-                                "'Storage Blob Data Owner' on the storage account."),
-                    "logs": f"[derived] Access Connector ID: {connector_id}\n",
+                    "message": (f"Azure step skipped — Access Connector resolved from {source}: "
+                                f"{connector_id.rsplit('/', 1)[-1]}"),
+                    "logs": f"[resolved from {source}] Access Connector ID: {connector_id}\n",
                 }
                 all_steps.append(derived_entry)
                 yield derived_entry
