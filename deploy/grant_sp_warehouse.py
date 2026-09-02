@@ -9,7 +9,7 @@ if not wh_id:
     sys.exit(0)
 
 w = WorkspaceClient()
-app = next((a for a in w.apps.list() if a.name == "dbxmigrationapp"), None)
+app = next((a for a in w.apps.list() if a.name == "dbxmigration"), None)
 if not app or not app.service_principal_client_id:
     print("WARN: could not find app SP (non-blocking)")
     sys.exit(0)

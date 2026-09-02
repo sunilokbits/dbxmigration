@@ -399,7 +399,7 @@
           <!-- Row 1: repo + triggers -->
           <rect class="box box-strong" x="30" y="28" width="260" height="90" rx="8" style="stroke:#79c0ff"/>
           <text class="label-title" x="50" y="60" style="fill:#79c0ff">GitHub repo</text>
-          <text class="label-sub" x="50" y="78">sunilokbits/dbxmigrationapp</text>
+          <text class="label-sub" x="50" y="78">sunilokbits/dbxmigration</text>
           <text class="label-sub" x="50" y="94">.github/workflows/cicd.yml</text>
 
           <rect class="box" x="340" y="28" width="230" height="42" rx="6"/>
@@ -482,7 +482,7 @@
 
           <!-- Row 6: outcome -->
           <rect class="box" x="30" y="640" width="1140" height="90" rx="10"/>
-          <text class="label-title" x="50" y="673">Result: Databricks App "dbxmigrationapp"</text>
+          <text class="label-title" x="50" y="673">Result: Databricks App "dbxmigration"</text>
           <text class="label-sub" x="50" y="693">Created or updated, running in every target workspace — dev, staging, and each approved client — from the exact code that was pushed</text>
         </svg>
       </div>
@@ -507,14 +507,14 @@
       <div class="steps">
         <div class="step" data-n="1">
           <h3>Code is already on GitHub</h3>
-          <p>The full repo — app code, <code class="inline">databricks.yml</code>, <code class="inline">deploy/one_click_deploy.py</code>, and this workflow — is pushed to <code class="inline">github.com/sunilokbits/dbxmigrationapp</code> on <code class="inline">main</code>.</p>
+          <p>The full repo — app code, <code class="inline">databricks.yml</code>, <code class="inline">deploy/one_click_deploy.py</code>, and this workflow — is pushed to <code class="inline">github.com/sunilokbits/dbxmigration</code> on <code class="inline">main</code>.</p>
         </div>
 
         <div class="step" data-n="2">
           <h3>Create the Environments</h3>
           <p>Repo → <strong>Settings → Environments → New environment</strong>. Create <code class="inline">dev</code>, <code class="inline">staging</code>, and one <code class="inline">client-&lt;name&gt;</code> per client (e.g. <code class="inline">client-insight</code>).</p>
           <div class="mockup">
-            <div class="mockup-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;github.com/sunilokbits/dbxmigrationapp/settings/environments</div>
+            <div class="mockup-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;github.com/sunilokbits/dbxmigration/settings/environments</div>
             <div class="mockup-body">
               <div class="mockup-row"><span class="name">dev</span><span class="meta">no protection rules</span></div>
               <div class="mockup-row"><span class="name">staging</span><span class="meta">no protection rules</span></div>
@@ -652,7 +652,7 @@
         <div class="gcard">
           <div class="gi">◆</div>
           <h4>The Databricks App</h4>
-          <p><code class="inline" style="color:inherit">databricks bundle deploy -t client</code> creates or updates the app named <code class="inline" style="color:inherit">dbxmigrationapp</code> — same name in every workspace.</p>
+          <p><code class="inline" style="color:inherit">databricks bundle deploy -t client</code> creates or updates the app named <code class="inline" style="color:inherit">dbxmigration</code> — same name in every workspace.</p>
         </div>
       </div>
     </section>

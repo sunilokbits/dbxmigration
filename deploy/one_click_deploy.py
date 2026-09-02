@@ -325,7 +325,7 @@ def push_secrets(cfg: dict, secrets_in: dict, flask_secret: str, report: Report)
 
     # Grant the App SP READ on the scope so it can fetch secrets at runtime
     try:
-        app_name = cfg.get("app_name", "dbxmigrationapp")
+        app_name = cfg.get("app_name", "dbxmigration")
         apps = list(w.apps.list())
         app = next((a for a in apps if a.name == app_name), None)
         if app and app.service_principal_client_id:
@@ -565,7 +565,7 @@ def validate_deployment(cfg: dict, secrets_in: dict, genie_space_id: str, report
 
     try:
         apps = list(w.apps.list())
-        app = next((a for a in apps if a.name == "dbxmigrationapp"), None)
+        app = next((a for a in apps if a.name == "dbxmigration"), None)
         if app:
             state = getattr(getattr(app, "compute_status", None), "state", None) or getattr(app, "app_status", None)
             # Databricks Apps compute state uses ACTIVE (not RUNNING) when healthy;

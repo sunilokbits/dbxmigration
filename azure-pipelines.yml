@@ -134,7 +134,7 @@ stages:
               # `bundle run` -- doesn't hit the "Must specify environment
               # variable source" bug.
               SRC_PATH=$(echo "$OUT" | grep "Uploading bundle files to" | sed -E 's#.*Uploading bundle files to (.*)\.\.\.#\1#')
-              databricks apps deploy dbxmigrationapp --source-code-path "$SRC_PATH" --mode SNAPSHOT
+              databricks apps deploy dbxmigration --source-code-path "$SRC_PATH" --mode SNAPSHOT
             displayName: databricks bundle deploy -t dev
             env:
               DATABRICKS_HOST: $(DATABRICKS_HOST)

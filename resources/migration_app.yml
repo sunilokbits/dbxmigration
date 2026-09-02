@@ -5,7 +5,7 @@
 resources:
   apps:
     migration_studio:
-      name: "dbxmigrationapp"
+      name: "dbxmigration"
       description: "SQL to Databricks Migration Studio — end-to-end migration orchestration platform"
       source_code_path: .
       config:

@@ -161,7 +161,7 @@ jobs:
           # via the native Apps API command, which -- unlike `bundle run` --
           # doesn't hit the "Must specify environment variable source" bug.
           SRC_PATH=$(echo "$OUT" | grep "Uploading bundle files to" | sed -E 's#.*Uploading bundle files to (.*)\.\.\.#\1#')
-          databricks apps deploy dbxmigrationapp --source-code-path "$SRC_PATH" --mode SNAPSHOT
+          databricks apps deploy dbxmigration --source-code-path "$SRC_PATH" --mode SNAPSHOT
       - name: Scaffold secret scope keys
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
@@ -259,10 +259,10 @@ jobs:
           set -e
           databricks bundle deploy -t staging --select apps.migration_studio --force-lock --var="sql_warehouse_id=$SQL_WAREHOUSE_ID"
           # Start the app compute if stopped, then deploy source code
-          databricks apps start dbxmigrationapp --no-wait 2>/dev/null || true
+          databricks apps start dbxmigration --no-wait 2>/dev/null || true
           SRC_PATH=$(databricks bundle validate -t staging -o json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('workspace',{}).get('file_path',''))" 2>/dev/null || echo "")
           if [ -n "$SRC_PATH" ]; then
-            databricks apps deploy dbxmigrationapp --source-code-path "$SRC_PATH" --mode SNAPSHOT --timeout 10m
+            databricks apps deploy dbxmigration --source-code-path "$SRC_PATH" --mode SNAPSHOT --timeout 10m
           fi
       - name: Run integration tests against staging
         env:
