@@ -139,8 +139,8 @@ def deploy_infra_stream():
     cfg["databricks_token"] = get_databricks_token()
     # "create" provisions Azure resources (needs a Service Principal);
     # "existing" skips straight to the PAT-only Unity Catalog steps.
-    mode = (request.args.get("mode") or cfg.get("infra_mode") or "create").strip().lower()
-    cfg["infra_mode"] = mode if mode in ("create", "existing") else "create"
+    mode = (request.args.get("mode") or cfg.get("infra_mode") or "existing").strip().lower()
+    cfg["infra_mode"] = mode if mode in ("create", "existing") else "existing"
 
     def generate():
         try:

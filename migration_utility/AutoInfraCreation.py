@@ -1084,7 +1084,7 @@ def run_all_streaming(cfg):
         all_steps.append(entry)
         return entry, result
 
-    infra_mode = (cfg.get("infra_mode") or "create").strip().lower()
+    infra_mode = (cfg.get("infra_mode") or "existing").strip().lower()
     azure_ready = _azure_credentials_available(cfg)
 
     if infra_mode == "create" and not azure_ready:

@@ -3761,7 +3761,7 @@ function _collectConfig(){
     })(),
     metadata_catalog: G('cfgMetaCatalog')?.value?.trim()||'',
     metadata_schema:  G('cfgMetaSchema')?.value?.trim()||'',
-    infra_mode:       G('cfgInfraMode')?.value||'create',
+    infra_mode:       G('cfgInfraMode')?.value||'existing',
     azure_tenant_id:  G('cfgTenantId')?.value?.trim()||'',
     azure_client_id:  G('cfgClientId')?.value?.trim()||'',
     azure_client_secret: G('cfgClientSecret')?.value||'',
@@ -3788,7 +3788,7 @@ function _populateConfig(c){
   if(G('cfgStorageCredName')) G('cfgStorageCredName').value=c.storage_credential_name||'';
   if(G('cfgStorageTestAuthMode')) G('cfgStorageTestAuthMode').value=c.storage_credential_test_auth_mode||'pat';
   if(typeof cfgStorageTestAuthModeChanged==='function') cfgStorageTestAuthModeChanged();
-  if(G('cfgInfraMode')) G('cfgInfraMode').value=c.infra_mode||'create';
+  if(G('cfgInfraMode')) G('cfgInfraMode').value=c.infra_mode||'existing';
   if(typeof cfgInfraModeChanged==='function') cfgInfraModeChanged();
   G('cfgTenantId').value=c.azure_tenant_id||'';
   G('cfgClientId').value=c.azure_client_id||'';
@@ -4020,7 +4020,7 @@ window.cfgTogglePw=function(fieldId,btn){
   if(btn)btn.title=isP?'Hide':'Show';
 };
 window.cfgInfraModeChanged=function(){
-  const mode=(G('cfgInfraMode')||{}).value||'create';
+  const mode=(G('cfgInfraMode')||{}).value||'existing';
   const btn=G('btnDeployInfra');
   if(btn) btn.title = mode==='create'
     ? 'Creates Storage Account, Access Connector + RBAC, then configures Unity Catalog. Requires an Azure Service Principal.'
@@ -4439,7 +4439,7 @@ async function deployInfrastructure(){
   if(!cfg.subscription_id||!cfg.storage_account){
     toast('Subscription ID and Storage Account are required','terr');return;
   }
-  const infraMode=(G('cfgInfraMode')?.value||'create');
+  const infraMode=(G('cfgInfraMode')?.value||'existing');
   // Creating Azure resources (Storage Account, Access Connector, RBAC) goes
   // through Azure Resource Manager, which a Databricks PAT cannot authenticate
   // to — block early with a precise message instead of failing mid-deploy.
