@@ -9,6 +9,33 @@ import AutoInfraCreation
 
 
 class TestInfraOrchestration(unittest.TestCase):
+    def test_create_folders_falls_back_to_an_existing_catalog_schema(self):
+        cfg = {
+            "storage_account": "sa",
+            "container": "datalake",
+            "metadata_catalog": "missing_admin",
+            "metadata_schema": "configtables",
+            "catalogs": {
+                "dbx_bronze": {
+                    "location": "abfss://datalake@sa.dfs.core.windows.net/dev/bronze",
+                    "schemas": ["sales"],
+                }
+            },
+        }
+
+        def api_response(method, path, _cfg, payload=None):
+            if method == "GET":
+                return (path.endswith("dbx_bronze.sales"), {})
+            return True, {}
+
+        with patch.object(AutoInfraCreation, "_databricks_api", side_effect=api_response) as mock_api:
+            AutoInfraCreation.create_folders(cfg)
+
+        create_calls = [call for call in mock_api.call_args_list if call.args[0] == "POST"]
+        self.assertTrue(create_calls)
+        self.assertEqual(create_calls[0].args[3]["catalog_name"], "dbx_bronze")
+        self.assertEqual(create_calls[0].args[3]["schema_name"], "sales")
+
     def test_create_folders_materializes_nested_paths_parent_first(self):
         cfg = {
             "storage_account": "sa",
@@ -125,7 +152,7 @@ class TestInfraOrchestration(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 AutoInfraCreation.create_volume(cfg)
 
-    def test_run_all_streaming_materializes_folder_paths_before_catalogs(self):
+    def test_run_all_streaming_creates_catalogs_before_materializing_folders(self):
         cfg = {
             "infra_mode": "existing",
             "storage_account": "sa",
@@ -152,7 +179,8 @@ class TestInfraOrchestration(unittest.TestCase):
 
         step_names = [step.get("name") for step in steps if step.get("event") == "step"]
         self.assertIn("Create Folder Paths", step_names)
-        self.assertLess(step_names.index("Create Folder Paths"), step_names.index("Create Unity Catalogs"))
+        self.assertLess(step_names.index("Create Unity Catalogs"), step_names.index("Create Folder Paths"))
+        self.assertLess(step_names.index("Create Folder Paths"), step_names.index("Create Volume"))
         mock_folders.assert_called_once_with(cfg)
         mock_catalogs.assert_called_once_with(cfg)
         mock_volume.assert_called_once_with(cfg)

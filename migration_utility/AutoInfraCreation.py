@@ -744,21 +744,37 @@ def create_external_locations(cfg, credential_name):
 #  Step 4b — Materialize folder paths in cloud storage (PAT-only)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _anchor_catalog_schema(cfg):
-    """Pick any existing catalog.schema to temporarily host a volume against —
-    used only to force ADLS to create a directory (see create_folders below).
-    Prefers the metadata catalog, falls back to the volume catalog, then the
-    first entry in the general catalogs list."""
+def _anchor_catalog_schemas(cfg):
+    """Return configured catalog/schema candidates in preference order."""
+    candidates = []
+
+    def add_candidate(catalog, schema):
+        candidate = ((catalog or "").strip(), (schema or "").strip())
+        if all(candidate) and candidate not in candidates:
+            candidates.append(candidate)
+
     mc, ms = cfg.get("metadata_catalog", ""), cfg.get("metadata_schema", "")
-    if mc and ms:
-        return mc, ms
+    add_candidate(mc, ms)
     vc, vs = cfg.get("volume_catalog", ""), cfg.get("volume_schema", "")
-    if vc and vs:
-        return vc, vs
+    add_candidate(vc, vs)
     for cat_name, cat_cfg in (cfg.get("catalogs") or {}).items():
         schemas = cat_cfg.get("schemas", ["default"]) if isinstance(cat_cfg, dict) else ["default"]
-        if cat_name and schemas:
-            return cat_name, schemas[0]
+        for schema in schemas:
+            add_candidate(cat_name, schema)
+    for special_name in ("reconciliation", "logging"):
+        special = cfg.get(special_name) or {}
+        add_candidate(special.get("catalog"), special.get("schema"))
+    return candidates
+
+
+def _anchor_catalog_schema(cfg):
+    """Return the first configured catalog/schema that exists in Unity Catalog."""
+    for catalog, schema in _anchor_catalog_schemas(cfg):
+        ok, _ = _databricks_api(
+            "GET", f"/api/2.1/unity-catalog/schemas/{catalog}.{schema}", cfg)
+        if ok:
+            return catalog, schema
+        _log(f"Folder anchor '{catalog}.{schema}' does not exist — trying next candidate.", "INFO")
     return "", ""
 
 
@@ -790,9 +806,9 @@ def create_folders(cfg):
 
     anchor_cat, anchor_schema = _anchor_catalog_schema(cfg)
     if not (anchor_cat and anchor_schema):
-        _log("No catalog/schema available to anchor folder creation — "
-             "create at least one catalog first. Skipping.", "WARN")
-        return
+        raise RuntimeError(
+            "No existing catalog/schema is available to anchor folder creation. "
+            "Check the Create Unity Catalogs step and configured schema names.")
 
     failures = []
     for folder in _directory_hierarchy(folders):
@@ -1107,10 +1123,10 @@ def run_all(cfg):
         cred_name = create_storage_credential(cfg, connector_id)
         # Step 4 — External Locations
         create_external_locations(cfg, cred_name)
-        # Step 4b — Materialize ADLS folder paths for configured catalogs/volumes
-        create_folders(cfg)
         # Step 5 — Catalogs
         create_catalogs(cfg)
+        # Step 5b — Materialize paths after the anchor catalog exists
+        create_folders(cfg)
         # Step 6 — Volume
         create_volume(cfg)
     else:
@@ -1192,14 +1208,11 @@ def run_all_api(cfg):
                               "message": "Storage Credential not available (Step 3 failed)",
                               "logs": ""})
 
-        # Always materialize configured folder paths when present; storage
-        # access may already exist in pre-created infrastructure, and this step
-        # is what makes the Azure folder markers appear in ADLS.
-        if _configured_storage_folders(cfg):
-            _run_step(4, "Create Folder Paths", create_folders, cfg)
-
-        # Steps 5 & 6 use Databricks API directly — no connector_id needed
+        # Steps 5 & 6 use Databricks API directly — no connector_id needed.
+        # Catalogs must exist before temporary volumes can materialize paths.
         _run_step(5, "Create Unity Catalogs", create_catalogs, cfg)
+        if _configured_storage_folders(cfg):
+            _run_step(5, "Create Folder Paths", create_folders, cfg)
         _run_step(6, "Create Volume", create_volume, cfg)
     else:
         steps.append({"step": 3, "name": "Databricks API Steps (3-6)",
@@ -1375,17 +1388,17 @@ def run_all_streaming(cfg):
                 all_steps.append(skip_entry)
                 yield skip_entry
 
-        if _configured_storage_folders(cfg):
-            yield {"event": "step", "step": 4, "name": "Create Folder Paths",
-                   "status": "running", "message": "Materializing ADLS directories…", "logs": ""}
-            entry, _ = _do_step(4, "Create Folder Paths", create_folders, cfg)
-            yield entry
-
         # Steps 5 & 6 use Databricks REST API directly — no connector_id needed
         yield {"event": "step", "step": 5, "name": "Create Unity Catalogs",
                "status": "running", "message": "Creating catalogs…", "logs": ""}
         entry, _ = _do_step(5, "Create Unity Catalogs", create_catalogs, cfg)
         yield entry
+
+        if _configured_storage_folders(cfg):
+            yield {"event": "step", "step": 5, "name": "Create Folder Paths",
+                   "status": "running", "message": "Materializing ADLS directories…", "logs": ""}
+            entry, _ = _do_step(5, "Create Folder Paths", create_folders, cfg)
+            yield entry
 
         yield {"event": "step", "step": 6, "name": "Create Volume",
                "status": "running", "message": "Creating volume…", "logs": ""}
