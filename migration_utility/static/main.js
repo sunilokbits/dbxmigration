@@ -4470,8 +4470,22 @@ async function deployInfrastructure(){
       stepsEl.insertAdjacentHTML('beforeend',html);
       stepMap[s.step]=G(id);
     }
-    // Append logs
-    if(s.logs) logsEl.textContent+=s.logs;
+    // Append logs — colorize genuine failures red; "already exists"/DEBUG/INFO
+    // lines (expected on idempotent re-runs) stay the default log color.
+    if(s.logs) logsEl.insertAdjacentHTML('beforeend', _colorizeDeployLogs(s.logs));
+  }
+
+  function _escapeHtml(str){
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  function _colorizeDeployLogs(text){
+    return text.split('\n').map(line=>{
+      if(!line) return '';
+      const isBenign = /ALREADY_EXISTS|already exists|\[DEBUG\]|\[INFO\]/i.test(line);
+      const isError = !isBenign && /\[ERROR\]|PERMISSION_DENIED|cannot import|No Azure credentials|Failed to|Traceback/i.test(line);
+      const esc = _escapeHtml(line);
+      return isError ? '<span style="color:var(--red);">'+esc+'</span>' : esc;
+    }).join('\n')+'\n';
   }
 
   const evtSource=new EventSource(sseUrl);

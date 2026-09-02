@@ -63,6 +63,25 @@ def _ts():
     return datetime.now().strftime("%H:%M:%S")
 
 
+def _ensure_pkg(import_path, pip_name):
+    """Import `import_path` (e.g. 'azure.mgmt.resource'), auto-installing
+    `pip_name` via pip and retrying once if the import fails.
+
+    Makes infra-creation self-healing regardless of which environment this
+    runs in (local dev box, CI pipeline, or the deployed Databricks App) —
+    a missing/stale dependency no longer requires a manual fix or redeploy.
+    """
+    import importlib
+    try:
+        return importlib.import_module(import_path)
+    except ImportError:
+        _log(f"'{pip_name}' not available — installing…", "WARN")
+        import subprocess
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", pip_name])
+        importlib.invalidate_caches()
+        return importlib.import_module(import_path)
+
+
 def _log(msg, level="INFO"):
     print(f"[{_ts()}] [{level}] {msg}")
 
@@ -166,7 +185,7 @@ def _databricks_api(method, path, cfg, payload=None):
 
 def set_subscription(cfg):
     """Verify Azure credentials and subscription access via Python SDK."""
-    from azure.mgmt.resource import ResourceManagementClient
+    ResourceManagementClient = _ensure_pkg("azure.mgmt.resource", "azure-mgmt-resource").ResourceManagementClient
 
     sub = cfg["subscription_id"]
     _log(f"Authenticating to Azure (subscription: {sub})…")
@@ -194,11 +213,13 @@ def set_subscription(cfg):
 def create_storage(cfg):
     _log("═══ Step 1: Storage Account + Container + Folders ═══")
 
-    from azure.mgmt.storage import StorageManagementClient
-    from azure.mgmt.storage.models import (
-        StorageAccountCreateParameters, Sku, Kind,
-    )
-    from azure.storage.filedatalake import DataLakeServiceClient
+    _storage_mgmt = _ensure_pkg("azure.mgmt.storage", "azure-mgmt-storage")
+    StorageManagementClient = _storage_mgmt.StorageManagementClient
+    _storage_models = _ensure_pkg("azure.mgmt.storage.models", "azure-mgmt-storage")
+    StorageAccountCreateParameters = _storage_models.StorageAccountCreateParameters
+    Sku = _storage_models.Sku
+    Kind = _storage_models.Kind
+    DataLakeServiceClient = _ensure_pkg("azure.storage.filedatalake", "azure-storage-file-datalake").DataLakeServiceClient
 
     sub  = cfg["subscription_id"]
     rg   = cfg["resource_group"]
@@ -271,8 +292,8 @@ def create_storage(cfg):
 def create_access_connector(cfg):
     _log("═══ Step 2: Access Connector + Role Assignment ═══")
 
-    from azure.mgmt.databricks import AzureDatabricksManagementClient
-    from azure.mgmt.authorization import AuthorizationManagementClient
+    AzureDatabricksManagementClient = _ensure_pkg("azure.mgmt.databricks", "azure-mgmt-databricks").AzureDatabricksManagementClient
+    AuthorizationManagementClient = _ensure_pkg("azure.mgmt.authorization", "azure-mgmt-authorization").AuthorizationManagementClient
 
     sub  = cfg["subscription_id"]
     rg   = cfg["resource_group"]
