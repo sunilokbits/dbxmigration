@@ -346,6 +346,16 @@ def test_storage_credential():
         return jsonify({"success": False, "error": str(e)[:200]})
 
 
+def _configured_catalog_names(cfg):
+    """Catalog names this app provisions, from the saved deploy config."""
+    names = set(cfg.get("catalogs") or {})
+    for key in ("metadata_catalog", "volume_catalog"):
+        names.add((cfg.get(key) or "").strip())
+    for section in ("reconciliation", "logging"):
+        names.add(((cfg.get(section) or {}).get("catalog") or "").strip())
+    return {name for name in names if name and name not in ("system", "__databricks_internal")}
+
+
 @settings_bp.route("/settings/catalogs", methods=["GET"])
 @login_required
 def list_catalogs():
@@ -353,8 +363,12 @@ def list_catalogs():
     cfg = get_config()
     dbx_host = cfg.get("databricks_host", "").rstrip("/")
     dbx_token = get_databricks_token()
+    # Catalogs this app provisions must stay selectable even when SHOW CATALOGS
+    # omits them (propagation delay) or no warehouse is reachable.
+    configured = _configured_catalog_names(cfg)
     if not dbx_host or not dbx_token:
-        return jsonify({"success": False, "catalogs": [], "error": "Databricks not configured."})
+        return jsonify({"success": bool(configured), "catalogs": sorted(configured),
+                        "error": "" if configured else "Databricks not configured."})
     try:
         from unity_catalog_executor import UnityCatalogExecutor
         meta_cat = cfg.get("metadata_catalog", "admin_source") or "admin_source"
@@ -367,24 +381,29 @@ def list_catalogs():
             wh_id = warehouses[0].get("id")
         if not wh_id:
             logger.error("No SQL Warehouse found for catalog listing")
-            return jsonify({"success": False, "catalogs": [], "error": "No SQL Warehouse available."})
+            return jsonify({"success": bool(configured), "catalogs": sorted(configured),
+                            "error": "" if configured else "No SQL Warehouse available."})
         logger.info("Listing catalogs via warehouse %s", wh_id)
         result = uc._execute_statement("SHOW CATALOGS", wh_id, wait_timeout="30s")
         if result.get("error"):
             logger.error("SHOW CATALOGS failed: %s", result["error"])
-            return jsonify({"success": False, "catalogs": [], "error": result["error"]})
+            return jsonify({"success": bool(configured), "catalogs": sorted(configured),
+                            "error": "" if configured else result["error"]})
         status = result.get("status", {}).get("state", "")
         if status not in ("SUCCEEDED", "CLOSED", ""):
             logger.error("SHOW CATALOGS state: %s", status)
-            return jsonify({"success": False, "catalogs": [], "error": f"Query state: {status}"})
+            return jsonify({"success": bool(configured), "catalogs": sorted(configured),
+                            "error": "" if configured else f"Query state: {status}"})
         data_array = result.get("result", {}).get("data_array", [])
         catalogs = [row[0] for row in data_array if row and row[0]]
-        catalogs = [c for c in catalogs if c not in ("system", "__databricks_internal")]
+        catalogs = set(catalogs) | configured
+        catalogs = {c for c in catalogs if c not in ("system", "__databricks_internal")}
         logger.info("Catalogs listed: %d found", len(catalogs))
         return jsonify({"success": True, "catalogs": sorted(catalogs)})
     except Exception as e:
         logger.error("Failed to list catalogs: %s", e, exc_info=True)
-        return jsonify({"success": False, "catalogs": [], "error": str(e)[:200]})
+        return jsonify({"success": bool(configured), "catalogs": sorted(configured),
+                        "error": "" if configured else str(e)[:200]})
 
 
 @settings_bp.route("/settings/schemas", methods=["GET"])

@@ -3673,11 +3673,34 @@ async function wfLayerSaveMapping(){
 }
 window.wfLayerSaveMapping=wfLayerSaveMapping;
 
+/* Layer defaults derived from the catalogs this app provisions */
+function _wfLayerDefaultMapping(cfg){
+  cfg=cfg||{};
+  const cats=cfg.catalogs||{};
+  const schemasOf=n=>{const c=cats[n];const s=(c&&c.schemas)||[];return s[0]||'';};
+  const byKeyword=kw=>Object.keys(cats).find(n=>n.toLowerCase().includes(kw))||'';
+  const bronze=byKeyword('bronze'), silver=byKeyword('silver');
+  const recon=cfg.reconciliation||{}, log=cfg.logging||{};
+  return {
+    landing:        {catalog: cfg.volume_catalog||'', schema: cfg.volume_schema||''},
+    bronze:         {catalog: bronze, schema: schemasOf(bronze)},
+    silver:         {catalog: silver, schema: schemasOf(silver)},
+    reconciliation: {catalog: recon.catalog||'', schema: recon.schema||''},
+    loggingdetails: {catalog: log.catalog||'', schema: log.schema||''},
+  };
+}
+
 /* Auto-load layer mapping on Pipeline Studio init */
 function _wfLayerAutoInit(){
   const cc=_cachedDeployConfig||{};
   const ex=cc.existing_setting||{};
-  const mapping=ex.medallion_layer_mapping||{};
+  const saved=ex.medallion_layer_mapping||{};
+  const defaults=_wfLayerDefaultMapping(cc);
+  const mapping={};
+  _wfLayerNames.forEach(layer=>{
+    const s=saved[layer]||{}, d=defaults[layer]||{};
+    mapping[layer]={catalog: s.catalog||d.catalog||'', schema: s.schema||d.schema||''};
+  });
   _wfLayerPopulateMapping(mapping);
   // Load catalogs (will also restore schema selections)
   wfLayerLoadCatalogs();
