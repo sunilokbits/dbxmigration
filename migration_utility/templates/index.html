@@ -1356,24 +1356,17 @@
               </button>
               <span id="storageCredStatus" style="font-size:10px;color:var(--t3);"></span>
             </div>
+            <div style="margin-top:10px;display:grid;grid-template-columns:1fr 2fr;gap:10px;align-items:end;">
+              <div>
+                <label class="lbl">Credential Test Auth Mode</label>
+                <select class="inp" id="cfgStorageTestAuthMode" onchange="cfgStorageTestAuthModeChanged()">
+                  <option value="pat">PAT Token</option>
+                  <option value="service_principal">Service Principal</option>
+                </select>
+              </div>
+              <div id="cfgStorageTestModeHint" style="font-size:10px;color:var(--t4);"></div>
+            </div>
             <div id="storageCredDetail" style="display:none;margin-top:8px;padding:8px 12px;background:var(--surface-2);border-radius:6px;font-size:10px;color:var(--t2);white-space:pre-wrap;max-height:120px;overflow-y:auto;border:1px solid var(--border);"></div>
-            <div style="margin-top:10px;">
-              <label class="lbl">Role Assignment</label>
-              <select class="inp" id="cfgRole">
-                <option value="Storage Blob Data Owner">Storage Blob Data Owner</option>
-                <option value="Storage Blob Data Contributor">Storage Blob Data Contributor</option>
-                <option value="Storage Blob Data Reader">Storage Blob Data Reader</option>
-                <option value="User Access Administrator">User Access Administrator</option>
-                <option value="Contributor">Contributor</option>
-              </select>
-            </div>
-            <div style="margin-top:8px;display:flex;align-items:center;gap:10px;">
-              <button class="btn btn-xs" id="btnApplyRbac" onclick="cfgApplyRbac()" style="background:#7C3AED;color:#fff;padding:5px 14px;font-weight:600;font-size:11px;">
-                <svg viewBox="0 0 24 24" style="width:12px;height:12px;margin-right:4px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                Assign RBAC to Service Principal
-              </button>
-              <span id="rbacStatus" style="font-size:10px;color:var(--t3);"></span>
-            </div>
           </div>
           <div class="cfg-subcard" style="margin-top:12px;">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">

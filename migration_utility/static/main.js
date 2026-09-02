@@ -3710,7 +3710,8 @@ function _collectConfig(){
     folders:         folders,
     access_connector:G('cfgAccessConnector').value.trim(),
     storage_credential_name:G('cfgStorageCredName')?.value?.trim()||'',
-    role_assignment: G('cfgRole').value,
+    storage_credential_test_auth_mode: (G('cfgStorageTestAuthMode')?.value||'pat'),
+    role_assignment: 'Storage Blob Data Owner',
     external_locations: extLocs,
     catalogs:        catalogs,
     volume_name:     G('cfgVolName').value.trim(),
@@ -3784,7 +3785,8 @@ function _populateConfig(c){
   G('cfgFolders').value=(c.folders||[]).join('\n');
   G('cfgAccessConnector').value=c.access_connector||'';
   if(G('cfgStorageCredName')) G('cfgStorageCredName').value=c.storage_credential_name||'';
-  G('cfgRole').value=c.role_assignment||'Storage Blob Data Owner';
+  if(G('cfgStorageTestAuthMode')) G('cfgStorageTestAuthMode').value=c.storage_credential_test_auth_mode||'pat';
+  if(typeof cfgStorageTestAuthModeChanged==='function') cfgStorageTestAuthModeChanged();
   G('cfgTenantId').value=c.azure_tenant_id||'';
   G('cfgClientId').value=c.azure_client_id||'';
   G('cfgClientSecret').value=c.azure_client_secret||'';
@@ -3986,6 +3988,16 @@ window.cfgTogglePw=function(fieldId,btn){
   const isP=f.type==='password';f.type=isP?'text':'password';
   if(btn)btn.title=isP?'Hide':'Show';
 };
+window.cfgStorageTestAuthModeChanged=function(){
+  const mode=(G('cfgStorageTestAuthMode')||{}).value||'pat';
+  const hint=G('cfgStorageTestModeHint');
+  if(!hint)return;
+  if(mode==='service_principal'){
+    hint.textContent='Uses Databricks Host + Azure Service Principal (Tenant ID, Client ID, Client Secret) from the section above.';
+  }else{
+    hint.textContent='Uses Databricks Host + PAT token. PAT can be left blank to use saved secret token.';
+  }
+};
 
 function _addExtLocRow(name,url){
   const d=document.createElement('div');
@@ -4050,6 +4062,7 @@ function cfgDltModeChange(){
 // Initialize layer cards on page load
 try{_wfLayerAutoInit();}catch(e){}
 try{cfgDltModeChange();}catch(e){}
+try{cfgStorageTestAuthModeChanged();}catch(e){}
 
 async function cfgTestSourceConn(){
   const badge=G('cfgSrcConnBadge');
@@ -4207,54 +4220,27 @@ function _cfgShowPreview(){
   G('cfgJsonPreview').textContent=JSON.stringify(_collectConfig(),null,2);
 }
 
-async function cfgApplyRbac(){
-  const role=G('cfgRole')?.value||'Storage Blob Data Owner';
-  const sa=G('cfgStorageAcct')?.value?.trim();
-  if(!sa){toast('Enter a Storage Account Name first','terr');return;}
-  if(!(await uiConfirm(`Assign "${role}" role to the Azure Service Principal (configured above) on storage account "${sa}"?`,{title:'Assign RBAC Role',okLabel:'Assign'}))) return;
-  const btn=G('btnApplyRbac');
-  const status=G('rbacStatus');
-  btn.disabled=true;btn.textContent='Saving config & applying…';
-  if(status){status.textContent='';status.style.cssText='font-size:10px;color:var(--t3);';}
-  try{
-    // Auto-save current UI config first so backend uses latest values
-    const cfg=_collectConfig();
-    const sr=await fetch('/api/v1/deploy-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
-    const sd=await sr.json();
-    if(!sd.success){toast('Failed to save config: '+(sd.error||''),'terr');return;}
-    _cachedDeployConfig=cfg;
-    const r=await fetch('/api/v1/apply-rbac',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({role_name:role})});
-    const d=await r.json();
-    if(d.success){
-      toast('RBAC role assigned successfully','tok');
-      if(status){status.style.cssText='font-size:11px;font-weight:600;color:#16a34a;white-space:pre-wrap;max-width:800px;background:#f0fdf4;padding:6px 10px;border-radius:6px;border:1px solid #bbf7d0;margin-top:6px;display:inline-block;';status.textContent='✅ '+d.message;}
-    }else{
-      // Show CLI fallback command if provided
-      if(d.cli_command){
-        if(status){
-          status.style.cssText='font-size:10px;color:#dc2626;white-space:pre-wrap;max-width:800px;background:#fef2f2;padding:8px 10px;border-radius:6px;border:1px solid #fecaca;margin-top:6px;';
-          status.innerHTML='⚠️ '+d.error.replace(/\n/g,'<br>')+'<br><br><code style="background:#1e293b;color:#e2e8f0;padding:6px 10px;border-radius:4px;display:block;margin-top:4px;font-size:10px;word-break:break-all;cursor:pointer;" title="Click to copy" onclick="navigator.clipboard.writeText(this.textContent);this.style.outline=\'2px solid #10b981\';">'+d.cli_command+'</code>';
-        }
-        toast('Run the CLI command shown below','terr',6000);
-      }else{
-        toast(d.error||'Failed to apply RBAC','terr');
-        if(status){status.style.cssText='font-size:11px;font-weight:600;color:#dc2626;white-space:pre-wrap;max-width:800px;background:#fef2f2;padding:6px 10px;border-radius:6px;border:1px solid #fecaca;margin-top:6px;display:inline-block;';status.textContent='❌ '+(d.error||'Failed');}
-      }
-    }
-  }catch(e){toast('Error: '+e.message,'terr');if(status){status.style.cssText='font-size:11px;font-weight:600;color:#dc2626;white-space:pre-wrap;max-width:800px;background:#fef2f2;padding:6px 10px;border-radius:6px;border:1px solid #fecaca;margin-top:6px;display:inline-block;';status.textContent='❌ '+e.message;}}
-  finally{btn.disabled=false;btn.innerHTML='<svg viewBox="0 0 24 24" style="width:12px;height:12px;margin-right:4px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Assign RBAC to Service Principal';}
-}
-
 async function cfgTestStorageCredential(){
   const credName=(G('cfgStorageCredName')?.value||G('cfgAccessConnector')?.value||'').trim();
   if(!credName){toast('Enter a Storage Credential Name (or Access Connector Name) first','terr');return;}
-  const host=(G('cfgDbrHost')?.value||'').trim();
+  const authMode=(G('cfgStorageTestAuthMode')?.value||'pat').trim();
+  const host=((G('cfgDbrHost')?.value||'').trim()||((_cachedDeployConfig||{}).databricks_host||'').trim());
   const token=(G('cfgDbrToken')?.value||'').trim();
-  if(!host||!token){
-    toast('Databricks Host / PAT Token missing — opening "Azure Subscription & Databricks" section above','terr',5000);
+  const tenantId=(G('cfgTenantId')?.value||'').trim();
+  const clientId=(G('cfgClientId')?.value||'').trim();
+  const clientSecret=(G('cfgClientSecret')?.value||'').trim();
+  if(!host){
+    toast('Databricks Host missing — opening "Azure Subscription & Databricks" section above','terr',5000);
     const acc=G('cfgAccAzure');
     if(acc){acc.classList.add('open');acc.scrollIntoView({behavior:'smooth',block:'start'});}
-    (host?G('cfgDbrToken'):G('cfgDbrHost'))?.focus();
+    G('cfgDbrHost')?.focus();
+    return;
+  }
+  if(authMode==='service_principal'&&(!tenantId||!clientId||!clientSecret)){
+    toast('Service Principal mode requires Tenant ID, Client ID, and Client Secret','terr',5000);
+    const acc=G('cfgAccAzure');
+    if(acc){acc.classList.add('open');acc.scrollIntoView({behavior:'smooth',block:'start'});}
+    (!tenantId?G('cfgTenantId'):(!clientId?G('cfgClientId'):G('cfgClientSecret')))?.focus();
     return;
   }
   // Build test URL from storage account + container
@@ -4269,13 +4255,31 @@ async function cfgTestStorageCredential(){
   detail.style.display='none';detail.textContent='';
   try{
     const r=await fetch('/api/v1/test-storage-credential',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-      databricks_host:host,databricks_token:token,storage_credential_name:credName,test_url:testUrl
+      databricks_host:host,
+      databricks_token:token,
+      storage_credential_name:credName,
+      test_url:testUrl,
+      auth_mode:authMode,
+      azure_tenant_id:tenantId,
+      azure_client_id:clientId,
+      azure_client_secret:clientSecret,
     })});
-    const d=await r.json();
+    const ctResp=r.headers.get('content-type')||'';
+    let d;
+    if(ctResp.includes('application/json')){
+      d=await r.json();
+    }else{
+      const txt=await r.text();
+      if(r.status===401||r.status===302||/<title>\s*Login/i.test(txt)||/name=["']password["']/i.test(txt)){
+        throw new Error('Session expired — please log in again and retry.');
+      }
+      const plain=txt.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().slice(0,300);
+      throw new Error('Server returned HTML (HTTP '+r.status+'): '+(plain||'check server logs'));
+    }
     if(d.success){
       status.style.cssText='font-size:11px;font-weight:600;color:#16a34a;background:#f0fdf4;padding:3px 9px;border-radius:20px;border:1px solid #bbf7d0;display:inline-block;';
       status.textContent='✅ '+(d.message||'Credential valid');
-      let lines=['Credential: '+d.credential_name,'ID: '+d.credential_id,'Owner: '+d.owner];
+      let lines=['Auth mode: '+(authMode==='service_principal'?'Service Principal':'PAT Token'),'Credential: '+d.credential_name,'ID: '+d.credential_id,'Owner: '+d.owner];
       if(d.access_connector_id) lines.push('Access Connector: '+d.access_connector_id);
       if(d.external_location) lines.push('External Location: '+d.external_location+' (covers this path)');
       if(d.validation&&d.validation.passed) lines.push('Validation: '+(d.validation.overlap?'PASSED (path already managed by external location)':'PASSED for '+d.validation.url));
