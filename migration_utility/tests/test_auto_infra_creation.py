@@ -32,7 +32,7 @@ class TestInfraOrchestration(unittest.TestCase):
             "volume_path": f"{base}/dev/dbx_landing",
         }
 
-    def test_create_folders_skips_catalog_managed_storage_roots(self):
+    def test_create_folders_materializes_every_configured_path(self):
         cfg = self._staging_cfg()
 
         with patch.object(AutoInfraCreation, "_databricks_api", return_value=(True, {})) as mock_api:
@@ -43,10 +43,33 @@ class TestInfraOrchestration(unittest.TestCase):
             for call in mock_api.call_args_list
             if call.args[0] == "POST" and call.args[1].endswith("/volumes")
         ]
-        self.assertEqual(
-            materialized,
-            ["abfss://datalake@sa.dfs.core.windows.net/dev/dbx_landing"],
-        )
+        base = "abfss://datalake@sa.dfs.core.windows.net"
+        self.assertEqual(materialized, [
+            f"{base}/dev",
+            f"{base}/dev/uc-managed",
+            f"{base}/dev/uc-managed/dbx_bronze",
+            f"{base}/dev/uc-managed/dbx_silver",
+            f"{base}/dev/uc-managed/dbx_admin_source",
+            f"{base}/dev/uc-managed/dbx_reconciliation",
+            f"{base}/dev/uc-managed/dbx_logging",
+            f"{base}/dev/uc-managed/dbx_volumes",
+            f"{base}/dev/dbx_landing",
+        ])
+
+    def test_anchor_falls_back_to_an_existing_workspace_catalog(self):
+        cfg = self._staging_cfg()
+
+        def api_response(method, path, _cfg, payload=None):
+            if path.startswith("/api/2.1/unity-catalog/schemas/"):
+                return False, {"error_code": "SCHEMA_DOES_NOT_EXIST"}
+            if path == "/api/2.1/unity-catalog/catalogs":
+                return True, {"catalogs": [{"name": "system"}, {"name": "main"}]}
+            if path.startswith("/api/2.1/unity-catalog/schemas?"):
+                return True, {"schemas": [{"name": "information_schema"}, {"name": "default"}]}
+            return True, {}
+
+        with patch.object(AutoInfraCreation, "_databricks_api", side_effect=api_response):
+            self.assertEqual(AutoInfraCreation._anchor_catalog_schema(cfg), ("main", "default"))
 
     def test_create_folders_treats_location_overlap_as_success(self):
         cfg = self._staging_cfg()
@@ -205,7 +228,7 @@ class TestInfraOrchestration(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 AutoInfraCreation.create_volume(cfg)
 
-    def test_run_all_streaming_creates_catalogs_before_materializing_folders(self):
+    def test_run_all_streaming_materializes_folders_before_catalogs(self):
         cfg = {
             "infra_mode": "existing",
             "storage_account": "sa",
@@ -232,8 +255,8 @@ class TestInfraOrchestration(unittest.TestCase):
 
         step_names = [step.get("name") for step in steps if step.get("event") == "step"]
         self.assertIn("Create Folder Paths", step_names)
-        self.assertLess(step_names.index("Create Unity Catalogs"), step_names.index("Create Folder Paths"))
-        self.assertLess(step_names.index("Create Folder Paths"), step_names.index("Create Volume"))
+        self.assertLess(step_names.index("Create Folder Paths"), step_names.index("Create Unity Catalogs"))
+        self.assertLess(step_names.index("Create Unity Catalogs"), step_names.index("Create Volume"))
         mock_folders.assert_called_once_with(cfg)
         mock_catalogs.assert_called_once_with(cfg)
         mock_volume.assert_called_once_with(cfg)

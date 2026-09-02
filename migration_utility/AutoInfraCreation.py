@@ -320,40 +320,6 @@ def _configured_storage_folders(cfg):
     return folders
 
 
-def _managed_storage_folders(cfg):
-    """Relative paths Unity Catalog owns as catalog managed storage roots."""
-    managed_cfg = {
-        "storage_account": cfg.get("storage_account"),
-        "container": cfg.get("container"),
-        "folders": [],
-        "catalogs": cfg.get("catalogs"),
-        "reconciliation": cfg.get("reconciliation"),
-        "logging": cfg.get("logging"),
-        "volume_catalog": cfg.get("volume_catalog"),
-        "volume_catalog_location": cfg.get("volume_catalog_location"),
-        "volume_path": cfg.get("volume_path"),
-    }
-    managed = _configured_storage_folders(managed_cfg)
-    volume_path_folder = _configured_storage_folders({
-        "storage_account": cfg.get("storage_account"),
-        "container": cfg.get("container"),
-        "folders": [cfg.get("volume_path") or ""],
-    })
-    return [folder for folder in managed if folder not in volume_path_folder]
-
-
-def _is_managed_storage_path(folder, managed_folders):
-    """True when UC already materializes this path as managed storage."""
-    for managed in managed_folders:
-        if folder == managed:
-            return True
-        if folder.startswith(managed + "/"):
-            return True
-        if managed.startswith(folder + "/"):
-            return True
-    return False
-
-
 def _directory_hierarchy(folders):
     """Expand leaf directories into unique parent-first ADLS paths."""
     hierarchy = []
@@ -802,13 +768,31 @@ def _anchor_catalog_schemas(cfg):
 
 
 def _anchor_catalog_schema(cfg):
-    """Return the first configured catalog/schema that exists in Unity Catalog."""
+    """Return the first catalog/schema that already exists in Unity Catalog."""
     for catalog, schema in _anchor_catalog_schemas(cfg):
         ok, _ = _databricks_api(
             "GET", f"/api/2.1/unity-catalog/schemas/{catalog}.{schema}", cfg)
         if ok:
             return catalog, schema
         _log(f"Folder anchor '{catalog}.{schema}' does not exist — trying next candidate.", "INFO")
+
+    # Folders must be materialized before the configured catalogs claim those
+    # paths as managed storage, so fall back to any pre-existing catalog.
+    ok, body = _databricks_api("GET", "/api/2.1/unity-catalog/catalogs", cfg)
+    if ok and isinstance(body, dict):
+        for catalog in body.get("catalogs") or []:
+            name = (catalog or {}).get("name")
+            if not name or name in ("system", "samples", "__databricks_internal"):
+                continue
+            sok, sbody = _databricks_api(
+                "GET", f"/api/2.1/unity-catalog/schemas?catalog_name={name}", cfg)
+            if not (sok and isinstance(sbody, dict)):
+                continue
+            for schema in sbody.get("schemas") or []:
+                sname = (schema or {}).get("name")
+                if sname and sname != "information_schema":
+                    _log(f"Using existing '{name}.{sname}' to anchor folder creation.", "INFO")
+                    return name, sname
     return "", ""
 
 
@@ -845,13 +829,9 @@ def create_folders(cfg):
             "Check the Create Unity Catalogs step and configured schema names.")
 
     failures = []
-    managed_folders = _managed_storage_folders(cfg)
     for folder in _directory_hierarchy(folders):
         folder = folder.strip().strip("/")
         if not folder:
-            continue
-        if _is_managed_storage_path(folder, managed_folders):
-            _log(f"Folder '{folder}' is Unity Catalog managed storage — created with its catalog.", "INFO")
             continue
         full_path = f"{base}/{folder}"
         tmp_name = "mkdir_tmp_" + uuid.uuid4().hex[:10]
@@ -1162,10 +1142,10 @@ def run_all(cfg):
         cred_name = create_storage_credential(cfg, connector_id)
         # Step 4 — External Locations
         create_external_locations(cfg, cred_name)
+        # Step 4b — Materialize paths before catalogs claim them as managed storage
+        create_folders(cfg)
         # Step 5 — Catalogs
         create_catalogs(cfg)
-        # Step 5b — Materialize paths after the anchor catalog exists
-        create_folders(cfg)
         # Step 6 — Volume
         create_volume(cfg)
     else:
@@ -1248,10 +1228,11 @@ def run_all_api(cfg):
                               "logs": ""})
 
         # Steps 5 & 6 use Databricks API directly — no connector_id needed.
-        # Catalogs must exist before temporary volumes can materialize paths.
-        _run_step(5, "Create Unity Catalogs", create_catalogs, cfg)
+        # Folders are materialized first so UC managed storage roots do not
+        # block creating the directories.
         if _configured_storage_folders(cfg):
-            _run_step(5, "Create Folder Paths", create_folders, cfg)
+            _run_step(4, "Create Folder Paths", create_folders, cfg)
+        _run_step(5, "Create Unity Catalogs", create_catalogs, cfg)
         _run_step(6, "Create Volume", create_volume, cfg)
     else:
         steps.append({"step": 3, "name": "Databricks API Steps (3-6)",
@@ -1427,17 +1408,17 @@ def run_all_streaming(cfg):
                 all_steps.append(skip_entry)
                 yield skip_entry
 
+        if _configured_storage_folders(cfg):
+            yield {"event": "step", "step": 4, "name": "Create Folder Paths",
+                   "status": "running", "message": "Materializing ADLS directories…", "logs": ""}
+            entry, _ = _do_step(4, "Create Folder Paths", create_folders, cfg)
+            yield entry
+
         # Steps 5 & 6 use Databricks REST API directly — no connector_id needed
         yield {"event": "step", "step": 5, "name": "Create Unity Catalogs",
                "status": "running", "message": "Creating catalogs…", "logs": ""}
         entry, _ = _do_step(5, "Create Unity Catalogs", create_catalogs, cfg)
         yield entry
-
-        if _configured_storage_folders(cfg):
-            yield {"event": "step", "step": 5, "name": "Create Folder Paths",
-                   "status": "running", "message": "Materializing ADLS directories…", "logs": ""}
-            entry, _ = _do_step(5, "Create Folder Paths", create_folders, cfg)
-            yield entry
 
         yield {"event": "step", "step": 6, "name": "Create Volume",
                "status": "running", "message": "Creating volume…", "logs": ""}
