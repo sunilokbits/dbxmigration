@@ -773,6 +773,16 @@ class TestFlaskRoutes(unittest.TestCase):
         cls.app.config["TESTING"] = True
         cls.client = cls.app.test_client()
 
+    def setUp(self):
+        # login_required resolves identity via the Databricks SDK, so without
+        # this every route 401s wherever no workspace credentials are present.
+        patcher = patch(
+            "routes.auth.get_current_user",
+            return_value={"email": "test@test.com", "role": "Admin", "display_name": "Test"},
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_catalogs_schemas_endpoint(self):
         resp = self.client.get("/api/v1/datamodel/catalogs-schemas")
         self.assertEqual(resp.status_code, 200)
