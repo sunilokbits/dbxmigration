@@ -5,6 +5,7 @@ via the databricks-sql-connector, with automatic OAuth passthrough
 when running inside a Databricks App.
 """
 
+import atexit
 import os
 import threading
 from log_config import get_logger
@@ -15,6 +16,27 @@ _local = threading.local()
 _init_lock = threading.Lock()
 _tables_initialised = False
 _discovered_warehouse_id = None
+_open_connections = []
+_connections_lock = threading.Lock()
+
+
+def close_all_connections():
+    """Close every open connection.
+
+    The connector segfaults during interpreter shutdown if connections are left
+    to the garbage collector, so they are closed while the runtime is healthy.
+    """
+    with _connections_lock:
+        connections, _open_connections[:] = list(_open_connections), []
+    for conn in connections:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    _local.conn = None
+
+
+atexit.register(close_all_connections)
 
 
 def _auto_discover_warehouse_id():
@@ -88,6 +110,9 @@ def get_connection():
                 _local.conn.close()
             except Exception:
                 pass
+            with _connections_lock:
+                if _local.conn in _open_connections:
+                    _open_connections.remove(_local.conn)
             _local.conn = None
 
     cfg = _get_config()
@@ -122,7 +147,14 @@ def get_connection():
         # (DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET from env).
         logger.info("No PAT available — using app SP M2M OAuth for SQL connection")
 
-    _local.conn = dbsql.connect(**connect_kwargs)
+    try:
+        conn = dbsql.connect(**connect_kwargs)
+    except Exception as e:
+        _local.conn = None
+        raise RuntimeError(f"Databricks SQL connection to {server} failed: {e}") from e
+    _local.conn = conn
+    with _connections_lock:
+        _open_connections.append(conn)
     logger.info("Databricks SQL connection established: %s", server)
     return _local.conn
 
