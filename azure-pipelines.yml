@@ -27,18 +27,13 @@
 #   3. Update the `clients` parameter below with onboarded client names.
 # =============================================================================
 
-trigger:
-  branches:
-    include:
-      - main
-  tags:
-    include:
-      - release/*
+# Azure Pipelines CI/CD is DISABLED (Azure DevOps credit/cost constraints).
+# GitHub is now the sole source of truth for triggering deployments — see
+# .github/workflows/deploy.yml. This file is kept for reference/manual runs
+# only (Pipelines > Run pipeline) and will no longer auto-trigger on push or PR.
+trigger: none
 
-pr:
-  branches:
-    include:
-      - main
+pr: none
 
 parameters:
   - name: clients

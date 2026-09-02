@@ -1,0 +1,53 @@
+name: Deploy to Databricks (dev)
+
+# GitHub is now the sole CI/CD trigger (Azure Pipelines disabled — see
+# azure-pipelines.yml). Requires repo secrets DATABRICKS_HOST and
+# DATABRICKS_TOKEN (Settings > Secrets and variables > Actions) for the
+# target Databricks workspace.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  deploy-dev:
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Databricks CLI
+        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+
+      - name: Install Terraform
+        run: |
+          set -e
+          curl -fsSL -o /tmp/terraform.zip https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip
+          sudo unzip -o /tmp/terraform.zip -d /usr/local/bin
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: databricks bundle validate
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: databricks bundle validate -t dev
+
+      - name: databricks bundle deploy + app snapshot deploy
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_BUNDLE_ENGINE: terraform
+        run: |
+          set -e
+          OUT=$(databricks bundle deploy -t dev 2>&1 | tee /dev/stderr)
+          SRC_PATH=$(echo "$OUT" | grep "Uploading bundle files to" | sed -E 's#.*Uploading bundle files to (.*)\.\.\.#\1#')
+          databricks apps deploy dbxmigrationapp --source-code-path "$SRC_PATH" --mode SNAPSHOT
