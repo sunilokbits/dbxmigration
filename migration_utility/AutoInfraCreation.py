@@ -767,14 +767,28 @@ def _anchor_catalog_schemas(cfg):
     return candidates
 
 
+def _is_standard_securable(entry):
+    """Only standard UC securables can hold volumes — foreign/shared ones cannot."""
+    if not isinstance(entry, dict):
+        return False
+    markers = (
+        (entry.get("securable_kind") or ""),
+        (entry.get("catalog_type") or ""),
+        (entry.get("schema_type") or ""),
+        (entry.get("connection_name") and "FOREIGN" or ""),
+    )
+    blocked = ("FOREIGN", "DELTASHARING", "SYSTEM", "INTERNAL")
+    return not any(flag in marker.upper() for marker in markers for flag in blocked)
+
+
 def _anchor_catalog_schema(cfg):
-    """Return the first catalog/schema that already exists in Unity Catalog."""
+    """Return the first standard catalog/schema that already exists in Unity Catalog."""
     for catalog, schema in _anchor_catalog_schemas(cfg):
-        ok, _ = _databricks_api(
+        ok, body = _databricks_api(
             "GET", f"/api/2.1/unity-catalog/schemas/{catalog}.{schema}", cfg)
-        if ok:
+        if ok and _is_standard_securable(body if isinstance(body, dict) else {}):
             return catalog, schema
-        _log(f"Folder anchor '{catalog}.{schema}' does not exist — trying next candidate.", "INFO")
+        _log(f"Folder anchor '{catalog}.{schema}' is unavailable — trying next candidate.", "INFO")
 
     # Folders must be materialized before the configured catalogs claim those
     # paths as managed storage, so fall back to any pre-existing catalog.
@@ -784,15 +798,20 @@ def _anchor_catalog_schema(cfg):
             name = (catalog or {}).get("name")
             if not name or name in ("system", "samples", "__databricks_internal"):
                 continue
+            if not _is_standard_securable(catalog):
+                continue
             sok, sbody = _databricks_api(
                 "GET", f"/api/2.1/unity-catalog/schemas?catalog_name={name}", cfg)
             if not (sok and isinstance(sbody, dict)):
                 continue
             for schema in sbody.get("schemas") or []:
                 sname = (schema or {}).get("name")
-                if sname and sname != "information_schema":
-                    _log(f"Using existing '{name}.{sname}' to anchor folder creation.", "INFO")
-                    return name, sname
+                if not sname or sname == "information_schema":
+                    continue
+                if not _is_standard_securable(schema):
+                    continue
+                _log(f"Using existing '{name}.{sname}' to anchor folder creation.", "INFO")
+                return name, sname
     return "", ""
 
 
@@ -823,10 +842,26 @@ def create_folders(cfg):
     base = f"abfss://{ctr}@{sa}.dfs.core.windows.net"
 
     anchor_cat, anchor_schema = _anchor_catalog_schema(cfg)
+    bootstrap_catalog = ""
     if not (anchor_cat and anchor_schema):
-        raise RuntimeError(
-            "No existing catalog/schema is available to anchor folder creation. "
-            "Check the Create Unity Catalogs step and configured schema names.")
+        # A workspace with only foreign/shared catalogs still needs somewhere to
+        # register the throwaway volumes; a metastore-root catalog works.
+        bootstrap_catalog = "mkdir_tmp_cat_" + uuid.uuid4().hex[:8]
+        cok, cbody = _databricks_api("POST", "/api/2.1/unity-catalog/catalogs", cfg, {
+            "name": bootstrap_catalog,
+            "comment": "temporary — used only to materialize ADLS directories",
+        })
+        sok = False
+        if cok:
+            sok, _ = _databricks_api("POST", "/api/2.1/unity-catalog/schemas", cfg, {
+                "name": "default", "catalog_name": bootstrap_catalog,
+            })
+        if not (cok and sok):
+            raise RuntimeError(
+                "No standard catalog/schema is available to anchor folder creation, and a "
+                f"temporary catalog could not be created: {cbody}")
+        anchor_cat, anchor_schema = bootstrap_catalog, "default"
+        _log(f"Using temporary catalog '{bootstrap_catalog}.default' to anchor folder creation.", "INFO")
 
     failures = []
     for folder in _directory_hierarchy(folders):
@@ -853,6 +888,10 @@ def create_folders(cfg):
         else:
             _log(f"  Could not materialize folder '{folder}': {body}", "WARN")
             failures.append(f"{folder}: {body}")
+
+    if bootstrap_catalog:
+        _databricks_api(
+            "DELETE", f"/api/2.1/unity-catalog/catalogs/{bootstrap_catalog}?force=true", cfg)
 
     if failures:
         raise RuntimeError(

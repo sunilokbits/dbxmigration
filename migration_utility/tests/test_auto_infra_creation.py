@@ -71,6 +71,32 @@ class TestInfraOrchestration(unittest.TestCase):
         with patch.object(AutoInfraCreation, "_databricks_api", side_effect=api_response):
             self.assertEqual(AutoInfraCreation._anchor_catalog_schema(cfg), ("main", "default"))
 
+    def test_anchor_rejects_foreign_catalogs_and_schemas(self):
+        cfg = self._staging_cfg()
+
+        def api_response(method, path, _cfg, payload=None):
+            if path.startswith("/api/2.1/unity-catalog/schemas/"):
+                return False, {"error_code": "CATALOG_DOES_NOT_EXIST"}
+            if path == "/api/2.1/unity-catalog/catalogs":
+                return True, {"catalogs": [
+                    {"name": "test-sql-server_catalog", "securable_kind": "CATALOG_FOREIGN_SQLSERVER"},
+                    {"name": "shared_catalog", "catalog_type": "DELTASHARING_CATALOG"},
+                    {"name": "main", "securable_kind": "CATALOG_STANDARD"},
+                ]}
+            if path.startswith("/api/2.1/unity-catalog/schemas?"):
+                if "catalog_name=main" in path:
+                    return True, {"schemas": [
+                        {"name": "information_schema"},
+                        {"name": "default", "securable_kind": "SCHEMA_STANDARD"},
+                    ]}
+                return True, {"schemas": [
+                    {"name": "db_accessadmin", "securable_kind": "SCHEMA_FOREIGN_SQLSERVER"},
+                ]}
+            return True, {}
+
+        with patch.object(AutoInfraCreation, "_databricks_api", side_effect=api_response):
+            self.assertEqual(AutoInfraCreation._anchor_catalog_schema(cfg), ("main", "default"))
+
     def test_create_folders_treats_location_overlap_as_success(self):
         cfg = self._staging_cfg()
         overlap = {
