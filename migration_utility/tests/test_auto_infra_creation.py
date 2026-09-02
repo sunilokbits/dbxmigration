@@ -9,6 +9,50 @@ import AutoInfraCreation
 
 
 class TestInfraOrchestration(unittest.TestCase):
+    def test_create_folders_materializes_nested_paths_parent_first(self):
+        cfg = {
+            "storage_account": "sa",
+            "container": "datalake",
+            "folders": [],
+            "metadata_catalog": "admin_source",
+            "metadata_schema": "configtables",
+            "catalogs": {
+                "dbx_admin_source": {
+                    "location": "abfss://datalake@sa.dfs.core.windows.net/dev/uc-managed/dbx_admin_source"
+                }
+            },
+        }
+
+        with patch.object(AutoInfraCreation, "_databricks_api", return_value=(True, {})) as mock_api:
+            AutoInfraCreation.create_folders(cfg)
+
+        created_paths = [
+            call.args[3]["storage_location"]
+            for call in mock_api.call_args_list
+            if call.args[0] == "POST"
+        ]
+        self.assertEqual(created_paths, [
+            "abfss://datalake@sa.dfs.core.windows.net/dev",
+            "abfss://datalake@sa.dfs.core.windows.net/dev/uc-managed",
+            "abfss://datalake@sa.dfs.core.windows.net/dev/uc-managed/dbx_admin_source",
+        ])
+
+    def test_directory_hierarchy_expands_full_paths_parent_first(self):
+        self.assertEqual(
+            AutoInfraCreation._directory_hierarchy([
+                "dev/uc-managed/dbx_admin_source",
+                "dev/uc-managed/dbx_bronze",
+                "dev/landing",
+            ]),
+            [
+                "dev",
+                "dev/uc-managed",
+                "dev/uc-managed/dbx_admin_source",
+                "dev/uc-managed/dbx_bronze",
+                "dev/landing",
+            ],
+        )
+
     def test_storage_folders_are_derived_when_explicit_list_is_empty(self):
         cfg = {
             "storage_account": "sa",

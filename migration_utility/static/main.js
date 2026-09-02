@@ -3697,7 +3697,6 @@ function _collectConfig(){
     const s=(row.querySelector('.cfg-cat-schemas')?row.querySelector('.cfg-cat-schemas').value.trim():'default')||'default';
     if(n&&l) catalogs[n]={location:l, schemas:s.split(',').map(x=>x.trim()).filter(Boolean)};
   });
-  const folders=(G('cfgFolders').value||'').split('\n').map(s=>s.trim()).filter(Boolean);
   return {
     keyvault_name: (_cachedDeployConfig||{}).keyvault_name||'',
     subscription_id: G('cfgSubId').value.trim(),
@@ -3707,7 +3706,7 @@ function _collectConfig(){
     databricks_token: G('cfgDbrToken').value.trim(),
     storage_account: G('cfgStorageAcct').value.trim(),
     container:       G('cfgContainer').value.trim(),
-    folders:         folders,
+    folders:         [],
     access_connector:G('cfgAccessConnector').value.trim(),
     storage_credential_name:G('cfgStorageCredName')?.value?.trim()||'',
     storage_credential_test_auth_mode: (G('cfgStorageTestAuthMode')?.value||'pat'),
@@ -3783,7 +3782,6 @@ function _populateConfig(c){
   G('cfgDbrToken').value=c.databricks_token||'';
   G('cfgStorageAcct').value=c.storage_account||'';
   G('cfgContainer').value=c.container||'';
-  G('cfgFolders').value=(c.folders||[]).join('\n');
   G('cfgAccessConnector').value=c.access_connector||'';
   if(G('cfgStorageCredName')) G('cfgStorageCredName').value=c.storage_credential_name||'';
   if(G('cfgStorageTestAuthMode')) G('cfgStorageTestAuthMode').value=c.storage_credential_test_auth_mode||'pat';

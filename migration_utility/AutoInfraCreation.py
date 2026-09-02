@@ -320,6 +320,18 @@ def _configured_storage_folders(cfg):
     return folders
 
 
+def _directory_hierarchy(folders):
+    """Expand leaf directories into unique parent-first ADLS paths."""
+    hierarchy = []
+    for folder in folders:
+        parts = [part for part in folder.strip("/").split("/") if part]
+        for depth in range(1, len(parts) + 1):
+            path = "/".join(parts[:depth])
+            if path not in hierarchy:
+                hierarchy.append(path)
+    return hierarchy
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Step 0 — Verify Azure Credentials  (Python SDK — no CLI needed)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -417,16 +429,16 @@ def create_storage(cfg):
             raise
 
     # 1c — Folders (directories in ADLS)
-    for folder in _configured_storage_folders(cfg):
+    for folder in _directory_hierarchy(_configured_storage_folders(cfg)):
         _log(f"Creating folder '{folder}'…")
         try:
-            dir_client = fs_client.create_directory(folder)
+            fs_client.create_directory(folder)
             _log(f"  Folder '{folder}' created.")
         except Exception as e:
             if "already exists" in str(e).lower() or "PathAlreadyExists" in str(e):
                 _log(f"  Folder '{folder}' already exists — OK.", "INFO")
             else:
-                _log(f"  Failed to create folder '{folder}': {e}", "ERROR")
+                raise RuntimeError(f"Failed to create folder '{folder}': {e}") from e
     _log("All folders created.")
 
 
@@ -782,7 +794,8 @@ def create_folders(cfg):
              "create at least one catalog first. Skipping.", "WARN")
         return
 
-    for folder in folders:
+    failures = []
+    for folder in _directory_hierarchy(folders):
         folder = folder.strip().strip("/")
         if not folder:
             continue
@@ -804,6 +817,11 @@ def create_folders(cfg):
                 )
         else:
             _log(f"  Could not materialize folder '{folder}': {body}", "WARN")
+            failures.append(f"{folder}: {body}")
+
+    if failures:
+        raise RuntimeError(
+            "Failed to materialize one or more ADLS folders: " + "; ".join(failures))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
