@@ -63,23 +63,53 @@ def _ts():
     return datetime.now().strftime("%H:%M:%S")
 
 
-def _ensure_pkg(import_path, pip_name):
-    """Import `import_path` (e.g. 'azure.mgmt.resource'), auto-installing
-    `pip_name` via pip and retrying once if the import fails.
+def _import_attr(module_path, attr, pip_name, fallback_modules=()):
+    """Return `attr` from `module_path`, self-healing across environments.
 
-    Makes infra-creation self-healing regardless of which environment this
-    runs in (local dev box, CI pipeline, or the deployed Databricks App) —
-    a missing/stale dependency no longer requires a manual fix or redeploy.
+    `azure.*` are PEP 420 namespace packages: when a distribution is missing
+    or only partially installed, `import azure.mgmt.resource` can still
+    succeed (resolving to an empty namespace dir) while the client class is
+    absent — surfacing as "module has no attribute 'ResourceManagementClient'"
+    rather than ImportError. So an AttributeError must trigger the same
+    reinstall path as a failed import, and we also try the class's real
+    defining submodule (e.g. azure.mgmt.resource.resources) as a fallback.
     """
     import importlib
-    try:
-        return importlib.import_module(import_path)
-    except ImportError:
-        _log(f"'{pip_name}' not available — installing…", "WARN")
-        import subprocess
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", pip_name])
-        importlib.invalidate_caches()
-        return importlib.import_module(import_path)
+
+    def _lookup():
+        for path in (module_path,) + tuple(fallback_modules):
+            try:
+                mod = importlib.import_module(path)
+            except ImportError:
+                continue
+            found = getattr(mod, attr, None)
+            if found is not None:
+                return found
+        return None
+
+    found = _lookup()
+    if found is not None:
+        return found
+
+    _log(f"'{attr}' unavailable from {pip_name} — (re)installing…", "WARN")
+    import subprocess
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "--quiet", "--upgrade",
+         "--force-reinstall", "--no-cache-dir", pip_name]
+    )
+    importlib.invalidate_caches()
+    for path in (module_path,) + tuple(fallback_modules):
+        if path in sys.modules:
+            del sys.modules[path]
+
+    found = _lookup()
+    if found is None:
+        raise ImportError(
+            f"Could not resolve '{attr}' from '{module_path}' even after "
+            f"reinstalling '{pip_name}'. The Python environment may have a "
+            f"conflicting/partial 'azure' namespace package installation."
+        )
+    return found
 
 
 def _log(msg, level="INFO"):
@@ -116,9 +146,9 @@ def _get_azure_credential(cfg=None):
 
     # Priority 2: SP credentials from config
     if cfg:
-        sp_tenant = cfg.get("azure_tenant_id", "")
-        sp_client = cfg.get("azure_client_id", "")
-        sp_secret = cfg.get("azure_client_secret", "")
+        sp_tenant = (cfg.get("azure_tenant_id") or "").strip()
+        sp_client = (cfg.get("azure_client_id") or "").strip()
+        sp_secret = (cfg.get("azure_client_secret") or "").strip()
         if sp_tenant and sp_client and sp_secret:
             from azure.identity import ClientSecretCredential
             cred = ClientSecretCredential(
@@ -128,6 +158,20 @@ def _get_azure_credential(cfg=None):
             _log("Authenticated via Service Principal.")
             _CACHED_CREDENTIAL = cred
             return cred
+        if sp_tenant or sp_client or sp_secret:
+            missing = [
+                name for name, value in (
+                    ("Tenant ID", sp_tenant),
+                    ("Client ID", sp_client),
+                    ("Client Secret", sp_secret),
+                ) if not value
+            ]
+            _log(
+                "Service Principal partially configured — missing: "
+                + ", ".join(missing)
+                + ". Fill these under Settings → Azure Service Principal, then Save Config.",
+                "WARN",
+            )
 
     if _CACHED_CREDENTIAL is not None:
         return _CACHED_CREDENTIAL
@@ -185,7 +229,10 @@ def _databricks_api(method, path, cfg, payload=None):
 
 def set_subscription(cfg):
     """Verify Azure credentials and subscription access via Python SDK."""
-    ResourceManagementClient = _ensure_pkg("azure.mgmt.resource", "azure-mgmt-resource").ResourceManagementClient
+    ResourceManagementClient = _import_attr(
+        "azure.mgmt.resource", "ResourceManagementClient", "azure-mgmt-resource",
+        fallback_modules=("azure.mgmt.resource.resources",),
+    )
 
     sub = cfg["subscription_id"]
     _log(f"Authenticating to Azure (subscription: {sub})…")
@@ -213,13 +260,14 @@ def set_subscription(cfg):
 def create_storage(cfg):
     _log("═══ Step 1: Storage Account + Container + Folders ═══")
 
-    _storage_mgmt = _ensure_pkg("azure.mgmt.storage", "azure-mgmt-storage")
-    StorageManagementClient = _storage_mgmt.StorageManagementClient
-    _storage_models = _ensure_pkg("azure.mgmt.storage.models", "azure-mgmt-storage")
-    StorageAccountCreateParameters = _storage_models.StorageAccountCreateParameters
-    Sku = _storage_models.Sku
-    Kind = _storage_models.Kind
-    DataLakeServiceClient = _ensure_pkg("azure.storage.filedatalake", "azure-storage-file-datalake").DataLakeServiceClient
+    StorageManagementClient = _import_attr(
+        "azure.mgmt.storage", "StorageManagementClient", "azure-mgmt-storage")
+    StorageAccountCreateParameters = _import_attr(
+        "azure.mgmt.storage.models", "StorageAccountCreateParameters", "azure-mgmt-storage")
+    Sku = _import_attr("azure.mgmt.storage.models", "Sku", "azure-mgmt-storage")
+    Kind = _import_attr("azure.mgmt.storage.models", "Kind", "azure-mgmt-storage")
+    DataLakeServiceClient = _import_attr(
+        "azure.storage.filedatalake", "DataLakeServiceClient", "azure-storage-file-datalake")
 
     sub  = cfg["subscription_id"]
     rg   = cfg["resource_group"]
@@ -292,8 +340,10 @@ def create_storage(cfg):
 def create_access_connector(cfg):
     _log("═══ Step 2: Access Connector + Role Assignment ═══")
 
-    AzureDatabricksManagementClient = _ensure_pkg("azure.mgmt.databricks", "azure-mgmt-databricks").AzureDatabricksManagementClient
-    AuthorizationManagementClient = _ensure_pkg("azure.mgmt.authorization", "azure-mgmt-authorization").AuthorizationManagementClient
+    AzureDatabricksManagementClient = _import_attr(
+        "azure.mgmt.databricks", "AzureDatabricksManagementClient", "azure-mgmt-databricks")
+    AuthorizationManagementClient = _import_attr(
+        "azure.mgmt.authorization", "AuthorizationManagementClient", "azure-mgmt-authorization")
 
     sub  = cfg["subscription_id"]
     rg   = cfg["resource_group"]
