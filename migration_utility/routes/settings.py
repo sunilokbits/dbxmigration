@@ -1,7 +1,8 @@
 """Settings API — Catalog/Schema listing and access validation for ExistingSetting."""
+import json
 from functools import wraps
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, jsonify, request, session, Response
 from .auth import login_required
 from config_cache import get_config, get_databricks_token
 from log_config import get_logger
@@ -125,7 +126,33 @@ def save_deploy_config():
         return jsonify({"success": False, "error": str(e)})
 
 
+@settings_bp.route("/deploy-infra-stream", methods=["GET"])
+@login_required
+def deploy_infra_stream():
+    """SSE stream that runs AutoInfraCreation.run_all_streaming() against the
+    saved deployconfig.json and pushes one 'step'/'done' event per line.
+    """
+    from AutoInfraCreation import CONFIG as INFRA_DEFAULTS, run_all_streaming
 
+    cfg = dict(INFRA_DEFAULTS)
+    cfg.update(get_config() or {})
+    cfg["databricks_token"] = get_databricks_token()
+
+    def generate():
+        try:
+            for event in run_all_streaming(cfg):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as e:
+            logger.error("deploy-infra-stream failed: %s", e)
+            yield "data: " + json.dumps({
+                "event": "done", "success": False,
+                "summary": f"Deployment failed: {e}",
+            }) + "\n\n"
+
+    return Response(generate(), mimetype="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    })
 
 
 @settings_bp.route("/test-databricks", methods=["POST"])
