@@ -791,9 +791,26 @@ def init_metadata_flow(host: str, token: str, catalog: str = "main",
 
     _metadata_initialized = True
 
-    # Persist metadata catalog/schema so they survive Flask restarts
+    # Persist metadata catalog/schema. The local deployconfig.json write
+    # below only survives a same-process restart, NOT a redeploy (Databricks
+    # Apps replaces the whole source tree) -- also save to the Delta-backed
+    # config so dbsql_client.get_catalog_schema() picks it up durably, and
+    # replicate this app's own tables (user_roles, audit_log, job_schedules,
+    # migration_jobs, dm_models, doc_qa_chunks*) into the same catalog/schema
+    # right away instead of only the wf_* tables this function just created.
     _save_deploy_config_field("metadata_catalog", _dbr_catalog)
     _save_deploy_config_field("metadata_schema", _dbr_schema)
+    try:
+        from config_cache import get_config as _get_app_cfg, save_config as _save_app_cfg
+        _app_cfg = dict(_get_app_cfg() or {})
+        _app_cfg["metadata_catalog"] = _dbr_catalog
+        _app_cfg["metadata_schema"] = _dbr_schema
+        _save_app_cfg(_app_cfg)
+        from dbsql_client import reset_tables_initialised, ensure_tables
+        reset_tables_initialised()
+        ensure_tables()
+    except Exception as exc:
+        logger.warning("Could not persist metadata catalog/schema to app config or replicate app tables: %s", exc)
 
     return {
         "success": True,

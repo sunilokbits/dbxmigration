@@ -119,7 +119,28 @@ def save_deploy_config():
             if set_devops_token(pat):
                 data["devops_pat"] = ""
 
+        # If the Metadata Catalog/Schema is changing, replicate this app's own
+        # tables (user_roles, audit_log, job_schedules, migration_jobs,
+        # dm_models, doc_qa_chunks*) into the new location right away instead
+        # of waiting for a process restart to pick it up.
+        _new_meta_cat = data.get("metadata_catalog", "")
+        _new_meta_sch = data.get("metadata_schema", "")
+        _meta_changed = (
+            (_new_meta_cat and _new_meta_cat != existing.get("metadata_catalog", "")) or
+            (_new_meta_sch and _new_meta_sch != existing.get("metadata_schema", ""))
+        )
+
         save_result = save_config(data)
+
+        if _meta_changed:
+            try:
+                from dbsql_client import reset_tables_initialised, ensure_tables
+                reset_tables_initialised()
+                ensure_tables()
+                logger.info("Replicated app tables into new metadata catalog/schema: %s.%s", _new_meta_cat, _new_meta_sch)
+            except Exception as exc:
+                logger.warning("Could not replicate app tables into %s.%s: %s", _new_meta_cat, _new_meta_sch, exc)
+
         if not save_result.get("durable"):
             return jsonify({
                 "success": True,

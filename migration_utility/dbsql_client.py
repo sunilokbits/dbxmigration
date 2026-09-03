@@ -90,9 +90,30 @@ def _get_config():
 
 
 def get_catalog_schema() -> tuple[str, str]:
-    """Return (catalog, schema) for app tables."""
+    """Return (catalog, schema) for this app's own tables (user_roles,
+    audit_log, job_schedules, migration_jobs, dm_models, doc_qa_chunks*).
+
+    Prefers the "Metadata Catalog"/"Metadata Schema" a user configures at
+    runtime in Settings (config_cache's metadata_catalog/metadata_schema --
+    the same setting workflow_manager.py's wf_* tables already follow) over
+    the static DATABRICKS_CATALOG/DATABRICKS_SCHEMA env vars baked into
+    app.yml at deploy time. That way choosing a different catalog to test
+    against relocates ALL of this app's tables there, not just the
+    workflow ones, and doesn't require a redeploy to change.
+
+    app_config itself is the one exception: it's what makes the dynamic
+    value discoverable in the first place, so its own location has to stay
+    anchored to the static env vars (see config_cache.py's _fqn()).
+    """
     cfg = _get_config()
-    return cfg["catalog"], cfg["schema"]
+    try:
+        from config_cache import get_config as _get_app_config
+        dyn = _get_app_config() or {}
+        catalog = dyn.get("metadata_catalog") or cfg["catalog"]
+        schema = dyn.get("metadata_schema") or cfg["schema"]
+        return catalog, schema
+    except Exception:
+        return cfg["catalog"], cfg["schema"]
 
 
 def get_connection():
@@ -196,6 +217,18 @@ def execute_many(sql: str, param_list: list[dict]) -> int:
         cursor.close()
 
 
+def reset_tables_initialised():
+    """Force the next ensure_tables() call to actually run its DDL again.
+
+    Needed after the "Metadata Catalog"/"Metadata Schema" setting changes:
+    ensure_tables() only runs once per process by default, so switching to
+    a different catalog to test against wouldn't otherwise replicate this
+    app's tables there until the process happened to restart.
+    """
+    global _tables_initialised
+    _tables_initialised = False
+
+
 def ensure_tables():
     """Create app persistence Delta tables if they don't exist (idempotent)."""
     global _tables_initialised
@@ -207,9 +240,16 @@ def ensure_tables():
             return
 
         catalog, schema = get_catalog_schema()
+        # app_config's own table always stays at the static env-var location
+        # (see get_catalog_schema()'s docstring) -- it's what makes the
+        # dynamic catalog/schema above discoverable, so it can't move with it.
+        _static_cfg = _get_config()
+        app_cfg_catalog, app_cfg_schema = _static_cfg["catalog"], _static_cfg["schema"]
         ddl_statements = [
             f"CREATE CATALOG IF NOT EXISTS {catalog}",
             f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}",
+            f"CREATE CATALOG IF NOT EXISTS {app_cfg_catalog}",
+            f"CREATE SCHEMA IF NOT EXISTS {app_cfg_catalog}.{app_cfg_schema}",
             f"""CREATE TABLE IF NOT EXISTS {catalog}.{schema}.migration_jobs (
                 job_id STRING NOT NULL,
                 payload STRING NOT NULL,
@@ -225,7 +265,7 @@ def ensure_tables():
                 updated_at TIMESTAMP DEFAULT current_timestamp()
             ) USING DELTA""",
 
-            f"""CREATE TABLE IF NOT EXISTS {catalog}.{schema}.app_config (
+            f"""CREATE TABLE IF NOT EXISTS {app_cfg_catalog}.{app_cfg_schema}.app_config (
                 config_key STRING NOT NULL,
                 config_value STRING,
                 updated_by STRING,
