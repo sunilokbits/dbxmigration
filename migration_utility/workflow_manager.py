@@ -493,9 +493,26 @@ def _exec_sql(sql: str, wait_timeout: str = "30s") -> dict:
         return {"error": str(e)}
 
 def _fqn(table: str) -> str:
-    """Fully qualified table name."""
-    c = _dbr_catalog or "main"
-    s = _dbr_schema or "default"
+    """Fully qualified table name.
+
+    Resolves catalog/schema fresh from the durable config each call,
+    same reasoning as _dbr_session()'s token fix above: _dbr_catalog/
+    _dbr_schema are set once at process start (_restore_from_deploy_config,
+    module-import time) and only ever updated again by an explicit Create
+    MetadataFlow call -- so changing "Metadata Catalog"/"Metadata Schema"
+    via Settings' main Save Config silently had no effect on what every
+    wf_* query here actually targets, and Job Manager / Pipeline Studio /
+    the Dashboard kept reading the OLD catalog regardless of what Settings
+    now shows.
+    """
+    try:
+        from config_cache import get_config as _get_app_cfg
+        dyn = _get_app_cfg() or {}
+        c = dyn.get("metadata_catalog") or _dbr_catalog or "main"
+        s = dyn.get("metadata_schema") or _dbr_schema or "default"
+    except Exception:
+        c = _dbr_catalog or "main"
+        s = _dbr_schema or "default"
     return f"`{c}`.`{s}`.`{table}`"
 
 
@@ -2843,22 +2860,57 @@ def reset_watermark(table_name: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 #  DASHBOARD STATS
 # ─────────────────────────────────────────────────────────────────────────────
-def get_dashboard_stats() -> dict:
-    """Aggregate statistics for the workflow dashboard."""
-    jobs = list(JOB_REGISTRY.values())
-    runs = list(JOB_RUNS.values())
-    groups = list(PIPELINE_GROUPS.values())
+def _rows_from_exec(result: dict) -> list[dict]:
+    """Convert an _exec_sql() response into a list of column-name dicts."""
+    if result.get("status", {}).get("state") != "SUCCEEDED":
+        return []
+    cols = [c["name"] for c in result.get("manifest", {}).get("schema", {}).get("columns", [])]
+    return [dict(zip(cols, row)) for row in result.get("result", {}).get("data_array", [])]
 
+
+def get_dashboard_stats() -> dict:
+    """Aggregate statistics for the workflow dashboard.
+
+    Queries live from Delta (the same tables Job Manager/Pipeline Studio
+    read) instead of the in-memory JOB_REGISTRY/PIPELINE_GROUPS/JOB_RUNS.
+    Those are only ever populated once, at process start
+    (_auto_hydrate_from_dbr), and never refreshed afterward — so they drift
+    from reality the moment the Metadata Catalog changes, tables get
+    dropped/recreated outside the app, or another process does any
+    workflow action. Falls back to the in-memory snapshot if the live
+    query fails (e.g. local dev without a Databricks connection).
+    """
+    if _metadata_initialized:
+        try:
+            jobs = _rows_from_exec(_exec_sql(
+                f"SELECT status, enabled, stage, full_table FROM {_fqn(TBL_JOBS)}"
+            ))
+            for j in jobs:
+                j["enabled"] = str(j.get("enabled", "true")).lower() in ("true", "1", "yes")
+            runs = _rows_from_exec(_exec_sql(
+                f"SELECT status, rows_processed FROM {_fqn(TBL_RUNS)}"
+            ))
+            groups_count = len(_rows_from_exec(_exec_sql(f"SELECT group_id FROM {_fqn(TBL_PIPELINES)}")))
+            return _compute_dashboard_stats(jobs, runs, groups_count)
+        except Exception as exc:
+            logger.warning("Live dashboard stats query failed, falling back to in-memory snapshot: %s", exc)
+
+    return _compute_dashboard_stats(
+        list(JOB_REGISTRY.values()), list(JOB_RUNS.values()), len(PIPELINE_GROUPS)
+    )
+
+
+def _compute_dashboard_stats(jobs: list, runs: list, groups_count: int) -> dict:
     total_jobs = len(jobs)
-    running_jobs = sum(1 for j in jobs if j["status"] == "running")
-    success_jobs = sum(1 for j in jobs if j["status"] == "success")
-    failed_jobs = sum(1 for j in jobs if j["status"] == "failed")
+    running_jobs = sum(1 for j in jobs if j.get("status") == "running")
+    success_jobs = sum(1 for j in jobs if j.get("status") == "success")
+    failed_jobs = sum(1 for j in jobs if j.get("status") == "failed")
     disabled_jobs = sum(1 for j in jobs if not j.get("enabled", True))
 
     total_runs = len(runs)
-    success_runs = sum(1 for r in runs if r["status"] == "success")
-    failed_runs = sum(1 for r in runs if r["status"] == "failed")
-    total_rows = sum(r.get("rows_processed", 0) for r in runs)
+    success_runs = sum(1 for r in runs if r.get("status") == "success")
+    failed_runs = sum(1 for r in runs if r.get("status") == "failed")
+    total_rows = sum(r.get("rows_processed", 0) or 0 for r in runs)
 
     # Per-stage job counts
     extract_jobs = sum(1 for j in jobs if j.get("stage") == "extract")
@@ -2866,8 +2918,7 @@ def get_dashboard_stats() -> dict:
     cleanse_jobs = sum(1 for j in jobs if j.get("stage") == "bronze_to_silver")
 
     # Distinct tables that have fully reached Silver — this stays meaningful even when
-    # JOB_RUNS (per-run row counts) is empty, e.g. right after a restart, unlike total_rows
-    # above which relies on ephemeral in-memory run history.
+    # runs (per-run row counts) is empty, unlike total_rows above.
     _final_stages = {"bronze_to_silver", "dlt_bronze_silver", "silver"}
     tables_migrated = len({
         j.get("full_table") for j in jobs
@@ -2877,7 +2928,7 @@ def get_dashboard_stats() -> dict:
     return {
         "success": True,
         "stats": {
-            "total_pipelines":  len(groups),
+            "total_pipelines":  groups_count,
             "total_jobs":       total_jobs,
             "running_jobs":     running_jobs,
             "success_jobs":     success_jobs,
