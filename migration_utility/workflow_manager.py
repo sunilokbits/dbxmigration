@@ -1580,6 +1580,7 @@ def create_pipeline_for_table(
     pipeline_mode: str = "standard",  # "standard" (PySpark) or "dlt" (Delta Live Tables)
     cdc_mode: str = "watermark",      # "watermark" or "change_tracking"
     primary_keys: list = None,        # e.g. ["CustomerID"] — required for change_tracking
+    use_layer_mapping: bool = False,  # apply the saved Layer→Catalog.Schema Mapping to THIS table
 ) -> dict:
     """
     Create a pipeline group for one source table:
@@ -1681,13 +1682,23 @@ def create_pipeline_for_table(
                  target_config.get("volumes_catalog"), target_config.get("target_schema"))
 
         # ── Layer Mapping override: read from config cache (Delta table) ──
-        try:
-            from config_cache import get_config as _get_create_cfg
-            deploy_cfg = _get_create_cfg()
-        except Exception:
-            deploy_cfg = _load_deploy_config()
-        ex_mapping = deploy_cfg.get("existing_setting", {}).get("medallion_layer_mapping", {})
-        _has_create_mapping = any(ex_mapping.get(l, {}).get("catalog") for l in ("landing", "bronze", "silver"))
+        # Only applied when THIS creation call opted in via use_layer_mapping
+        # (the "Use Layer Mapping" checkbox for the currently selected/checked
+        # tables in Quick Create). Previously this fired for every pipeline
+        # ever created afterward as soon as any catalog was saved in the
+        # mapping once — i.e. one Save Mapping click silently rewrote the
+        # target catalog/schema for every future table, not just the ones
+        # selected at the time. Scoping it to the request keeps it tied to
+        # the actual table selection instead of being a sticky global default.
+        _has_create_mapping = False
+        if use_layer_mapping:
+            try:
+                from config_cache import get_config as _get_create_cfg
+                deploy_cfg = _get_create_cfg()
+            except Exception:
+                deploy_cfg = _load_deploy_config()
+            ex_mapping = deploy_cfg.get("existing_setting", {}).get("medallion_layer_mapping", {})
+            _has_create_mapping = any(ex_mapping.get(l, {}).get("catalog") for l in ("landing", "bronze", "silver"))
         if _has_create_mapping:
             landing_cfg = ex_mapping.get("landing", {})
             bronze_cfg = ex_mapping.get("bronze", {})
@@ -1806,6 +1817,7 @@ def create_pipelines_bulk(
     pipeline_mode: str = "standard",
     cdc_mode: str = "watermark",
     primary_keys: list = None,
+    use_layer_mapping: bool = False,   # apply saved Layer→Catalog.Schema Mapping to just this batch
 ) -> dict:
     """Create pipeline groups for multiple tables at once.
 
@@ -1830,6 +1842,7 @@ def create_pipelines_bulk(
             pipeline_mode=pipeline_mode,
             cdc_mode=cdc_mode,
             primary_keys=t.get("primary_keys", primary_keys or []),
+            use_layer_mapping=use_layer_mapping,
         )
         results.append(r)
 

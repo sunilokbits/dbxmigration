@@ -190,18 +190,24 @@ jobs:
           set -e
           # Every secret key migration_utility/secrets_helper.py actually
           # reads (see _SOURCE_PASSWORD_SECRET_KEYS + get_databricks_token/
-          # get_devops_token). databricks-token is refreshed to the deploy's
-          # own credential every run (safe -- it's the deploy identity, not
-          # client-owned data). Every other key is created with a REPLACE_ME
-          # placeholder only if missing (the API rejects a truly empty
-          # value on create), never overwriting a value a client already
-          # set via the app's Settings page.
+          # get_devops_token). databricks-token is ALSO scaffolded only if
+          # missing now, same as every other key -- it used to be force-
+          # refreshed to the deploy identity's PAT on every run, which
+          # silently clobbered a token a client had set via the app's
+          # Settings > Secret Vault (e.g. one entitled to call a serving
+          # endpoint), causing 403s on AI conversion after every redeploy.
+          # Never overwriting a value a client already set via the app's
+          # Settings page.
           EXISTING=$(databricks secrets list-secrets migration-studio -o json 2>/dev/null | python3 -c "import json,sys; print(' '.join(s['key'] for s in json.load(sys.stdin)))" 2>/dev/null || echo "")
-          databricks secrets put-secret migration-studio databricks-token --string-value "$DATABRICKS_TOKEN"
-          for key in devops-pat source-sql-password source-azuresql-password source-snowflake-password source-bigquery-password source-redshift-password source-synapse-password source-sharepoint-password source-api-password; do
+          for key in databricks-token devops-pat source-sql-password source-azuresql-password source-snowflake-password source-bigquery-password source-redshift-password source-synapse-password source-sharepoint-password source-api-password; do
             if ! echo " $EXISTING " | grep -q " $key "; then
-              echo "Scaffolding empty secret: $key"
-              databricks secrets put-secret migration-studio "$key" --string-value "REPLACE_ME"
+              if [ "$key" = "databricks-token" ]; then
+                echo "Seeding databricks-token with deploy identity's PAT (first deploy only)"
+                databricks secrets put-secret migration-studio "$key" --string-value "$DATABRICKS_TOKEN"
+              else
+                echo "Scaffolding empty secret: $key"
+                databricks secrets put-secret migration-studio "$key" --string-value "REPLACE_ME"
+              fi
             fi
           done
       - name: Ensure Genie Space exists
@@ -238,11 +244,19 @@ jobs:
         run: |
           set -e
           databricks secrets create-scope migration-studio 2>/dev/null || true
+          # databricks-token is seeded only if missing, same as every other
+          # key -- never overwrite a token a client already set via the
+          # app's Settings > Secret Vault (see the "dev" job's Scaffold step
+          # for why: force-refreshing it on every deploy broke serving-
+          # endpoint calls made with a client-entitled token).
           EXISTING=$(databricks secrets list-secrets migration-studio -o json 2>/dev/null | python3 -c "import json,sys; print(' '.join(s['key'] for s in json.load(sys.stdin)))" 2>/dev/null || echo "")
-          databricks secrets put-secret migration-studio databricks-token --string-value "$DATABRICKS_TOKEN"
-          for key in devops-pat flask-secret-key source-sql-password source-azuresql-password source-snowflake-password source-bigquery-password source-redshift-password source-synapse-password source-sharepoint-password source-api-password; do
+          for key in databricks-token devops-pat flask-secret-key source-sql-password source-azuresql-password source-snowflake-password source-bigquery-password source-redshift-password source-synapse-password source-sharepoint-password source-api-password; do
             if ! echo " $EXISTING " | grep -q " $key "; then
-              databricks secrets put-secret migration-studio "$key" --string-value "REPLACE_ME"
+              if [ "$key" = "databricks-token" ]; then
+                databricks secrets put-secret migration-studio "$key" --string-value "$DATABRICKS_TOKEN"
+              else
+                databricks secrets put-secret migration-studio "$key" --string-value "REPLACE_ME"
+              fi
             fi
           done
       - name: Ensure Genie Space exists

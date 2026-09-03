@@ -2441,6 +2441,10 @@
                 <select class="inp" id="wfQDefaultTarget" style="font-size:10px;max-width:120px;padding:3px 6px;color:#7c3aed;font-weight:600;" onchange="wfQApplyDefaultTarget(this.value)">
                   <option value="">— schema —</option>
                 </select>
+                <span style="width:1px;height:18px;background:var(--border);"></span>
+                <label class="lbl" style="margin:0;white-space:nowrap;font-size:10px;display:flex;align-items:center;gap:4px;cursor:pointer;" title="Route these selected tables through the Layer → Catalog.Schema Mapping saved above. Applies only to the pipeline(s) created now, not to any other tables/jobs.">
+                  <input type="checkbox" id="wfQUseLayerMapping" style="margin:0;">Use Layer Mapping
+                </label>
 
                 <input class="inp" id="wfQSelectedSearch" placeholder="🔍 Filter…" style="font-size:10px;padding:4px 8px;flex:1;max-width:130px;" oninput="wfFilterSelectedTables(this.value)">
               </div>

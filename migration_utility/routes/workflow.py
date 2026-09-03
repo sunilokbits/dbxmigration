@@ -467,7 +467,7 @@ def wf_create_pipeline():
         load_type=d.get("load_type", "full"), watermark_column=d.get("watermark_column", ""),
         source_config=d.get("source_config"), target_config=d.get("target_config"),
         pipeline_mode=d.get("pipeline_mode", "standard"), cdc_mode=d.get("cdc_mode", "watermark"),
-        primary_keys=d.get("primary_keys", []),
+        primary_keys=d.get("primary_keys", []), use_layer_mapping=bool(d.get("use_layer_mapping", False)),
     )
     if result.get("success"):
         log_action("pipeline_created", "pipeline", d.get("table_name", ""),
@@ -483,6 +483,7 @@ def wf_create_pipelines_bulk():
         tables=d.get("tables", []), source_config=d.get("source_config"),
         target_config=d.get("target_config"), pipeline_mode=d.get("pipeline_mode", "standard"),
         cdc_mode=d.get("cdc_mode", "watermark"), primary_keys=d.get("primary_keys", []),
+        use_layer_mapping=bool(d.get("use_layer_mapping", False)),
     )
     if result.get("success"):
         log_action("pipelines_bulk_created", "pipeline", "",
@@ -880,73 +881,78 @@ def wf_recon_data():
 @workflow_bp.route("/workflow/update-layer-mapping", methods=["POST"])
 @login_required
 def update_layer_mapping():
-    """Update target_config for ALL pipelines with new layer mapping from UI."""
+    """Re-point specific existing pipelines' target_config at a new layer mapping.
+
+    Scoped to an explicit ``table_names`` list — this used to run an
+    unconditional UPDATE across every row of wf_job_metadata (every pipeline
+    for every table ever created), so saving the mapping once silently
+    rewrote the target catalog/schema for jobs the user never selected.
+    """
     import json
     try:
         body = request.get_json(force=True)
         layer_mapping = body.get("layer_mapping", {})
+        table_names = [t for t in (body.get("table_names") or []) if t]
         if not layer_mapping:
             return jsonify({"success": False, "error": "layer_mapping required"})
-        
+        if not table_names:
+            return jsonify({"success": False, "error": "table_names required — select the tables to re-map"}), 400
+
         # Build the new catalog/schema values from layer mapping
         landing = layer_mapping.get("landing", {})
         bronze = layer_mapping.get("bronze", {})
         silver = layer_mapping.get("silver", {})
-        recon = layer_mapping.get("reconciliation", {})
-        logging_layer = layer_mapping.get("loggingdetails", {})
-        
+
         new_volumes_catalog = landing.get("catalog", "")
         new_bronze_catalog = bronze.get("catalog", "")
         new_silver_catalog = silver.get("catalog", "")
         new_target_schema = landing.get("schema", "") or bronze.get("schema", "")
-        
+
         if not new_bronze_catalog or not new_silver_catalog:
             return jsonify({"success": False, "error": "Bronze and Silver catalogs are required"})
-        
+
         cfg = get_config()
         meta_cat = cfg.get("metadata_catalog", "admin_source")
         meta_sch = cfg.get("metadata_schema", "configtables")
-        
-        from dbsql_client import get_connection
-        conn = get_connection()
-        cursor = conn.cursor()
-        
-        # Get all pipelines
-        cursor.execute(f"SELECT table_name, target_config FROM `{meta_cat}`.`{meta_sch}`.wf_job_metadata")
-        rows = cursor.fetchall()
-        
+        fqn = f"`{meta_cat}`.`{meta_sch}`.wf_job_metadata"
+
+        from dbsql_client import execute_query, execute_write
+
+        placeholders = ", ".join(f"%(t{i})s" for i in range(len(table_names)))
+        params = {f"t{i}": name for i, name in enumerate(table_names)}
+        rows = execute_query(
+            f"SELECT table_name, target_config FROM {fqn} WHERE table_name IN ({placeholders})",
+            params,
+        )
+
         updated = 0
         for row in rows:
-            table_name = row[0]
-            tc_str = row[1] or "{}"
+            table_name = row["table_name"]
             try:
-                tc = json.loads(tc_str)
-            except:
+                tc = json.loads(row.get("target_config") or "{}")
+            except (json.JSONDecodeError, TypeError):
                 tc = {}
-            
-            # Update catalog mappings
+
             tc["volumes_catalog"] = new_volumes_catalog
             tc["bronze_catalog"] = new_bronze_catalog
             tc["silver_catalog"] = new_silver_catalog
             if new_target_schema:
                 tc["target_schema"] = new_target_schema
-            
-            # Update in DB
-            new_tc_str = json.dumps(tc).replace("'", "''")
-            cursor.execute(f"""
-                UPDATE `{meta_cat}`.`{meta_sch}`.wf_job_metadata
-                SET target_config = '{new_tc_str}'
-                WHERE table_name = '{table_name}'
-            """)
+
+            execute_write(
+                f"UPDATE {fqn} SET target_config = %(tc)s WHERE table_name = %(tn)s",
+                {"tc": json.dumps(tc), "tn": table_name},
+            )
             updated += 1
-        
-        cursor.close()
-        conn.close()
-        
-        # Also refresh in-memory PIPELINE_GROUPS so next Run uses correct values
+
+        # Also refresh in-memory PIPELINE_GROUPS (selected tables only) so next Run uses correct values
         try:
             from workflow_manager import PIPELINE_GROUPS
+            selected = set(table_names)
+            refreshed = 0
             for gid, grp in PIPELINE_GROUPS.items():
+                if grp.get("table_name") not in selected:
+                    continue
                 tc = grp.get("target_config") or {}
                 tc["volumes_catalog"] = new_volumes_catalog
                 tc["bronze_catalog"] = new_bronze_catalog
@@ -954,13 +960,14 @@ def update_layer_mapping():
                 if new_target_schema:
                     tc["target_schema"] = new_target_schema
                 grp["target_config"] = tc
-            logger.info("Refreshed PIPELINE_GROUPS in-memory (%d groups)", len(PIPELINE_GROUPS))
+                refreshed += 1
+            logger.info("Refreshed PIPELINE_GROUPS in-memory (%d of %d selected)", refreshed, len(table_names))
         except Exception as _mem_err:
             logger.warning("Could not refresh PIPELINE_GROUPS in-memory: %s", _mem_err)
-        
-        logger.info("Updated layer mapping for %d pipelines: volumes=%s bronze=%s silver=%s schema=%s",
-                   updated, new_volumes_catalog, new_bronze_catalog, new_silver_catalog, new_target_schema)
-        
+
+        logger.info("Updated layer mapping for %d of %d selected table(s): volumes=%s bronze=%s silver=%s schema=%s",
+                   updated, len(table_names), new_volumes_catalog, new_bronze_catalog, new_silver_catalog, new_target_schema)
+
         return jsonify({"success": True, "updated": updated,
                        "mapping": {"volumes_catalog": new_volumes_catalog, "bronze_catalog": new_bronze_catalog,
                                   "silver_catalog": new_silver_catalog, "target_schema": new_target_schema}})

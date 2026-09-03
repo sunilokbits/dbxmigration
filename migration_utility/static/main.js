@@ -129,6 +129,7 @@ function switchTab(id,btn){
     _hlSyncFromConfig();
     hlFetchRecentRuns();
   }
+  if(id==='convert') _populateAiModelSelect();
   if(id==='uc' && typeof ucInit==='function') ucInit();
   if(id==='aiworkflow'){
     switchTab('wf-dashboard',G('nav-wf-dashboard'));return;
@@ -159,6 +160,30 @@ function switchTab(id,btn){
     G('wfLbl').textContent='Step '+m.step+' of 5 \u2014 '+WF_LBL[m.step-1];
   }
 }
+
+/* Populate the AI model dropdown from the workspace's actual READY serving
+   endpoints (same source as Genie's model picker) instead of a static list,
+   so every option the user can pick is actually invokable — avoids 403s from
+   selecting a model that isn't enabled/entitled in this workspace. Falls
+   back silently to the static HTML options (already present) on failure. */
+let _aiModelsLoaded=false;
+async function _populateAiModelSelect(){
+  if(_aiModelsLoaded) return;
+  const sel=G('aiModelSelect');
+  if(!sel) return;
+  try{
+    const r=await fetch('/api/v1/genie/fm/endpoints');
+    const d=await r.json();
+    const eps=(d.endpoints||[]).filter(e=>e.state==='Ready');
+    if(eps.length){
+      const prev=sel.value;
+      sel.innerHTML=eps.map(e=>`<option value="${e.name}">${e.display_name}</option>`).join('');
+      if(eps.some(e=>e.name===prev)) sel.value=prev;
+      _aiModelsLoaded=true;
+    }
+  }catch(e){/* keep the static fallback options already in the HTML */}
+}
+(function(){ if(document.getElementById('pane-convert')) _populateAiModelSelect(); })();
 
 async function loadObjects(){
   try{
@@ -2389,7 +2414,7 @@ async function wfQuickCreate(){
       return obj;
     });
     const r=await fetch('/api/v1/workflow/create-pipelines-bulk',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({tables:tables,source_config:_wfSourceConfig(),target_config:_wfTargetConfig(),pipeline_mode:(G('wfNbPipelineMode')||{}).value||'standard',cdc_mode:(G('cfgCdcMode')||{}).value||'watermark',primary_keys:(G('cfgPrimaryKeys')||{}).value?G('cfgPrimaryKeys').value.split(',').map(s=>s.trim()).filter(Boolean):[]})});
+      body:JSON.stringify({tables:tables,source_config:_wfSourceConfig(),target_config:_wfTargetConfig(),pipeline_mode:(G('wfNbPipelineMode')||{}).value||'standard',cdc_mode:(G('cfgCdcMode')||{}).value||'watermark',primary_keys:(G('cfgPrimaryKeys')||{}).value?G('cfgPrimaryKeys').value.split(',').map(s=>s.trim()).filter(Boolean):[],use_layer_mapping:!!(G('wfQUseLayerMapping')&&G('wfQUseLayerMapping').checked)})});
     const d=await r.json();
     if(!d.success)throw new Error(d.error||'Failed');
     const archCount=(d.groups||[]).reduce((s,g)=>(s+(g.archived_jobs||[]).length),0);
@@ -3657,20 +3682,14 @@ async function wfLayerSaveMapping(){
     const sd=await sr.json();
     if(sd.success){
       _cachedDeployConfig=cfg;
-      // Also update ALL existing pipeline metadata with new catalog mappings
-      if(statusEl) statusEl.innerHTML='<span style="color:#059669;">✓ Config saved. Updating pipelines...</span>';
-      try{
-        const ur=await fetch('/api/v1/workflow/update-layer-mapping',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({layer_mapping:mapping})});
-        const ud=await ur.json();
-        if(ud.success){
-          if(statusEl) statusEl.innerHTML='<span style="color:#059669;">✓ Mapping saved & '+ud.updated+' pipeline(s) updated</span>';
-        } else {
-          if(statusEl) statusEl.innerHTML='<span style="color:#d97706;">✓ Config saved, but pipeline update failed: '+(ud.error||'')+'</span>';
-        }
-      }catch(ue){
-        if(statusEl) statusEl.innerHTML='<span style="color:#d97706;">✓ Config saved, pipeline update error</span>';
-      }
+      // NOTE: this used to also blast an UPDATE across every row of
+      // wf_job_metadata (ALL pipelines, for every table ever created),
+      // regardless of what's selected in Quick Create — one Save Mapping
+      // click would silently repoint every existing job's target catalog.
+      // Saving here now only persists the mapping for future use: check
+      // "Use Layer Mapping" in Quick Create Pipeline to apply it to the
+      // tables you've actually selected there.
+      if(statusEl) statusEl.innerHTML='<span style="color:#059669;">✓ Mapping saved — check "Use Layer Mapping" in Quick Create to apply it to selected tables</span>';
     } else {
       if(statusEl) statusEl.innerHTML='<span style="color:#dc2626;">⚠️ '+(sd.error||'Save failed')+'</span>';
     }
