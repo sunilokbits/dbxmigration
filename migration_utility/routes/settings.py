@@ -586,3 +586,101 @@ def update_secret():
     if not ok:
         return jsonify({"success": False, "error": f"Failed to store secret '{key}'"}), 500
     return jsonify({"success": True, "message": f"'{key}' updated"})
+
+
+@settings_bp.route("/settings/clean-metadata", methods=["POST"])
+@login_required
+@_admin_required
+def clean_metadata():
+    """Reset this app's own workflow-tracking state — NOT your real data.
+
+    Scoped narrowly to the wf_* tables workflow_manager.py owns (pipeline/
+    job/run/watermark/source/scheduler tracking) plus their orphaned DLT
+    pipelines and landing-zone files. Deliberately does NOT touch bronze/
+    silver Delta tables or drop any catalog/schema — those hold real
+    migrated data, and dropping them is a much larger, separate action
+    than clearing out stale test pipelines/jobs cluttering Reports,
+    Progress Tracker, Job Manager and Pipeline Studio.
+    """
+    from audit import log_action
+    import workflow_manager as wfm
+
+    data = request.get_json(force=True) or {}
+    clean_tables = bool(data.get("clean_tables", True))
+    clean_adls = bool(data.get("clean_adls", True))
+    if not clean_tables and not clean_adls:
+        return jsonify({"success": False, "error": "Select at least one option"}), 400
+
+    log = []
+    landing_dirs = set()
+
+    if clean_adls:
+        # Collect landing-zone volume paths from target_config BEFORE the
+        # metadata rows describing them are cleared below.
+        try:
+            rows = wfm._exec_sql(
+                f"SELECT DISTINCT target_config FROM {wfm._fqn(wfm.TBL_JOBS)} WHERE target_config IS NOT NULL"
+            )
+            data_array = rows.get("result", {}).get("data_array", [])
+            for row in data_array:
+                try:
+                    tc = json.loads(row[0] or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                vol_cat, tgt_sch = tc.get("volumes_catalog"), tc.get("target_schema")
+                if vol_cat and tgt_sch:
+                    landing_dirs.add(f"/Volumes/{vol_cat}/{tgt_sch}/landing")
+        except Exception as exc:
+            log.append(f"Could not enumerate landing paths (non-blocking): {exc}")
+
+    if clean_tables:
+        for tbl in (wfm.TBL_PIPELINES, wfm.TBL_JOBS, wfm.TBL_JOBS_HISTORY, wfm.TBL_RUNS,
+                    wfm.TBL_WATERMARKS, wfm.TBL_SOURCES, wfm.TBL_SCH_CONFIG, wfm.TBL_SCH_HISTORY):
+            try:
+                wfm._exec_sql(f"DELETE FROM {wfm._fqn(tbl)}")
+                log.append(f"Cleared {tbl}")
+            except Exception as exc:
+                log.append(f"Could not clear {tbl}: {exc}")
+
+        try:
+            group_ids = list(wfm.PIPELINE_GROUPS.keys())
+            wfm._delete_dlt_pipelines_for_groups(group_ids)
+            if group_ids:
+                log.append(f"Deleted DLT pipeline(s) for {len(group_ids)} cleared group(s)")
+        except Exception as exc:
+            log.append(f"Could not delete DLT pipelines (non-blocking): {exc}")
+
+        with wfm._lock:
+            wfm.PIPELINE_GROUPS.clear()
+            wfm.JOB_REGISTRY.clear()
+            wfm.JOB_RUNS.clear()
+            wfm.WATERMARKS.clear()
+        log.append("Cleared in-memory job/pipeline registries")
+
+    if clean_adls and landing_dirs:
+        try:
+            from databricks.sdk import WorkspaceClient
+            w = WorkspaceClient()
+
+            def _rm_recursive(path):
+                for entry in list(w.files.list_directory_contents(path)):
+                    if entry.is_directory:
+                        _rm_recursive(entry.path)
+                    else:
+                        w.files.delete(entry.path)
+                w.files.delete_directory(path)
+
+            for d in sorted(landing_dirs):
+                try:
+                    _rm_recursive(d)
+                    log.append(f"Deleted landing files under {d}")
+                except Exception as exc:
+                    log.append(f"Could not delete {d} (non-blocking): {exc}")
+        except Exception as exc:
+            log.append(f"ADLS cleanup skipped — could not reach Databricks: {exc}")
+    elif clean_adls:
+        log.append("No landing paths found to clean")
+
+    log_action("clean_metadata", resource_type="workflow_metadata", resource_id="",
+               details={"clean_tables": clean_tables, "clean_adls": clean_adls})
+    return jsonify({"success": True, "log": log, "summary": f"{len(log)} step(s) completed"})
