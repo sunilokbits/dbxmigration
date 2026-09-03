@@ -63,9 +63,12 @@ def ai_convert(name: str, object_type: str, sql_code: str, model: str = "databri
 
     # Call serving endpoint
     try:
-        from config_cache import get_config, get_databricks_token
+        from config_cache import get_config, get_serving_endpoint_token
         host = (get_config().get("databricks_host") or "").strip().rstrip("/")
-        token = get_databricks_token()
+        # Serving endpoints declared as app.yml resources get CAN_QUERY
+        # granted to the app's own service principal, not to whatever PAT
+        # happens to be stored in secrets — use that SP token here.
+        token = get_serving_endpoint_token()
         payload = {
             "messages": [
                 {"role": "system", "content": _SYSTEM_PROMPT},

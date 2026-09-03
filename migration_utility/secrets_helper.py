@@ -169,6 +169,37 @@ def get_databricks_token() -> str:
     return ""
 
 
+def get_serving_endpoint_token() -> str:
+    """Return a token for calling Databricks serving endpoints (Foundation Model APIs).
+
+    Prefers the app's own service-principal OAuth token over the stored PAT
+    — the opposite priority from get_databricks_token(). Databricks Apps
+    auto-grants CAN_QUERY to the app's own SP for every ``serving_endpoint``
+    resource declared in app.yml, so that SP token is what's actually
+    entitled to call those endpoints. A manually-pasted PAT's owner may have
+    no grant on them at all, which is what caused 403s here even after the
+    resources were declared. Falls back to the stored PAT for local/dev runs
+    outside Databricks Apps (no SP OAuth available).
+    """
+    ws = _get_ws_client()
+    if ws is not None and os.environ.get("DATABRICKS_CLIENT_ID"):
+        try:
+            cfg = ws.config
+            header_factory = cfg.authenticate()
+            if callable(header_factory):
+                headers = header_factory(None)
+            elif isinstance(header_factory, dict):
+                headers = header_factory
+            else:
+                headers = {}
+            auth_header = headers.get("Authorization", "")
+            if auth_header.startswith("Bearer "):
+                return auth_header[7:]
+        except Exception as exc:
+            logger.warning("SP OAuth token for serving endpoint failed: %s", exc)
+    return get_databricks_token()
+
+
 def get_devops_token() -> str:
     return get_secret("devops-pat")
 

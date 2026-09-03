@@ -170,6 +170,11 @@ def get_databricks_token() -> str:
     return "" if is_masked(val) else val
 
 
+def get_serving_endpoint_token() -> str:
+    from secrets_helper import get_serving_endpoint_token as _st
+    return _st()
+
+
 def get_devops_token() -> str:
     from secrets_helper import get_devops_token as _dvt, is_masked
     tok = _dvt()

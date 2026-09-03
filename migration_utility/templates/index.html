@@ -379,10 +379,11 @@
             <!-- AI SQL to PySpark -->
             <div style="margin-top:8px;border-top:1px solid var(--border);padding-top:10px;">
               <select id="aiModelSelect" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg2);color:var(--t1);font-size:11px;margin-bottom:6px;">
+                <option value="databricks-claude-opus-4-6">Claude Opus 4.6</option>
                 <option value="databricks-claude-opus-4-7">Claude Opus 4.7</option>
                 <option value="databricks-claude-opus-4-8">Claude Opus 4.8</option>
+                <option value="databricks-claude-opus-5">Claude Opus 5</option>
                 <option value="databricks-claude-sonnet-5">Claude Sonnet 5</option>
-                <option value="databricks-claude-sonnet-4-6">Claude Sonnet 4.6</option>
                 <option value="databricks-claude-haiku-4-5">Claude Haiku 4.5</option>
               </select>
               <button type="button" class="btn btn-full" id="btnAiConvert" onclick="aiConvertSelected()" style="border-radius:10px;padding:11px 16px;font-size:13px;background:linear-gradient(135deg,#7C3AED,#6366F1);color:#fff;border:none;cursor:pointer;font-weight:600;">

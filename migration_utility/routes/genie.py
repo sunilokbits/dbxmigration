@@ -389,6 +389,21 @@ def _get_token():
         return os.environ.get("DATABRICKS_TOKEN", "")
 
 
+def _serving_headers():
+    """Auth headers for calling a serving-endpoint's /invocations.
+
+    Prefers the app's own service-principal OAuth token — Databricks Apps
+    grants CAN_QUERY to that SP for every serving_endpoint resource declared
+    in app.yml, whereas the PAT _headers() uses may have no grant on the
+    endpoint at all (the cause of 403s on Foundation Model calls).
+    """
+    from secrets_helper import get_serving_endpoint_token
+    token = get_serving_endpoint_token()
+    if not token:
+        raise ValueError("No Databricks token available")
+    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+
 def _headers():
     token = _get_token()
     if not token:
@@ -945,13 +960,12 @@ def delete_mcp_endpoint(ep_id):
 
 
 _DEFAULT_FM_ENDPOINTS = [
+    {"name": "databricks-claude-opus-4-6", "display_name": "Claude Opus 4.6", "type": "pay-per-token", "state": "Ready"},
     {"name": "databricks-claude-opus-4-7", "display_name": "Claude Opus 4.7", "type": "pay-per-token", "state": "Ready"},
     {"name": "databricks-claude-opus-4-8", "display_name": "Claude Opus 4.8", "type": "pay-per-token", "state": "Ready"},
+    {"name": "databricks-claude-opus-5", "display_name": "Claude Opus 5", "type": "pay-per-token", "state": "Ready"},
     {"name": "databricks-claude-sonnet-5", "display_name": "Claude Sonnet 5", "type": "pay-per-token", "state": "Ready"},
-    {"name": "databricks-claude-sonnet-4-6", "display_name": "Claude Sonnet 4.6", "type": "pay-per-token", "state": "Ready"},
-    {"name": "databricks-claude-sonnet-4-5", "display_name": "Claude Sonnet 4.5", "type": "pay-per-token", "state": "Ready"},
     {"name": "databricks-claude-haiku-4-5", "display_name": "Claude Haiku 4.5", "type": "pay-per-token", "state": "Ready"},
-    {"name": "databricks-gpt-oss-120b", "display_name": "GPT OSS 120B", "type": "pay-per-token", "state": "Ready"},
 ]
 
 
@@ -998,7 +1012,7 @@ def fm_chat():
     chat_messages.append({"role": "user", "content": content})
     try:
         payload = {"messages": chat_messages, "max_tokens": 2048, "temperature": 0.1}
-        r = requests.post(f"{_HOST}/serving-endpoints/{endpoint_name}/invocations", json=payload, headers=_headers(), timeout=60)
+        r = requests.post(f"{_HOST}/serving-endpoints/{endpoint_name}/invocations", json=payload, headers=_serving_headers(), timeout=60)
         if r.status_code != 200:
             return jsonify({"error": f"Endpoint returned {r.status_code}: {r.text[:300]}"}), r.status_code
         resp = r.json()

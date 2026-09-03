@@ -8,15 +8,33 @@ command:
   - app:app
 
 resources:
-  - name: fm-endpoint
+  # Each entry auto-grants CAN_QUERY on that serving endpoint to the app's
+  # own service principal at deploy time — this is what the app code
+  # actually uses to call these endpoints now (see
+  # secrets_helper.get_serving_endpoint_token), so every model offered in
+  # the Convert-to-PySpark / Genie model pickers must be listed here or its
+  # calls 403 regardless of what PAT is stored in secrets.
+  - name: fm-endpoint-opus-4-6
+    serving_endpoint:
+      name: "databricks-claude-opus-4-6"
+      permission: CAN_QUERY
+  - name: fm-endpoint-opus-4-7
+    serving_endpoint:
+      name: "databricks-claude-opus-4-7"
+      permission: CAN_QUERY
+  - name: fm-endpoint-opus-4-8
     serving_endpoint:
       name: "databricks-claude-opus-4-8"
       permission: CAN_QUERY
-  - name: fm-endpoint-sonnet
+  - name: fm-endpoint-opus-5
+    serving_endpoint:
+      name: "databricks-claude-opus-5"
+      permission: CAN_QUERY
+  - name: fm-endpoint-sonnet-5
     serving_endpoint:
       name: "databricks-claude-sonnet-5"
       permission: CAN_QUERY
-  - name: fm-endpoint-haiku
+  - name: fm-endpoint-haiku-4-5
     serving_endpoint:
       name: "databricks-claude-haiku-4-5"
       permission: CAN_QUERY
