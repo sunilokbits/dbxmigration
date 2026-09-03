@@ -68,14 +68,21 @@ def reload_config() -> dict:
 
         # Layer 3: Always fall back to deployconfig.json for fields not yet in Delta.
         # This covers: empty table on first run, migration from file-based config,
-        # and partial Delta records. Legacy values are only used where Delta has no entry.
-        if not cfg.get("source") or not cfg.get("subscription_id"):
-            legacy = _load_legacy_config()
-            if legacy:
-                merged = dict(legacy)   # start with legacy as base
-                merged.update(cfg)      # Delta / env values win on conflict
-                cfg = merged
-                logger.info("Config hydrated from deployconfig.json (%d keys)", len(legacy))
+        # and partial Delta records. Legacy values are only used where Delta has no
+        # entry -- the merge below already guarantees that (legacy as base, Delta/env
+        # overlaid on top wins on conflict). This used to only run when "source" or
+        # "subscription_id" were ALSO missing from Delta, as a proxy for "this is a
+        # fresh/incomplete config" -- but that meant any OTHER single key that only
+        # ever made it to the local-file fallback (e.g. save_config() failing to
+        # reach the SQL Warehouse for just that save) was silently discarded on the
+        # next reload once the rest of the config was already populated in Delta,
+        # instead of surviving until the next successful durable save.
+        legacy = _load_legacy_config()
+        if legacy:
+            merged = dict(legacy)   # start with legacy as base
+            merged.update(cfg)      # Delta / env values win on conflict
+            cfg = merged
+            logger.info("Config hydrated from deployconfig.json (%d keys)", len(legacy))
 
         _cache = cfg
         _cache_ts = time.time()

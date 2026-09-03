@@ -4464,13 +4464,18 @@ async function saveDeployConfig(){
     const d=await r.json();
     if(!d.success) throw new Error(d.error||'Save failed');
     if(d.durable===false){
-      toast(d.warning||'Saved locally only — this will be lost on the next deploy. Retry once the Databricks SQL Warehouse is reachable.','twarn',8000);
+      const warnMsg=d.warning||'Saved locally only — this will be lost on the next deploy. Retry once the Databricks SQL Warehouse is reachable.';
+      toast(warnMsg,'twarn',8000);
+      // A transient toast is easy to miss for something this important —
+      // this save is NOT durable, so block until the user acknowledges it
+      // instead of letting them assume "Configuration saved" like normal.
+      alert(warnMsg);
     } else {
       toast('Configuration saved','tok');
+      const banner=G('cfgSavedBanner'); banner.style.display='block';
+      setTimeout(()=>{banner.style.display='none';},4000);
     }
     _cachedDeployConfig=cfg; // update cache
-    const banner=G('cfgSavedBanner'); banner.style.display='block';
-    setTimeout(()=>{banner.style.display='none';},4000);
     _cfgShowPreview();
     // Auto-populate all pages from saved config
     _populateConfig(cfg);
