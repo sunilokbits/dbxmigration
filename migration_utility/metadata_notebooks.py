@@ -339,7 +339,7 @@ except Exception as e:
         """)
     except Exception:
         pass
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "stage": "connection", "error": str(e)[:500]}}))
+    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "stage": "connection", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 # COMMAND ----------
 
@@ -454,7 +454,7 @@ except Exception as e:
         """)
     except Exception:
         pass
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "stage": "extract", "error": str(e)[:500]}}))
+    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "stage": "extract", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 # COMMAND ----------
 
@@ -676,7 +676,7 @@ except Exception as e:
         """)
     except Exception:
         pass
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": str(e)[:500]}}))
+    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 # COMMAND ----------
 
@@ -867,7 +867,7 @@ except Exception as e:
         """)
     except Exception:
         pass
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": str(e)[:500]}}))
+    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 # COMMAND ----------
 
@@ -1050,7 +1050,7 @@ except Exception as e:
         """)
     except Exception:
         pass
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": str(e)[:500]}}))
+    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 # COMMAND ----------
 
@@ -1235,7 +1235,7 @@ except Exception as e:
         """)
     except Exception:
         pass
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": str(e)[:500]}}))
+    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 # COMMAND ----------
 
@@ -1843,7 +1843,7 @@ try:
         print(f"   • {{cn}} ({{ct}})")
 except Exception as e:
     print(f"❌ Failed to read column metadata: {{e}}")
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": str(e)[:500]}}))
+    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 if not numeric_cols:
     print("⚠️ No numeric columns found — reconciliation skipped")
@@ -1872,7 +1872,7 @@ try:
     print(f"📊 Source row count: {{src_count:,}}")
 except Exception as e:
     print(f"❌ Failed to compute source aggregates: {{e}}")
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": str(e)[:500]}}))
+    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 # COMMAND ----------
 
@@ -1895,7 +1895,7 @@ try:
     brz_row = brz_agg_df.collect()[0]
 except Exception as e:
     print(f"❌ Failed to compute Bronze aggregates: {{e}}")
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": str(e)[:500]}}))
+    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 # COMMAND ----------
 
@@ -2695,7 +2695,7 @@ def _run_extract(idx, job):
         else:
             return idx, {{"job": job["job_name"], "status": "OK", "rows": rows, "run_id": run_id}}
     except Exception as e:
-        return idx, {{"job": job["job_name"], "status": "FAILED", "error": str(e)[:500], "run_id": run_id}}
+        return idx, {{"job": job["job_name"], "status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000], "run_id": run_id}}
 
 # Run all extracts in parallel (up to 4 concurrent)
 _max_workers = min(4, len(extract_jobs)) if extract_jobs else 1
