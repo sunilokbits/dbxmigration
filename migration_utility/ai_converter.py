@@ -85,7 +85,13 @@ def ai_convert(name: str, object_type: str, sql_code: str, model: str = "databri
                          "Content-Type": "application/json"},
                 json=payload, timeout=300,
             )
-            _r.raise_for_status()
+            if _r.status_code != 200:
+                # raise_for_status() drops the response body, which is where
+                # Databricks actually explains a 403 (e.g. PERMISSION_DENIED
+                # vs FEATURE_DISABLED) — surface it instead of a bare "403
+                # Forbidden" so the real cause (usually a workspace/endpoint
+                # entitlement, not the app) is visible.
+                raise RuntimeError(f"{_r.status_code} {_r.reason} for {model}: {_r.text[:500]}")
             resp = _r.json()
         else:
             w = WorkspaceClient()
