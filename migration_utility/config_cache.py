@@ -8,6 +8,7 @@ unchanged so all 15+ importing modules continue to work.
 import json
 import os
 import threading
+import time
 from flask import g
 from log_config import get_logger
 
@@ -15,6 +16,14 @@ logger = get_logger(__name__)
 
 _lock = threading.Lock()
 _cache: dict | None = None
+_cache_ts: float = 0.0
+# app.yml runs gunicorn with multiple workers, each its own process with its
+# own copy of this module-level cache. Saving a config change in the worker
+# that handles the POST never invalidates the cache in any OTHER worker, so
+# a page refresh landing on a different worker could show a stale value
+# (e.g. an old metadata_catalog) indefinitely with no TTL. This bounds that
+# cross-worker staleness window instead of caching "forever" per process.
+_CACHE_TTL = 30  # seconds
 
 
 def _fqn() -> str:
@@ -24,16 +33,17 @@ def _fqn() -> str:
 
 
 def get_config() -> dict:
-    """Return the cached config dict (or load from Delta on first call)."""
+    """Return the cached config dict (or load from Delta on first call, or
+    once the cache has gone stale)."""
     global _cache
-    if _cache is not None:
+    if _cache is not None and (time.time() - _cache_ts) < _CACHE_TTL:
         return _cache
     return reload_config()
 
 
 def reload_config() -> dict:
     """Force re-read from Delta table and update the cache."""
-    global _cache
+    global _cache, _cache_ts
     with _lock:
         cfg: dict = {}
 
@@ -68,6 +78,7 @@ def reload_config() -> dict:
                 logger.info("Config hydrated from deployconfig.json (%d keys)", len(legacy))
 
         _cache = cfg
+        _cache_ts = time.time()
     return _cache
 
 
@@ -96,7 +107,7 @@ def save_config(cfg: dict) -> dict:
     of reporting a plain success, since the setting will otherwise appear
     to vanish and have to be re-entered.
     """
-    global _cache
+    global _cache, _cache_ts
     with _lock:
         user = "system"
         try:
@@ -150,6 +161,7 @@ def save_config(cfg: dict) -> dict:
             _save_legacy_config(cfg)
 
         _cache = cfg
+        _cache_ts = time.time()
         return {"durable": durable, "error": str(last_exc) if last_exc else None}
 
 
