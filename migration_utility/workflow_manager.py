@@ -1987,7 +1987,35 @@ def create_pipelines_bulk(
 #  LIST ALL JOBS
 # ─────────────────────────────────────────────────────────────────────────────
 def list_jobs(group_id: str = None, stage: str = None, status: str = None) -> dict:
-    """List jobs with optional filters."""
+    """List jobs with optional filters.
+
+    Queries live from Delta, same reasoning as get_dashboard_stats(): the
+    in-memory JOB_REGISTRY is only ever populated once at process start
+    and never invalidated, so Job Manager kept showing whatever jobs
+    existed at that point (in whichever catalog was configured then)
+    regardless of the Metadata Catalog changing since. Falls back to that
+    in-memory snapshot only when metadata isn't initialized at all;
+    otherwise a real query failure (e.g. a USE CATALOG permission error)
+    is returned as an error instead of being masked by stale data.
+    """
+    if _metadata_initialized:
+        try:
+            where = []
+            if group_id:
+                where.append(f"group_id = {_esc(group_id)}")
+            if stage:
+                where.append(f"stage = {_esc(stage)}")
+            if status:
+                where.append(f"status = {_esc(status)}")
+            where_sql = f" WHERE {' AND '.join(where)}" if where else ""
+            jobs = _rows_from_exec(_exec_sql(f"SELECT * FROM {_fqn(TBL_JOBS)}{where_sql} ORDER BY job_order"))
+            for j in jobs:
+                j["enabled"] = str(j.get("enabled", "true")).lower() in ("true", "1", "yes")
+            return {"success": True, "jobs": jobs, "total": len(jobs)}
+        except Exception as exc:
+            logger.warning("Live list_jobs query failed: %s", exc)
+            return {"success": False, "error": str(exc), "jobs": [], "total": 0}
+
     jobs = list(JOB_REGISTRY.values())
     if group_id:
         jobs = [j for j in jobs if j["group_id"] == group_id]
@@ -2053,8 +2081,15 @@ def list_pipeline_groups_live() -> dict:
         r = _exec_sql(sql)
         state = r.get("status", {}).get("state", "")
         if state != "SUCCEEDED":
-            logger.warning("list_pipeline_groups_live SQL failed, falling back to memory")
-            return list_pipeline_groups()
+            # Metadata IS initialized here, so this is a real query failure
+            # (e.g. a USE CATALOG permission error on the configured
+            # Metadata Catalog) -- surface it instead of silently falling
+            # back to the in-memory PIPELINE_GROUPS snapshot, which could
+            # show stale pipelines from whatever catalog was configured
+            # when this process last hydrated and look like it "worked".
+            err = r.get("status", {}).get("error", {}).get("message") or r.get("error") or state
+            logger.warning("list_pipeline_groups_live SQL failed: %s", err)
+            return {"success": False, "error": err, "groups": [], "total": 0}
 
         cols = [c["name"] for c in r.get("manifest", {}).get("schema", {}).get("columns", [])]
         rows = r.get("result", {}).get("data_array", [])
@@ -2861,9 +2896,19 @@ def reset_watermark(table_name: str) -> dict:
 #  DASHBOARD STATS
 # ─────────────────────────────────────────────────────────────────────────────
 def _rows_from_exec(result: dict) -> list[dict]:
-    """Convert an _exec_sql() response into a list of column-name dicts."""
-    if result.get("status", {}).get("state") != "SUCCEEDED":
-        return []
+    """Convert an _exec_sql() response into a list of column-name dicts.
+
+    Raises instead of silently returning [] on a real failure (e.g. a
+    permission error on the configured Metadata Catalog) -- swallowing it
+    used to make callers fall back to the in-memory snapshot, which could
+    show stale data from a DIFFERENT catalog and look like the query
+    quietly "worked" and came back empty, instead of surfacing the actual
+    access problem the way Job Scheduler/Reconciliation already do.
+    """
+    status = result.get("status", {})
+    if status.get("state") != "SUCCEEDED":
+        err = status.get("error", {}).get("message") or result.get("error") or str(status)
+        raise RuntimeError(err)
     cols = [c["name"] for c in result.get("manifest", {}).get("schema", {}).get("columns", [])]
     return [dict(zip(cols, row)) for row in result.get("result", {}).get("data_array", [])]
 
@@ -2877,8 +2922,15 @@ def get_dashboard_stats() -> dict:
     (_auto_hydrate_from_dbr), and never refreshed afterward — so they drift
     from reality the moment the Metadata Catalog changes, tables get
     dropped/recreated outside the app, or another process does any
-    workflow action. Falls back to the in-memory snapshot if the live
-    query fails (e.g. local dev without a Databricks connection).
+    workflow action.
+
+    Only falls back to the in-memory snapshot when metadata isn't
+    initialized at all (genuine local/dev, no Databricks connection
+    configured). If metadata IS initialized and the live query fails
+    (e.g. a real USE CATALOG permission error on the configured Metadata
+    Catalog), that error is returned instead of masking it with stale
+    data from whatever catalog happened to be configured when this
+    process last hydrated.
     """
     if _metadata_initialized:
         try:
@@ -2893,7 +2945,8 @@ def get_dashboard_stats() -> dict:
             groups_count = len(_rows_from_exec(_exec_sql(f"SELECT group_id FROM {_fqn(TBL_PIPELINES)}")))
             return _compute_dashboard_stats(jobs, runs, groups_count)
         except Exception as exc:
-            logger.warning("Live dashboard stats query failed, falling back to in-memory snapshot: %s", exc)
+            logger.warning("Live dashboard stats query failed: %s", exc)
+            return {"success": False, "error": str(exc)}
 
     return _compute_dashboard_stats(
         list(JOB_REGISTRY.values()), list(JOB_RUNS.values()), len(PIPELINE_GROUPS)
