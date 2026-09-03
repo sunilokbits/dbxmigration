@@ -119,6 +119,17 @@ def save_deploy_config():
             if set_devops_token(pat):
                 data["devops_pat"] = ""
 
+        # A blank Metadata Catalog/Schema in this save means "field wasn't
+        # touched" (e.g. it was set from a different page like Pipeline
+        # Studio's Create MetadataFlow, which never populated this page's
+        # own input), not "clear it" -- an empty value here would otherwise
+        # silently overwrite whatever catalog/schema is actually configured,
+        # since save_config() merges every key it's given verbatim.
+        if not data.get("metadata_catalog") and existing.get("metadata_catalog"):
+            data["metadata_catalog"] = existing["metadata_catalog"]
+        if not data.get("metadata_schema") and existing.get("metadata_schema"):
+            data["metadata_schema"] = existing["metadata_schema"]
+
         # If the Metadata Catalog/Schema is changing, replicate this app's own
         # tables (user_roles, audit_log, job_schedules, migration_jobs,
         # dm_models, doc_qa_chunks*) into the new location right away instead
