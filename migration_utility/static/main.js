@@ -3351,6 +3351,7 @@ function cfgOnApiAuthChange(){
 
 let _cfgSelectedMode = 'new';
 let _cfgExCatalogs = [];
+let _cfgExSchemaMap = {}; // catalog -> [schemas], shared shape with Pipeline Studio
 const _cfgExLayers = ['landing','bronze','silver','reconciliation','loggingdetails'];
 let _cfgExLayerValidation = {};
 _cfgExLayers.forEach(l => _cfgExLayerValidation[l] = false);
@@ -3420,54 +3421,57 @@ function _cfgExUpdateSharedSummary(){
 /* Load ALL catalogs from UC into dropdowns */
 async function cfgExLoadCatalogs(){
   try{
-    const r=await fetch('/api/v1/settings/catalogs');
+    // Same source as Data Modeling and Pipeline Studio: every catalog plus its
+    // schemas in one call, so all three mapping UIs stay identical.
+    const r=await fetch('/api/v1/datamodel/catalogs-schemas');
     const d=await r.json();
-    if(d.success && d.catalogs && d.catalogs.length){
-      _cfgExCatalogs=d.catalogs;
+    const pairs=(d&&d.success&&Array.isArray(d.catalog_schemas))?d.catalog_schemas:[];
+    _cfgExSchemaMap={};
+    pairs.forEach(p=>{
+      const c=p&&p.catalog, s=p&&p.schema;
+      if(!c) return;
+      if(!_cfgExSchemaMap[c]) _cfgExSchemaMap[c]=[];
+      if(s&&_cfgExSchemaMap[c].indexOf(s)<0) _cfgExSchemaMap[c].push(s);
+    });
+    _cfgExCatalogs=Object.keys(_cfgExSchemaMap).sort();
+    if(_cfgExCatalogs.length){
       _cfgExLayers.forEach(layer=>{
         const cap=layer.charAt(0).toUpperCase()+layer.slice(1);
         const sel=G('cfgEx'+cap+'Catalog');
         if(!sel) return;
         const saved=sel.getAttribute('data-saved')||'';
         sel.innerHTML='<option value="">\u2014 select catalog \u2014</option>';
-        d.catalogs.forEach(c=>{
+        _cfgExCatalogs.forEach(c=>{
           const o=document.createElement('option');
           o.value=c; o.textContent=c;
           if(c===saved) o.selected=true;
           sel.appendChild(o);
         });
-        if(saved) cfgExLoadSchemas(layer);
+        cfgExLoadSchemas(layer);
       });
     } else {
-      console.warn('No catalogs returned:', d.error||'empty');
+      console.warn('No catalogs returned:', (d&&d.error)||'empty');
     }
   }catch(e){console.error('cfgExLoadCatalogs error:',e);}
 }
 window.cfgExLoadCatalogs=cfgExLoadCatalogs;
 
 /* Load schemas for a specific layer's selected catalog */
-async function cfgExLoadSchemas(layer){
+function cfgExLoadSchemas(layer){
   const cap=layer.charAt(0).toUpperCase()+layer.slice(1);
   const catSel=G('cfgEx'+cap+'Catalog');
   const schSel=G('cfgEx'+cap+'Schema');
   if(!catSel||!schSel) return;
   const catalog=catSel.value;
   if(!catalog){schSel.innerHTML='<option>\u2014 select catalog first \u2014</option>';return;}
-  schSel.innerHTML='<option>loading...</option>';
-  try{
-    const r=await fetch('/api/v1/settings/schemas?catalog='+encodeURIComponent(catalog));
-    const d=await r.json();
-    const saved=schSel.getAttribute('data-saved')||'';
-    schSel.innerHTML='<option value="">\u2014 select schema \u2014</option>';
-    if(d.success && d.schemas){
-      d.schemas.forEach(s=>{
-        const o=document.createElement('option');
-        o.value=s; o.textContent=s;
-        if(s===saved) o.selected=true;
-        schSel.appendChild(o);
-      });
-    }
-  }catch(e){console.error('cfgExLoadSchemas error:',e);}
+  const saved=schSel.getAttribute('data-saved')||'';
+  schSel.innerHTML='<option value="">\u2014 select schema \u2014</option>';
+  (_cfgExSchemaMap[catalog]||[]).slice().sort().forEach(s=>{
+    const o=document.createElement('option');
+    o.value=s; o.textContent=s;
+    if(s===saved) o.selected=true;
+    schSel.appendChild(o);
+  });
 }
 window.cfgExLoadSchemas=cfgExLoadSchemas;
 
@@ -3537,35 +3541,46 @@ window.cfgExTestAccess=cfgExTestAccess;
    ═══════════════════════════════════════════════════════ */
 const _wfLayerNames = ['landing','bronze','silver','reconciliation','loggingdetails'];
 let _wfLayerCatalogs = []; // cached catalog list
+let _wfLayerSchemaMap = {}; // catalog -> [schemas], same source as Data Modeling
 
 /* Load all catalogs into every layer's catalog dropdown */
 async function wfLayerLoadCatalogs(){
   const statusEl=G('wfLayerMappingStatus');
   if(statusEl) statusEl.textContent='Loading catalogs...';
   try{
-    const r=await fetch('/api/v1/settings/catalogs');
+    // Data Modeling's endpoint: enumerates every UC catalog AND its schemas in
+    // one call, so both pages always offer an identical catalog/schema list.
+    const r=await fetch('/api/v1/datamodel/catalogs-schemas');
     const d=await r.json();
-    if(!d.success||!d.catalogs||!d.catalogs.length){
-      if(statusEl) statusEl.textContent='⚠️ '+(d.error||'No catalogs found');
+    const pairs=(d&&d.success&&Array.isArray(d.catalog_schemas))?d.catalog_schemas:[];
+    _wfLayerSchemaMap={};
+    pairs.forEach(p=>{
+      const c=p&&p.catalog, s=p&&p.schema;
+      if(!c) return;
+      if(!_wfLayerSchemaMap[c]) _wfLayerSchemaMap[c]=[];
+      if(s&&_wfLayerSchemaMap[c].indexOf(s)<0) _wfLayerSchemaMap[c].push(s);
+    });
+    _wfLayerCatalogs=Object.keys(_wfLayerSchemaMap).sort();
+    if(!_wfLayerCatalogs.length){
+      if(statusEl) statusEl.textContent='⚠️ No catalogs found';
       return;
     }
-    _wfLayerCatalogs=d.catalogs;
     _wfLayerNames.forEach(layer=>{
       const cap=layer.charAt(0).toUpperCase()+layer.slice(1);
       const sel=G('wfLayer'+cap+'Cat');
       if(!sel) return;
       const saved=sel.getAttribute('data-saved')||sel.value||'';
       sel.innerHTML='<option value="">— catalog —</option>';
-      d.catalogs.forEach(c=>{
+      _wfLayerCatalogs.forEach(c=>{
         const o=document.createElement('option');
         o.value=c; o.textContent=c;
         if(c===saved) o.selected=true;
         sel.appendChild(o);
       });
-      // If had saved value, load its schemas
-      if(saved && sel.value===saved) wfLayerLoadSchemas(layer);
+      // Schemas come from the same payload, so fill them regardless of selection
+      wfLayerLoadSchemas(layer);
     });
-    if(statusEl) statusEl.textContent='✓ '+d.catalogs.length+' catalogs loaded';
+    if(statusEl) statusEl.textContent='✓ '+_wfLayerCatalogs.length+' catalogs loaded';
     setTimeout(()=>{if(statusEl) statusEl.textContent='';},3000);
   }catch(e){
     if(statusEl) statusEl.textContent='⚠️ Error: '+e.message;
@@ -3573,29 +3588,22 @@ async function wfLayerLoadCatalogs(){
 }
 window.wfLayerLoadCatalogs=wfLayerLoadCatalogs;
 
-/* Load schemas for a specific layer's selected catalog */
-async function wfLayerLoadSchemas(layer){
+/* Fill a layer's schema dropdown from the cached catalog->schemas map */
+function wfLayerLoadSchemas(layer){
   const cap=layer.charAt(0).toUpperCase()+layer.slice(1);
   const catSel=G('wfLayer'+cap+'Cat');
   const schSel=G('wfLayer'+cap+'Sch');
   if(!catSel||!schSel) return;
   const catalog=catSel.value;
-  if(!catalog){schSel.innerHTML='<option value="">— schema —</option>';return;}
-  schSel.innerHTML='<option>loading…</option>';
-  try{
-    const r=await fetch('/api/v1/settings/schemas?catalog='+encodeURIComponent(catalog));
-    const d=await r.json();
-    const saved=schSel.getAttribute('data-saved')||'';
-    schSel.innerHTML='<option value="">— schema —</option>';
-    if(d.success&&d.schemas){
-      d.schemas.forEach(s=>{
-        const o=document.createElement('option');
-        o.value=s; o.textContent=s;
-        if(s===saved) o.selected=true;
-        schSel.appendChild(o);
-      });
-    }
-  }catch(e){console.error('wfLayerLoadSchemas:',e);}
+  const saved=schSel.getAttribute('data-saved')||'';
+  schSel.innerHTML='<option value="">— schema —</option>';
+  if(!catalog) return;
+  (_wfLayerSchemaMap[catalog]||[]).slice().sort().forEach(s=>{
+    const o=document.createElement('option');
+    o.value=s; o.textContent=s;
+    if(s===saved) o.selected=true;
+    schSel.appendChild(o);
+  });
 }
 window.wfLayerLoadSchemas=wfLayerLoadSchemas;
 

@@ -64,9 +64,8 @@ def ai_convert(name: str, object_type: str, sql_code: str, model: str = "databri
     # Call serving endpoint
     try:
         from config_cache import get_config, get_databricks_token
-        host = (get_config().get("databricks_host") or "").strip()
+        host = (get_config().get("databricks_host") or "").strip().rstrip("/")
         token = get_databricks_token()
-        w = WorkspaceClient(host=host, token=token) if host and token else WorkspaceClient()
         payload = {
             "messages": [
                 {"role": "system", "content": _SYSTEM_PROMPT},
@@ -74,8 +73,24 @@ def ai_convert(name: str, object_type: str, sql_code: str, model: str = "databri
             ],
             "max_tokens": 6144
         }
-        raw = w.api_client.do("POST", f"/serving-endpoints/{model}/invocations", body=payload)
-        resp = json.loads(raw.content) if hasattr(raw, "content") else raw
+        if host and token:
+            # Databricks Apps always injects DATABRICKS_CLIENT_ID/SECRET, so
+            # WorkspaceClient(token=...) dies with "more than one authorization
+            # method configured: oauth and pat". Call the endpoint with the PAT
+            # directly instead (same approach as databricks_connector).
+            import requests as _rq
+            _r = _rq.post(
+                f"{host}/serving-endpoints/{model}/invocations",
+                headers={"Authorization": f"Bearer {token}",
+                         "Content-Type": "application/json"},
+                json=payload, timeout=300,
+            )
+            _r.raise_for_status()
+            resp = _r.json()
+        else:
+            w = WorkspaceClient()
+            raw = w.api_client.do("POST", f"/serving-endpoints/{model}/invocations", body=payload)
+            resp = json.loads(raw.content) if hasattr(raw, "content") else raw
         choices = resp.get("choices", [])
 
         # Handle array content (reasoning models)
