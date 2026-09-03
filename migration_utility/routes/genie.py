@@ -45,6 +45,80 @@ APP_CONTEXT_PREAMBLE = (
     "Now answer the following question:\n"
 )
 
+
+def resolve_configured_catalogs() -> dict:
+    """Resolve this deployment's actually-configured catalog.schema pairs,
+    read live from Settings -- Metadata Catalog, and each medallion/
+    reconciliation/logging catalog. Mirrors the same dynamic resolution
+    used for _fqn()/get_catalog_schema() and the deploy pipeline's Genie
+    Space instructions rendering, so every place that needs to tell an
+    LLM "here's where things live" resolves it the same way instead of
+    each hardcoding its own guess.
+
+    Returns a dict of name -> (catalog, schema), entries omitted when not
+    configured (both empty strings).
+    """
+    try:
+        from config_cache import get_config
+        cfg = get_config() or {}
+    except Exception:
+        cfg = {}
+
+    meta_cat = cfg.get("metadata_catalog") or ""
+    meta_sch = cfg.get("metadata_schema") or ""
+    mapping = (cfg.get("existing_setting") or {}).get("medallion_layer_mapping") or {}
+
+    def _layer(name):
+        lm = mapping.get(name) or {}
+        return lm.get("catalog") or "", lm.get("schema") or ""
+
+    bronze_cat, bronze_sch = _layer("bronze")
+    silver_cat, silver_sch = _layer("silver")
+
+    # reports.py/workflow.py's Reconciliation Report and execution-log routes
+    # read these from top-level "reconciliation"/"logging" keys, not the
+    # medallion mapping -- prefer those, fall back to the mapping's entries.
+    recon_top = cfg.get("reconciliation") or {}
+    recon_cat = recon_top.get("catalog") or _layer("reconciliation")[0]
+    recon_sch = recon_top.get("schema") or _layer("reconciliation")[1]
+    log_top = cfg.get("logging") or {}
+    log_cat = log_top.get("catalog") or _layer("loggingdetails")[0]
+    log_sch = log_top.get("schema") or _layer("loggingdetails")[1]
+
+    return {
+        "metadata": (meta_cat, meta_sch),
+        "bronze": (bronze_cat, bronze_sch),
+        "silver": (silver_cat, silver_sch),
+        "reconciliation": (recon_cat, recon_sch),
+        "logging": (log_cat, log_sch),
+    }
+
+
+def _build_configured_catalog_context() -> str:
+    """List this deployment's actually-configured catalogs, read live from
+    Settings, so Genie knows which of everything get_schema_context()
+    discovers is THIS app's own data -- not a hardcoded admin_source/
+    bronze.hr/... guess, and not just "search the whole workspace" either.
+    """
+    resolved = resolve_configured_catalogs()
+    rows = [
+        ("Metadata Catalog (migration jobs/pipelines/runs/schedules/audit/roles)", *resolved["metadata"]),
+        ("Bronze layer (raw ingested data)", *resolved["bronze"]),
+        ("Silver layer (cleaned/enriched data)", *resolved["silver"]),
+        ("Reconciliation (source vs target row-count checks)", *resolved["reconciliation"]),
+        ("Logging (pipeline execution logs)", *resolved["logging"]),
+    ]
+    lines = [r for r in rows if r[1] and r[2]]
+    if not lines:
+        return ""
+
+    out = ["This deployment's currently configured catalogs (from Settings):\n"]
+    for label, cat, sch in lines:
+        out.append(f"• {label} → `{cat}`.`{sch}`")
+    out.append("\nTreat these as the primary source for questions about this app's own migration/pipeline/reconciliation/audit data. "
+                "Other catalogs discovered below may also be relevant depending on the question.\n")
+    return "\n".join(out) + "\n"
+
 # ══════════════════════════════════════════════════════════════════════════════
 # FAQ KNOWLEDGE BASE — Rich detailed answers for app-level questions
 # ══════════════════════════════════════════════════════════════════════════════
@@ -834,7 +908,7 @@ def send_message():
 
     # If prior turn was FAQ, start fresh real conversation
     if conversation_id.startswith("faq-"):
-        enriched = APP_CONTEXT_PREAMBLE + get_schema_context() + content
+        enriched = APP_CONTEXT_PREAMBLE + _build_configured_catalog_context() + get_schema_context() + content
         try:
             r = requests.post(f"{_HOST}/api/2.0/genie/spaces/{space_id}/start-conversation",
                               json={"content": enriched}, headers=_headers(), timeout=30)
@@ -992,7 +1066,7 @@ def fm_chat():
     messages = data.get("messages", [])
     if not endpoint_name or not content:
         return jsonify({"error": "endpoint and content are required"}), 400
-    system_context = get_schema_context()
+    system_context = _build_configured_catalog_context() + get_schema_context()
     chat_messages = [{"role": "system", "content": APP_CONTEXT_PREAMBLE + system_context}]
     for msg in messages[-10:]:
         chat_messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})

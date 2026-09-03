@@ -151,10 +151,20 @@ def _classify_intent(question):
 _PROMPT_MINIMAL = ("You are the AI assistant for DBX Migration Studio (SQL-to-Databricks migration tool). "
                    "Answer concisely about migration workflows, Databricks concepts, and SQL conversion.")
 
-_PROMPT_DATA_SLIM = ("You are the AI assistant for DBX Migration Studio.\n"
-    "Key tables: admin_source.configtables.wf_run_history (run_id,job_name,status[SUCCESS/FAILED/RUNNING],started_at,duration_sec,rows_processed,error_message), "
-    "admin_source.configtables.wf_job_metadata (job_name,last_status,enabled,run_count,fail_count).\n"
-    "Always use 3-part names (catalog.schema.table). Wrap SQL in ```sql blocks.")
+def _prompt_data_slim() -> str:
+    """Same intent as _PROMPT_MINIMAL's tiering (a short, token-cheap
+    prompt for data_query intent) but the table prefix is resolved live
+    from Settings instead of hardcoded to admin_source.configtables --
+    a fixed string here would tell the model the wrong catalog the moment
+    a deployment is configured differently.
+    """
+    from routes.genie import resolve_configured_catalogs
+    meta = resolve_configured_catalogs()["metadata"]
+    prefix = ".".join(meta) if all(meta) else "admin_source.configtables"
+    return ("You are the AI assistant for DBX Migration Studio.\n"
+        f"Key tables: {prefix}.wf_run_history (run_id,job_name,status[SUCCESS/FAILED/RUNNING],started_at,duration_sec,rows_processed,error_message), "
+        f"{prefix}.wf_job_metadata (job_name,last_status,enabled,run_count,fail_count).\n"
+        "Always use 3-part names (catalog.schema.table). Wrap SQL in ```sql blocks.")
 
 # Simple LRU response cache
 class _FMCache:
@@ -210,32 +220,44 @@ def _fm_chat_sdk_override():
     if not endpoint_name or not content_text:
         return jfy({"error": "endpoint and content are required"}), 400
     # === FULL system prompt (standard mode) ===
+    # Table locations resolved live from Settings (Metadata Catalog + each
+    # medallion/reconciliation/logging catalog) instead of being hardcoded
+    # to admin_source/bronze.hr/silver.hr/... -- those go stale/wrong the
+    # moment a deployment is configured with different catalogs, exactly
+    # the class of bug already fixed for _fqn()/get_catalog_schema().
+    from routes.genie import resolve_configured_catalogs
+    _cats = resolve_configured_catalogs()
+    _meta = ".".join(_cats["metadata"]) if all(_cats["metadata"]) else "admin_source.configtables"
+    _bronze = ".".join(_cats["bronze"]) if all(_cats["bronze"]) else "bronze.hr"
+    _silver = ".".join(_cats["silver"]) if all(_cats["silver"]) else "silver.hr"
+    _log = ".".join(_cats["logging"]) if all(_cats["logging"]) else "loggingdetails.hr"
+    _recon = ".".join(_cats["reconciliation"]) if all(_cats["reconciliation"]) else "reconciliation.hr"
     _sys_full = ("You are the AI assistant inside DBX Migration Studio, a SQL-to-Databricks migration accelerator.\n"
             "CRITICAL SQL RULES:\n"
             "1. ALWAYS use fully-qualified 3-part table names (catalog.schema.table) in ALL SQL.\n"
             "2. ONLY use tables from the schema below. NEVER invent table names.\n"
             "3. Wrap SQL in ```sql code blocks.\n\n"
             "=== AVAILABLE TABLES ===\n\n"
-            "[admin_source.configtables] — Migration control tables:\n"
-            "  admin_source.configtables.wf_run_history — Every pipeline/job run\n"
+            f"[{_meta}] — Migration control tables:\n"
+            f"  {_meta}.wf_run_history — Every pipeline/job run\n"
             "    Columns: run_id(str), job_id(str), job_name(str), stage(str), full_table(str), "
             "load_type(str), watermark_column(str), watermark_value(str), status(str), "
             "started_at(timestamp), completed_at(timestamp), duration_sec(double), rows_processed(bigint), error_message(str), logs(str)\n"
             "    status values: SUCCESS, FAILED, RUNNING, SKIPPED\n\n"
-            "  admin_source.configtables.wf_job_metadata — Registered migration jobs\n"
+            f"  {_meta}.wf_job_metadata — Registered migration jobs\n"
             "    Columns: job_id(str), job_name(str), stage(str), group_id(str), table_schema(str), "
             "table_name(str), full_table(str), load_type(str), watermark_column(str), status(str), "
             "last_run_id(str), last_run_at(timestamp), last_status(str), run_count(int), fail_count(int), "
             "enabled(boolean), job_order(int), source_config(str), target_config(str), created_at(timestamp), updated_at(timestamp)\n\n"
-            "  admin_source.configtables.wf_pipeline_metadata — Pipeline definitions\n"
-            "  admin_source.configtables.wf_scheduler_config — Cron schedules\n"
-            "  admin_source.configtables.wf_scheduler_history — Scheduler run history\n"
-            "  admin_source.configtables.wf_source_tables — Discovered source tables\n"
-            "  admin_source.configtables.wf_watermark_metadata — Incremental watermarks\n\n"
-            "[bronze.hr] — Raw ingested data: bronze_customers, bronze_products, bronze_stores, bronze_fact_sales_orders\n"
-            "[silver.hr] — Cleaned: customers, products, stores, fact_sales_orders, dimemployee\n"
-            "[loggingdetails.hr] — executionlog\n"
-            "[reconciliation.hr] — reconcilationdetails\n\n"
+            f"  {_meta}.wf_pipeline_metadata — Pipeline definitions\n"
+            f"  {_meta}.wf_scheduler_config — Cron schedules\n"
+            f"  {_meta}.wf_scheduler_history — Scheduler run history\n"
+            f"  {_meta}.wf_source_tables — Discovered source tables\n"
+            f"  {_meta}.wf_watermark_metadata — Incremental watermarks\n\n"
+            f"[{_bronze}] — Raw ingested data: bronze_customers, bronze_products, bronze_stores, bronze_fact_sales_orders\n"
+            f"[{_silver}] — Cleaned: customers, products, stores, fact_sales_orders, dimemployee\n"
+            f"[{_log}] — executionlog\n"
+            f"[{_recon}] — reconcilationdetails\n\n"
             "=== END TABLES ===\n\n"
             "Now answer the question using ONLY these tables:\n")
 
@@ -264,7 +286,7 @@ def _fm_chat_sdk_override():
             system_prompt = _PROMPT_MINIMAL
             optimizations_applied.append('prompt:minimal(~200tkns)')
         elif intent == 'data_query':
-            system_prompt = _PROMPT_DATA_SLIM
+            system_prompt = _prompt_data_slim()
             optimizations_applied.append('prompt:data_slim(~400tkns)')
         else:
             system_prompt = _sys_full
