@@ -29,28 +29,15 @@ _mcp_results = {}  # Async MCP query results: {message_id: {status, result, erro
 APP_CONTEXT_PREAMBLE = (
     "You are the AI assistant embedded inside DBX Migration Studio — "
     "a SQL-to-Databricks migration accelerator. Answer questions using the data in the connected tables.\n\n"
-    "Available catalogs and their purpose:\n\n"
-    "[MIGRATION CONTROL — admin_source]\n"
-    "• configtables.wf_job_metadata — registered migration jobs (source_table, target_table, status, row_count, error_msg)\n"
-    "• configtables.wf_pipeline_metadata — pipeline definitions (catalog, schema, layer, pipeline_id, pipeline_type)\n"
-    "• configtables.wf_run_history — every pipeline run (job_name, start_time, end_time, rows_read, rows_written, status, duration_mins)\n"
-    "• configtables.wf_scheduler_config — cron schedules (job_name, schedule, enabled, next_run)\n"
-    "• configtables.wf_source_tables — source tables discovered in SQL Server (schema, table_name, row_count, complexity_score)\n"
-    "• configtables.wf_watermark_metadata — incremental watermarks (table_name, last_loaded_value, column_name)\n"
-    "• migration_app.migration_jobs — live job tracker (job_id, source, target, state, started_at, finished_at, rows_migrated, error)\n"
-    "• migration_app.audit_log — every user action (user_email, action, entity, timestamp, details)\n"
-    "• migration_app.user_roles — RBAC (user_email, role, granted_by, granted_at)\n\n"
-    "[BRONZE LAYER — bronze.hr]\n"
-    "Raw ingested HR/business data: bronze_customers, bronze_products, bronze_categories, bronze_stores, "
-    "bronze_fact_sales_orders, bronze_invoices, bronze_payments, bronze_dimemployee, bronze_dimdepartment, bronze_dimjobrole.\n\n"
-    "[SILVER LAYER — silver.hr]\n"
-    "Cleaned/enriched: customers, products, stores, fact_sales_orders, invoices, payments, dimemployee, dimdepartment, dimjobrole, dimlocation.\n\n"
-    "[OPERATIONS]\n"
-    "• loggingdetails.hr.executionlog — pipeline execution logs\n"
-    "• reconciliation.hr.reconcilationdetails — source vs target row-count reconciliation\n\n"
-    "[SAMPLES]\n"
-    "• samples.nyctaxi.trips — NYC taxi (fare, tip, distance, pickup/dropoff)\n"
-    "• samples.tpch.orders — TPC-H benchmark orders\n\n"
+    # Deliberately no hardcoded catalog/schema names here (e.g. a literal
+    # "admin_source" or "bronze.hr") -- this app's catalogs are configured
+    # per-deployment in Settings (Metadata Catalog, and each medallion
+    # layer's target catalog), so a fixed list here would silently go
+    # stale/wrong the moment a different catalog is configured, exactly
+    # like the workflow_manager._fqn() staleness fixed earlier. The actual
+    # available catalogs/schemas/tables are appended live below via
+    # get_schema_context(), which discovers them directly from the
+    # workspace instead of assuming any particular name.
     "IMPORTANT FORMATTING RULE: Whenever you show a SQL query in your response, "
     "you MUST wrap it in a fenced code block using triple backticks with the sql language tag, like:\n"
     "```sql\nSHOW CATALOGS;\n```\n"
@@ -847,7 +834,7 @@ def send_message():
 
     # If prior turn was FAQ, start fresh real conversation
     if conversation_id.startswith("faq-"):
-        enriched = APP_CONTEXT_PREAMBLE + content
+        enriched = APP_CONTEXT_PREAMBLE + get_schema_context() + content
         try:
             r = requests.post(f"{_HOST}/api/2.0/genie/spaces/{space_id}/start-conversation",
                               json={"content": enriched}, headers=_headers(), timeout=30)

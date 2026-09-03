@@ -5,6 +5,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 pip install -q databricks-sdk >/dev/null 2>&1 || true
 
+# Render the instructions/description templates with whatever catalogs are
+# actually configured in this deployment's Settings (falls back to the
+# static defaults if that can't be read -- non-blocking either way).
+python3 "$SCRIPT_DIR/render_genie_instructions.py" 2>&1 || echo "WARN: Genie template rendering failed (using static defaults)"
+
 # Check if a migration-related Genie Space already exists
 EXISTING=$(databricks genie list-spaces -o json 2>/dev/null | python3 -c "
 import json, sys
@@ -45,7 +50,9 @@ else:
     SPACE_ID=$(python3 -c "
 import json, sys, os
 
-desc_file = os.path.join('$SCRIPT_DIR', 'genie_space_description.txt')
+desc_file = '/tmp/genie_space_description.txt'
+if not os.path.isfile(desc_file):
+    desc_file = os.path.join('$SCRIPT_DIR', 'genie_space_description.txt')
 if os.path.isfile(desc_file):
     with open(desc_file) as f:
         desc = f.read().strip()
@@ -90,7 +97,9 @@ from databricks.sdk import WorkspaceClient
 
 w = WorkspaceClient()
 space_id = '$SPACE_ID'
-inst_file = os.path.join('$SCRIPT_DIR', 'genie_space_instructions.txt')
+inst_file = '/tmp/genie_space_instructions.txt'
+if not os.path.isfile(inst_file):
+    inst_file = os.path.join('$SCRIPT_DIR', 'genie_space_instructions.txt')
 
 if os.path.isfile(inst_file):
     with open(inst_file) as f:
