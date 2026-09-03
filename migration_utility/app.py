@@ -211,7 +211,7 @@ def _compress_history(messages, max_msgs=3):
 def _fm_chat_sdk_override():
     """Chat with FM endpoint — with optional Token Optimiser."""
     from flask import request as req, jsonify as jfy
-    from routes.catalog_discovery import get_schema_context
+    from routes.catalog_discovery import get_relevant_schema_context
     data = req.get_json() or {}
     endpoint_name = (data.get("endpoint") or "").strip()
     content_text = (data.get("content") or "").strip()
@@ -313,7 +313,7 @@ def _fm_chat_sdk_override():
         _tokens_saved_estimate = _total_chars_saved // 4  # delta only
     else:
         # Standard mode (no optimization)
-        system_context = get_schema_context()
+        system_context = get_relevant_schema_context(question=content_text)
         if "not yet complete" in system_context:
             system_context = ""
         chat_messages = [{"role": "system", "content": _sys_full + system_context}]

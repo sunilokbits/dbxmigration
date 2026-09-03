@@ -38,6 +38,16 @@ resources:
     serving_endpoint:
       name: "databricks-claude-haiku-4-5"
       permission: CAN_QUERY
+  # Embedding model for Genie's schema-relevance ranking (see
+  # catalog_discovery.get_relevant_schema_context) -- only the top-N most
+  # relevant tables for a question get embedded into the chat prompt
+  # instead of every discovered table, to cut token cost. Falls back to
+  # keyword matching if this endpoint isn't available in a given
+  # workspace, so it's additive rather than a hard requirement.
+  - name: fm-endpoint-embeddings
+    serving_endpoint:
+      name: "databricks-gte-large-en"
+      permission: CAN_QUERY
 
 env:
   - name: DATABRICKS_CATALOG

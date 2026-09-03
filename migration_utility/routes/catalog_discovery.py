@@ -11,6 +11,7 @@ Features:
 
 import os
 import json
+import re
 import time
 import threading
 import logging
@@ -367,6 +368,156 @@ def get_schema_context():
     lines.append(f"\nTotal: {len(catalogs)} catalogs, {len(schemas)} schemas, {len(tables)} tables")
     lines.append("You can query ANY of these tables using their fully qualified name (catalog.schema.table).\n")
 
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SCHEMA RELEVANCE RANKING — chunking + caching + vector similarity
+#
+# get_schema_context() above dumps every table in every discovered catalog
+# in the whole workspace into the prompt on every chat turn -- expensive
+# and mostly irrelevant to any single question. get_relevant_schema_context()
+# instead:
+#   1. Chunks the candidate set down to just the catalogs actually
+#      configured in Settings (dynamic -- reads the same Metadata Catalog/
+#      medallion mapping resolution used everywhere else).
+#   2. Ranks those candidates by embedding similarity to the question and
+#      keeps only the top N, so far fewer table descriptions get sent to
+#      the model per request.
+#   3. Caches each table's embedding (keyed by its blurb text, same TTL as
+#      table discovery) so re-embedding only happens when the schema
+#      actually changes, not on every chat message.
+# Falls back to lexical keyword overlap if the embedding endpoint isn't
+# available in a given workspace, so this degrades gracefully instead of
+# being a hard dependency.
+# ══════════════════════════════════════════════════════════════════════════════
+_EMBED_ENDPOINT = "databricks-gte-large-en"
+_embedding_cache: dict = {}   # blurb_key -> {"vector": [...], "text": str, "ts": float}
+_embedding_cache_lock = threading.Lock()
+
+
+def _embed_texts(texts: list) -> "list | None":
+    """Call the embedding serving endpoint. Returns None on any failure
+    (endpoint not enabled in this workspace, no token, network error, ...)
+    so callers fall back to keyword matching instead of breaking chat."""
+    if not texts:
+        return []
+    try:
+        from config_cache import get_config
+        from secrets_helper import get_serving_endpoint_token
+        host = (get_config().get("databricks_host") or os.environ.get("DATABRICKS_HOST", "")).rstrip("/")
+        if host and not host.startswith("http"):
+            host = "https://" + host
+        token = get_serving_endpoint_token()
+        if not host or not token:
+            return None
+        import requests as _rq
+        r = _rq.post(
+            f"{host}/serving-endpoints/{_EMBED_ENDPOINT}/invocations",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"input": texts},
+            timeout=30,
+        )
+        if r.status_code != 200:
+            logger.info("[SchemaRelevance] Embedding endpoint returned %s, falling back to keyword match", r.status_code)
+            return None
+        data = r.json().get("data", [])
+        return [d.get("embedding") for d in data]
+    except Exception as exc:
+        logger.info("[SchemaRelevance] Embedding call failed, falling back to keyword match: %s", exc)
+        return None
+
+
+def _cosine_sim(a: list, b: list) -> float:
+    if not a or not b:
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(y * y for y in b) ** 0.5
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def _table_blurb(tbl: dict) -> str:
+    cols = ", ".join(c.get("name", "") for c in (tbl.get("columns") or [])[:12])
+    suffix = f" columns: {cols}" if cols else ""
+    return f"{tbl['catalog']}.{tbl['schema']}.{tbl['table']} ({tbl.get('type', '')}){suffix}"
+
+
+def _get_cached_table_embedding(key: str, text: str):
+    """Embedding for one table's blurb, cached with the discovery TTL so
+    it's only recomputed when the schema (or the cache) actually refreshes."""
+    now = time.time()
+    with _embedding_cache_lock:
+        entry = _embedding_cache.get(key)
+        if entry and entry["text"] == text and (now - entry["ts"]) < _CACHE_TTL_SECONDS:
+            return entry["vector"]
+    vecs = _embed_texts([text])
+    vec = vecs[0] if vecs and vecs[0] else None
+    if vec:
+        with _embedding_cache_lock:
+            _embedding_cache[key] = {"vector": vec, "text": text, "ts": now}
+    return vec
+
+
+def get_relevant_schema_context(question: str = "", top_n: int = 15, configured_only: bool = True) -> str:
+    """Scoped + ranked schema context for a specific question (see module
+    docstring above for the chunking/caching/vector-similarity approach).
+    """
+    _ensure_cache_fresh()
+    with _cache_lock:
+        tables = list(_cache["tables"])
+        last_refreshed = _cache["last_refreshed"]
+
+    if not tables:
+        return "(Schema discovery not yet complete — using default context)\n"
+
+    total_discovered = len(tables)
+    if configured_only:
+        try:
+            from routes.genie import resolve_configured_catalogs
+            configured = {cat for cat, sch in resolve_configured_catalogs().values() if cat}
+        except Exception:
+            configured = set()
+        if configured:
+            scoped = [t for t in tables if t.get("catalog") in configured]
+            if scoped:
+                tables = scoped
+
+    if not question.strip() or len(tables) <= top_n:
+        ranked = tables[:top_n]
+    else:
+        q_vecs = _embed_texts([question])
+        q_vec = q_vecs[0] if q_vecs and q_vecs[0] else None
+
+        scored = []
+        if q_vec:
+            for t in tables:
+                key = f"{t.get('catalog')}.{t.get('schema')}.{t.get('table')}"
+                blurb = _table_blurb(t)
+                t_vec = _get_cached_table_embedding(key, blurb)
+                scored.append((_cosine_sim(q_vec, t_vec) if t_vec else 0.0, t))
+
+        if not q_vec or not any(s for s, _ in scored):
+            # Lexical fallback: word-overlap between the question and each
+            # table's catalog.schema.table + column names.
+            q_words = set(re.findall(r"[a-z0-9_]+", question.lower()))
+            scored = []
+            for t in tables:
+                t_words = set(re.findall(r"[a-z0-9_]+", _table_blurb(t).lower()))
+                scored.append((len(q_words & t_words), t))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        ranked = [t for _, t in scored[:top_n]]
+
+    lines = [f"Relevant tables for this question (auto-ranked, schema last refreshed: {last_refreshed}):\n"]
+    for t in ranked:
+        lines.append(f"  • {_table_blurb(t)}")
+    lines.append(
+        f"\n({total_discovered} total tables discovered; showing the {len(ranked)} most relevant to your question. "
+        "You can query ANY of these tables using their fully qualified name (catalog.schema.table).)\n"
+    )
     return "\n".join(lines)
 
 

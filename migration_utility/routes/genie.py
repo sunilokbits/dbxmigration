@@ -6,7 +6,7 @@ Includes a comprehensive FAQ / knowledge-base intercept layer for app-level ques
 import os, json, uuid, re, time, requests, threading
 from flask import Blueprint, request, jsonify
 from routes.auth import login_required
-from routes.catalog_discovery import get_schema_context, _ensure_cache_fresh
+from routes.catalog_discovery import get_relevant_schema_context, _ensure_cache_fresh
 
 genie_bp = Blueprint("genie", __name__)
 
@@ -36,8 +36,10 @@ APP_CONTEXT_PREAMBLE = (
     # stale/wrong the moment a different catalog is configured, exactly
     # like the workflow_manager._fqn() staleness fixed earlier. The actual
     # available catalogs/schemas/tables are appended live below via
-    # get_schema_context(), which discovers them directly from the
-    # workspace instead of assuming any particular name.
+    # get_relevant_schema_context(), which discovers them directly from
+    # the workspace (scoped to Settings' configured catalogs and ranked
+    # by relevance to the question) instead of assuming any particular
+    # name or dumping every table in the workspace.
     "IMPORTANT FORMATTING RULE: Whenever you show a SQL query in your response, "
     "you MUST wrap it in a fenced code block using triple backticks with the sql language tag, like:\n"
     "```sql\nSHOW CATALOGS;\n```\n"
@@ -908,7 +910,7 @@ def send_message():
 
     # If prior turn was FAQ, start fresh real conversation
     if conversation_id.startswith("faq-"):
-        enriched = APP_CONTEXT_PREAMBLE + _build_configured_catalog_context() + get_schema_context() + content
+        enriched = APP_CONTEXT_PREAMBLE + _build_configured_catalog_context() + get_relevant_schema_context(question=content) + content
         try:
             r = requests.post(f"{_HOST}/api/2.0/genie/spaces/{space_id}/start-conversation",
                               json={"content": enriched}, headers=_headers(), timeout=30)
@@ -1066,7 +1068,7 @@ def fm_chat():
     messages = data.get("messages", [])
     if not endpoint_name or not content:
         return jsonify({"error": "endpoint and content are required"}), 400
-    system_context = _build_configured_catalog_context() + get_schema_context()
+    system_context = _build_configured_catalog_context() + get_relevant_schema_context(question=content)
     chat_messages = [{"role": "system", "content": APP_CONTEXT_PREAMBLE + system_context}]
     for msg in messages[-10:]:
         chat_messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
