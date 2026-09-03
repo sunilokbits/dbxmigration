@@ -49,6 +49,31 @@ def _resolve_role(groups: list[str]) -> str:
     return "Viewer"
 
 
+def _apply_stored_role(user: dict) -> dict:
+    """Override the group-guessed role with an explicit assignment from the
+    user_roles table, if one exists.
+
+    Without this, the User Management page's role assignments were a
+    no-op: admin.py writes to user_roles, but nothing ever read it back
+    here, so granting someone Admin/Developer there had zero effect on
+    what login_required actually let them do — the role always came from
+    guessing Databricks workspace group membership instead. An explicit
+    assignment now takes priority over that guess.
+    """
+    try:
+        from dbsql_client import execute_query, get_catalog_schema
+        catalog, schema = get_catalog_schema()
+        rows = execute_query(
+            f"SELECT role FROM `{catalog}`.`{schema}`.user_roles WHERE user_email = %(email)s",
+            {"email": user["email"]},
+        )
+        if rows:
+            user["role"] = rows[0]["role"]
+    except Exception:
+        pass  # table may not exist yet (e.g. fresh dev deploy) — keep the group-guessed role
+    return user
+
+
 def _fetch_user_from_sdk() -> dict | None:
     """Use the Databricks SDK to get the current user's identity.
 
@@ -185,6 +210,7 @@ def get_current_user() -> dict | None:
                 return cached
 
         user = _enrich_with_groups(user)
+        user = _apply_stored_role(user)
         user["_ts"] = time.time()
         with _cache_lock:
             _USER_CACHE[cache_key] = user
@@ -194,6 +220,7 @@ def get_current_user() -> dict | None:
     # Fallback: SDK (works inside Databricks Apps even without headers)
     user = _fetch_user_from_sdk()
     if user:
+        user = _apply_stored_role(user)
         user["_ts"] = time.time()
         with _cache_lock:
             _USER_CACHE[user["email"]] = user
