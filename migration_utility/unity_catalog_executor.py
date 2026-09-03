@@ -34,7 +34,22 @@ class UnityCatalogExecutor:
         self.token = token
         self.catalog = catalog
         self.schema = schema
-        if _is_databricks_app():
+        if token and _is_databricks_app():
+            # WorkspaceClient() with no args auto-detects the ambient OAuth
+            # env vars Databricks Apps always injects (DATABRICKS_CLIENT_ID/
+            # SECRET), silently running every query as the app's own
+            # service principal instead of the token a caller explicitly
+            # passed in here -- that SP has never been granted access to
+            # whatever catalog a user configures (e.g. a Reconciliation or
+            # LoggingDetails catalog), which is why those kept failing even
+            # after granting the token owner's own identity USE CATALOG.
+            # Force PAT auth explicitly so the passed-in token actually wins
+            # over the ambient OAuth env vars instead of a bare
+            # WorkspaceClient(token=...) raising "more than one
+            # authorization method configured: oauth and pat".
+            from databricks.sdk.core import Config
+            self._client = WorkspaceClient(config=Config(host=self.host, token=self.token, auth_type="pat"))
+        elif _is_databricks_app():
             self._client = WorkspaceClient()
         else:
             self._client = WorkspaceClient(host=self.host, token=self.token)
