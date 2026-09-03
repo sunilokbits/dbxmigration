@@ -130,6 +130,28 @@ def save_deploy_config():
         if not data.get("metadata_schema") and existing.get("metadata_schema"):
             data["metadata_schema"] = existing["metadata_schema"]
 
+        # Same "blank means untouched, not clear" guard for the medallion
+        # layer mapping (landing/bronze/silver/reconciliation/loggingdetails
+        # catalog+schema). Two different pages collect this into the same
+        # existing_setting.medallion_layer_mapping key from two different
+        # sets of DOM fields (Pipeline Studio's wfLayer* vs this page's
+        # cfgEx*) -- saving from whichever one wasn't populated in the
+        # current session would otherwise submit all-blank layers and wipe
+        # out catalogs actually configured via the other page.
+        existing_mapping = (existing.get("existing_setting") or {}).get("medallion_layer_mapping") or {}
+        if isinstance(data.get("existing_setting"), dict):
+            incoming_mapping = data["existing_setting"].get("medallion_layer_mapping") or {}
+            merged_mapping = {}
+            for layer_name in set(existing_mapping) | set(incoming_mapping):
+                existing_layer = existing_mapping.get(layer_name) or {}
+                incoming_layer = incoming_mapping.get(layer_name) or {}
+                merged_layer = dict(existing_layer)
+                for field in ("catalog", "schema", "storage_account", "container", "base_path"):
+                    if incoming_layer.get(field):
+                        merged_layer[field] = incoming_layer[field]
+                merged_mapping[layer_name] = merged_layer
+            data["existing_setting"]["medallion_layer_mapping"] = merged_mapping
+
         # If the Metadata Catalog/Schema is changing, replicate this app's own
         # tables (user_roles, audit_log, job_schedules, migration_jobs,
         # dm_models, doc_qa_chunks*) into the new location right away instead
