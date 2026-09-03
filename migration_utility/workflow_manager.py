@@ -1496,6 +1496,50 @@ def _derive_mapping_tag(target_config: dict) -> str:
     return ""
 
 
+def _delete_dlt_pipelines_for_groups(group_ids) -> None:
+    """Delete the native Spark Declarative Pipeline (DLT) for each archived group_id.
+
+    metadata_notebooks.py names each DLT pipeline "MetadataPipeline_<group_id>"
+    (a fresh group_id per pipeline-creation, so re-creating a pipeline for the
+    same table never reuses the old name) and only cleans up orphans of its
+    OWN catalog.schema, best-effort, whenever some other table's job happens
+    to run. If the new pipeline's target catalog/schema differs even slightly
+    from the old one (e.g. a different layer mapping), that cleanup never
+    finds it — the old pipeline is orphaned forever. Delete it directly here,
+    at archive time, instead of waiting on that indirect cleanup.
+    """
+    if not group_ids:
+        return
+    try:
+        dcfg = _load_deploy_config()
+        host = _dbr_host or dcfg.get("databricks_host", "")
+        token = _dbr_token or _resolve_databricks_token(dcfg)
+        if not host or not token:
+            return
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        for gid in group_ids:
+            if not gid:
+                continue
+            name = f"MetadataPipeline_{gid}"
+            try:
+                r = requests.get(
+                    f"{host}/api/2.0/pipelines",
+                    params={"filter": f"name LIKE '{name}'", "max_results": 10},
+                    headers=headers, timeout=15,
+                )
+                if not r.ok:
+                    continue
+                for p in r.json().get("statuses", []):
+                    if p.get("name") == name:
+                        requests.delete(f"{host}/api/2.0/pipelines/{p['pipeline_id']}", headers=headers, timeout=15)
+                        logger.info("Deleted orphaned DLT pipeline %s (%s) for archived group %s", name, p["pipeline_id"], gid)
+                        break
+            except Exception as exc:
+                logger.warning("Could not delete DLT pipeline for archived group %s: %s", gid, exc)
+    except Exception:
+        pass
+
+
 def _archive_existing_jobs(table_name: str, reason: str = "load_type_change", mapping_tag: str = "") -> list:
     """
     Archive existing jobs for a given table_name into wf_job_metadatahis.
@@ -1561,6 +1605,11 @@ def _archive_existing_jobs(table_name: str, reason: str = "load_type_change", ma
                 _exec_sql(f"DELETE FROM {_fqn(TBL_PIPELINES)} WHERE group_id = {_esc(gid)}")
             except Exception:
                 pass
+
+        # Delete the actual Databricks-side DLT pipeline(s) for these archived
+        # groups now, rather than leaving them orphaned until some unrelated
+        # job's notebook happens to clean them up (see docstring).
+        _delete_dlt_pipelines_for_groups(old_group_ids)
 
     except Exception:
         pass
