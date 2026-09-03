@@ -141,6 +141,22 @@ def save_deploy_config():
             (_new_meta_sch and _new_meta_sch != existing.get("metadata_schema", ""))
         )
 
+        # Collect every catalog/schema referenced anywhere in this save --
+        # the Metadata Catalog, and each medallion layer's target catalog
+        # from Pipeline Studio's "Layer -> Catalog.Schema Mapping" (landing,
+        # bronze, silver, reconciliation, loggingdetails) -- so a self-grant
+        # attempt runs for whichever ones the user just typed a new catalog
+        # name into, instead of only the Metadata Catalog.
+        _catalogs_to_grant = {}
+        if _new_meta_cat:
+            _catalogs_to_grant[(_new_meta_cat, _new_meta_sch)] = "metadata_catalog"
+        _layer_mapping = (data.get("existing_setting") or {}).get("medallion_layer_mapping") or {}
+        for _layer_name, _layer_cfg in _layer_mapping.items():
+            if isinstance(_layer_cfg, dict) and _layer_cfg.get("catalog"):
+                _catalogs_to_grant.setdefault(
+                    (_layer_cfg["catalog"], _layer_cfg.get("schema", "")), f"layer:{_layer_name}"
+                )
+
         save_result = save_config(data)
 
         if _meta_changed:
@@ -152,10 +168,21 @@ def save_deploy_config():
             except Exception as exc:
                 logger.warning("Could not replicate app tables into %s.%s: %s", _new_meta_cat, _new_meta_sch, exc)
 
+        grant_results = []
+        if _catalogs_to_grant:
+            from dbsql_client import ensure_catalog_access
+            for (_cat, _sch), _label in _catalogs_to_grant.items():
+                res = ensure_catalog_access(_cat, _sch)
+                res["for"] = _label
+                grant_results.append(res)
+                if not res.get("success"):
+                    logger.warning("Auto-grant failed for %s (%s.%s): %s", _label, _cat, _sch, res.get("error"))
+
         if not save_result.get("durable"):
             return jsonify({
                 "success": True,
                 "durable": False,
+                "grants": grant_results,
                 "warning": (
                     "Saved locally only — could not reach the Databricks SQL Warehouse "
                     "to persist this to the config table, so these settings will be "
@@ -163,7 +190,7 @@ def save_deploy_config():
                     "Retry once the warehouse is reachable."
                 ),
             })
-        return jsonify({"success": True, "durable": True})
+        return jsonify({"success": True, "durable": True, "grants": grant_results})
     except Exception as e:
         logger.error("Failed to save config: %s", e)
         return jsonify({"success": False, "error": str(e)})

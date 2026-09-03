@@ -315,4 +315,53 @@ def ensure_tables():
             cursor.close()
 
         _tables_initialised = True
+
         logger.info("App Delta tables ensured in %s.%s", catalog, schema)
+
+
+def ensure_catalog_access(catalog: str, schema: str = "", principal: str = "") -> dict:
+    """Best-effort self-grant of USE CATALOG (+ schema/table privileges) on
+    a catalog this app needs to read/write, to the current identity.
+
+    Every "USE CATALOG on catalog X" error the app has hit came from a user
+    picking a new catalog name to test with in Settings/Pipeline Studio
+    (Metadata Catalog, or a medallion layer's target catalog) that nobody
+    had explicitly granted access to yet. This automates the GRANT instead
+    of requiring it to be run by hand every time a new catalog is tried.
+
+    This can only ever succeed if the identity actually executing the
+    GRANT already has sufficient authority to grant it (catalog owner,
+    MANAGE privilege, or account admin) -- that's Unity Catalog's own
+    security model and there's no way around it from application code.
+    Best-effort and non-raising: failures are returned in the result dict
+    so callers can surface the real reason instead of the caller crashing.
+    """
+    if not catalog:
+        return {"success": False, "error": "no catalog given"}
+    if not principal:
+        try:
+            from databricks.sdk import WorkspaceClient
+            principal = WorkspaceClient().current_user.me().user_name
+        except Exception as exc:
+            return {"success": False, "error": f"Could not resolve current identity: {exc}"}
+
+    statements = [f"GRANT USE CATALOG ON CATALOG `{catalog}` TO `{principal}`"]
+    if schema:
+        statements.append(
+            f"GRANT USE SCHEMA, SELECT, MODIFY, CREATE TABLE ON SCHEMA `{catalog}`.`{schema}` TO `{principal}`"
+        )
+    else:
+        statements.append(f"GRANT CREATE SCHEMA ON CATALOG `{catalog}` TO `{principal}`")
+
+    errors = []
+    for stmt in statements:
+        try:
+            execute_write(stmt)
+        except Exception as exc:
+            errors.append(f"{stmt} -> {exc}")
+
+    if errors:
+        logger.warning("ensure_catalog_access could not grant on %s.%s for %s: %s", catalog, schema, principal, errors)
+        return {"success": False, "error": "; ".join(errors), "principal": principal, "catalog": catalog, "schema": schema}
+    logger.info("Granted %s access on %s.%s", principal, catalog, schema)
+    return {"success": True, "principal": principal, "catalog": catalog, "schema": schema}

@@ -4475,6 +4475,21 @@ async function saveDeployConfig(){
       const banner=G('cfgSavedBanner'); banner.style.display='block';
       setTimeout(()=>{banner.style.display='none';},4000);
     }
+    // Report the auto-grant attempts made for any catalog referenced in
+    // this save (Metadata Catalog, or a layer mapping catalog) — this can
+    // only succeed if the app's current identity already has authority to
+    // grant, so a failure here means a workspace/account admin needs to
+    // run the GRANT manually for that catalog.
+    if(Array.isArray(d.grants)&&d.grants.length){
+      const failed=d.grants.filter(g=>!g.success);
+      if(failed.length){
+        const msg='Could not auto-grant access to: '+failed.map(g=>(g.catalog||'?')+(g.schema?'.'+g.schema:'')+' ('+(g.for||'')+')').join(', ')+
+          '. Ask a workspace/account admin to run: '+failed.map(g=>'GRANT USE CATALOG ON CATALOG `'+(g.catalog||'?')+'` TO `'+(g.principal||'<you>')+'`').join('; ');
+        toast(msg,'twarn',10000);
+      } else {
+        toast('Access granted on '+d.grants.length+' catalog(s): '+d.grants.map(g=>g.catalog).join(', '),'tok',5000);
+      }
+    }
     _cachedDeployConfig=cfg; // update cache
     _cfgShowPreview();
     // Auto-populate all pages from saved config

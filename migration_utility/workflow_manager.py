@@ -610,6 +610,20 @@ def init_metadata_flow(host: str, token: str, catalog: str = "main",
     # ── Pre-validate storage credentials to avoid UC_CLOUD_STORAGE_ACCESS_FAILURE ──
     _prevalidate_storage_credentials(s)
 
+    # Self-grant USE CATALOG/SCHEMA on this catalog before touching it --
+    # every "does not have USE CATALOG" error hit in this app came from
+    # testing against a catalog name nobody had explicitly granted access
+    # to yet. Best-effort: only succeeds if the current identity already
+    # has authority to grant (owner/admin); logged either way, never
+    # blocks the rest of this flow.
+    try:
+        from dbsql_client import ensure_catalog_access
+        _grant = ensure_catalog_access(_dbr_catalog, _dbr_schema)
+        if not _grant.get("success"):
+            logger.warning("Auto-grant on %s.%s failed (continuing anyway): %s", _dbr_catalog, _dbr_schema, _grant.get("error"))
+    except Exception as exc:
+        logger.warning("Auto-grant on %s.%s skipped: %s", _dbr_catalog, _dbr_schema, exc)
+
     # Ensure schema exists
     _exec_sql(f"CREATE SCHEMA IF NOT EXISTS `{_dbr_catalog}`.`{_dbr_schema}`")
 
