@@ -1390,14 +1390,18 @@ async function _wfDbrCredsWithFallback(){
 }
 function _wfSourceConfig(){
   const st=G('wfSrcType')?.value||'sqlserver';
+  const snowAccount=G('wfSrcAccount')?.value?.trim()||'';
   const cfg={
     source_type: st,
-    server:      G('wfSrcServer')?.value?.trim()||'',
+    // Snowflake identifies itself by account, not server -- mirror it into
+    // "server" too so nothing downstream (job naming, notebook connection
+    // resolution) ever sees an empty connection identifier for this source.
+    server:      st==='snowflake'?snowAccount:(G('wfSrcServer')?.value?.trim()||''),
     database:    st==='snowflake'?(G('wfSrcSnowDb')?.value?.trim()||G('wfSrcDb')?.value?.trim()||''):(_NON_SQL_SRC(st)?'':(G('wfSrcDb')?.value?.trim()||'')),
     username:    G('wfSrcUser')?.value?.trim()||'',
   };
   if(st==='snowflake'){
-    cfg.account=G('wfSrcAccount')?.value?.trim()||'';
+    cfg.account=snowAccount;
     cfg.warehouse=G('wfSrcWarehouse')?.value?.trim()||'';
     cfg.role=G('wfSrcRole')?.value?.trim()||'';
   }

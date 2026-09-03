@@ -259,10 +259,16 @@ print(f"📋 Load Type (meta): {{job['load_type']}}")
 
 # Parse source config (JSON string)
 source_config = json.loads(job.get("source_config", "{{}}") or "{{}}")
-SERVER   = source_config.get("server", "")
+SRC_TYPE = source_config.get("source_type", "sqlserver")
+# Snowflake identifies itself by account, not "server" -- fall back to it
+# so older metadata rows saved before that field was wired through don't
+# end up with an empty connection target.
+SERVER    = source_config.get("server", "") or (source_config.get("account", "") if SRC_TYPE == "snowflake" else "")
 DATABASE = source_config.get("database", "")
 USERNAME = source_config.get("username", "")
-SRC_TYPE = source_config.get("source_type", "sqlserver")
+SF_ACCOUNT   = source_config.get("account", "") or SERVER
+SF_WAREHOUSE = source_config.get("warehouse", "")
+SF_ROLE      = source_config.get("role", "")
 TABLE_SCHEMA = job["table_schema"]
 TABLE_NAME   = job["table_name"]
 FULL_TABLE   = job["full_table"]
@@ -291,35 +297,66 @@ print(f"🔧 Load Type: {{LOAD_TYPE}}")
 
 # COMMAND ----------
 
-encrypt = "true" if SRC_TYPE in ("azuresql", "synapse") else "false"
-trust   = "false" if SRC_TYPE in ("azuresql", "synapse") else "true"
+IS_SNOWFLAKE = (SRC_TYPE == "snowflake")
 
-# Normalize server address to hostname:port for JDBC
-# Azure SQL often uses comma notation (server.database.windows.net,1433) but
-# the JDBC driver only accepts colon notation (server:1433) in the URL.
-if "," in SERVER:
-    _host, _port = SERVER.rsplit(",", 1)
-elif ":" in SERVER:
-    _host, _port = SERVER.rsplit(":", 1)
+if IS_SNOWFLAKE:
+    # Snowflake identifies itself by account (e.g. xy12345.us-east-1), not
+    # host:port -- no comma/colon port-splitting needed.
+    print(f"🔧 JDBC target: Snowflake account {{SF_ACCOUNT}}")
+    _sf_url_params = [f"db={{DATABASE}}"] if DATABASE else []
+    if SF_WAREHOUSE:
+        _sf_url_params.append(f"warehouse={{SF_WAREHOUSE}}")
+    if SF_ROLE:
+        _sf_url_params.append(f"role={{SF_ROLE}}")
+    jdbc_url = f"jdbc:snowflake://{{SF_ACCOUNT}}.snowflakecomputing.com/?" + "&".join(_sf_url_params)
+    jdbc_props = {{
+        "user":     USERNAME,
+        "password": PASSWORD,
+        "driver":   "net.snowflake.client.jdbc.SnowflakeDriver",
+        "loginTimeout": "60",
+    }}
+
+    def _qtbl(sch, tbl):
+        return f'"{{sch}}"."{{tbl}}"'
+
+    def _qcol(col):
+        return f'"{{col}}"'
 else:
-    _host, _port = SERVER, "1433"
-print(f"🔧 JDBC target: {{_host}}:{{_port}}")
+    encrypt = "true" if SRC_TYPE in ("azuresql", "synapse") else "false"
+    trust   = "false" if SRC_TYPE in ("azuresql", "synapse") else "true"
 
-jdbc_url = (
-    f"jdbc:sqlserver://{{_host}}:{{_port}};databaseName={{DATABASE}};"
-    f"encrypt={{encrypt}};trustServerCertificate={{trust}};"
-    f"loginTimeout=60;socketTimeout=0;selectMethod=cursor"
-)
+    # Normalize server address to hostname:port for JDBC
+    # Azure SQL often uses comma notation (server.database.windows.net,1433) but
+    # the JDBC driver only accepts colon notation (server:1433) in the URL.
+    if "," in SERVER:
+        _host, _port = SERVER.rsplit(",", 1)
+    elif ":" in SERVER:
+        _host, _port = SERVER.rsplit(":", 1)
+    else:
+        _host, _port = SERVER, "1433"
+    print(f"🔧 JDBC target: {{_host}}:{{_port}}")
 
-jdbc_props = {{
-    "user":     USERNAME,
-    "password": PASSWORD,
-    "driver":   "com.microsoft.sqlserver.jdbc.SQLServerDriver",
-    "fetchsize": "10000",
-    "queryTimeout": "0",
-    "loginTimeout": "60",
-    "socketTimeout": "0",
-}}
+    jdbc_url = (
+        f"jdbc:sqlserver://{{_host}}:{{_port}};databaseName={{DATABASE}};"
+        f"encrypt={{encrypt}};trustServerCertificate={{trust}};"
+        f"loginTimeout=60;socketTimeout=0;selectMethod=cursor"
+    )
+
+    jdbc_props = {{
+        "user":     USERNAME,
+        "password": PASSWORD,
+        "driver":   "com.microsoft.sqlserver.jdbc.SQLServerDriver",
+        "fetchsize": "10000",
+        "queryTimeout": "0",
+        "loginTimeout": "60",
+        "socketTimeout": "0",
+    }}
+
+    def _qtbl(sch, tbl):
+        return f"[{{sch}}].[{{tbl}}]"
+
+    def _qcol(col):
+        return f"[{{col}}]"
 
 # Verify JDBC connectivity
 try:
@@ -374,13 +411,14 @@ run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 landing_dest = f"{{LANDING_PATH}}/{{TABLE_NAME}}"
 
 # Build query
+_qualified_table = _qtbl(TABLE_SCHEMA, TABLE_NAME)
 if use_incremental and watermark:
     _esc_wm = _sql_esc(watermark)
-    query = f"(SELECT * FROM [{{TABLE_SCHEMA}}].[{{TABLE_NAME}}] WHERE [{{WM_COL}}] > '{{_esc_wm}}') AS q"
+    query = f"(SELECT * FROM {{_qualified_table}} WHERE {{_qcol(WM_COL)}} > '{{_esc_wm}}') AS q"
     print(f"📥 Incremental extract: {{WM_COL}} > '{{_esc_wm}}'")
 else:
-    query = f"[{{TABLE_SCHEMA}}].[{{TABLE_NAME}}]"
-    print(f"📥 Full extract from [{{TABLE_SCHEMA}}].[{{TABLE_NAME}}]")
+    query = _qualified_table
+    print(f"📥 Full extract from {{_qualified_table}}")
 
 # Read from source
 try:
@@ -389,7 +427,7 @@ try:
     # COUNT query, then use numPartitions if it's a big table.
     _est_count = 0
     try:
-        _cnt_q = f"(SELECT COUNT(1) AS cnt FROM [{{TABLE_SCHEMA}}].[{{TABLE_NAME}}]) AS cq"
+        _cnt_q = f"(SELECT COUNT(1) AS cnt FROM {{_qualified_table}}) AS cq"
         _est_count = spark.read.jdbc(jdbc_url, _cnt_q, properties=jdbc_props).collect()[0][0]
         print(f"📊 Estimated row count: {{_est_count:,}}")
     except Exception:

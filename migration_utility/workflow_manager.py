@@ -1507,6 +1507,24 @@ def _derive_mapping_tag(target_config: dict) -> str:
     return ""
 
 
+def _derive_source_tag(source_config: dict) -> str:
+    """Derive a short tag identifying the SOURCE connection.
+
+    Same purpose as _derive_mapping_tag but for the source side: the same
+    table_name can legitimately exist in two different source systems
+    (e.g. SQL Server vs Snowflake, or two different servers/accounts).
+    Without this, creating a pipeline for "customers" from a second source
+    would archive/replace the first source's still-active pipeline for a
+    table of the same name, since archiving only matched on table_name.
+    """
+    sc = source_config or {}
+    ident = sc.get("server") or sc.get("account") or ""
+    db = sc.get("database", "")
+    if ident and db:
+        return f"{ident}_{db}"
+    return ident
+
+
 def _delete_dlt_pipelines_for_groups(group_ids) -> None:
     """Delete the native Spark Declarative Pipeline (DLT) for each archived group_id.
 
@@ -1555,17 +1573,28 @@ def _delete_dlt_pipelines_for_groups(group_ids) -> None:
         pass
 
 
-def _archive_existing_jobs(table_name: str, reason: str = "load_type_change", mapping_tag: str = "") -> list:
+def _archive_existing_jobs(table_name: str, reason: str = "load_type_change", mapping_tag: str = "", source_tag: str = "") -> list:
     """
     Archive existing jobs for a given table_name into wf_job_metadatahis.
     If mapping_tag is provided, ONLY archive jobs whose target_config has
     the SAME mapping (same bronze_catalog + target_schema). This allows
     the same table to have multiple pipelines with different layer mappings.
+    If source_tag is provided, ONLY archive jobs whose source_config has
+    the SAME source connection (server/account + database) -- otherwise
+    creating a pipeline for "customers" from a second source (e.g.
+    Snowflake) would archive/replace an unrelated, still-active pipeline
+    for a same-named "customers" table from a different source.
     Also removes from in-memory JOB_REGISTRY and PIPELINE_GROUPS.
     """
     archived = []
     if not _metadata_initialized:
         return archived
+
+    _extra_filter = ""
+    if mapping_tag:
+        _extra_filter += f" AND target_config LIKE '%{mapping_tag}%'"
+    if source_tag:
+        _extra_filter += f" AND source_config LIKE '%{source_tag}%'"
 
     try:
         # 1. Copy matching rows from wf_job_metadata → wf_job_metadatahis
@@ -1581,7 +1610,7 @@ def _archive_existing_jobs(table_name: str, reason: str = "load_type_change", ma
             {_esc(reason)} AS archive_reason
         FROM {_fqn(TBL_JOBS)}
         WHERE table_name = {_esc(table_name)}
-        {f"AND target_config LIKE '%{mapping_tag}%'" if mapping_tag else ""}
+        {_extra_filter}
         """
         _exec_sql(archive_sql)
 
@@ -1589,7 +1618,7 @@ def _archive_existing_jobs(table_name: str, reason: str = "load_type_change", ma
         fetch_sql = f"""
         SELECT job_id, group_id FROM {_fqn(TBL_JOBS)}
         WHERE table_name = {_esc(table_name)}
-        {f"AND target_config LIKE '%{mapping_tag}%'" if mapping_tag else ""}
+        {_extra_filter}
         """
         r = _exec_sql(fetch_sql)
         rows = r.get("result", {}).get("data_array", [])
@@ -1600,10 +1629,9 @@ def _archive_existing_jobs(table_name: str, reason: str = "load_type_change", ma
             old_group_ids.add(row[1])
 
         # 3. Delete from wf_job_metadata in Databricks
-        # If mapping_tag provided, only delete jobs with same mapping
-        if mapping_tag:
-            # Filter: only archive/delete jobs whose target_config contains same bronze+schema
-            _exec_sql(f"DELETE FROM {_fqn(TBL_JOBS)} WHERE table_name = {_esc(table_name)} AND target_config LIKE '%{mapping_tag.replace(chr(39), chr(39)+chr(39))}%'")
+        # If mapping_tag/source_tag provided, only delete jobs matching them
+        if _extra_filter:
+            _exec_sql(f"DELETE FROM {_fqn(TBL_JOBS)} WHERE table_name = {_esc(table_name)}{_extra_filter}")
         else:
             _exec_sql(f"DELETE FROM {_fqn(TBL_JOBS)} WHERE table_name = {_esc(table_name)}")
 
@@ -1687,9 +1715,12 @@ def create_pipeline_for_table(
             print(f"⚠️ Catalog validation skipped: {e}")
 
     # ── Deduplicate: archive existing jobs for this table ──
-    # Derive mapping tag from resolved target_config for multi-mapping support
+    # Derive mapping tag from resolved target_config for multi-mapping support,
+    # and a source tag so the same table_name from a DIFFERENT source
+    # connection (e.g. Snowflake vs SQL Server) isn't treated as a duplicate.
     _mapping_tag = _derive_mapping_tag(target_config)
-    archived_ids = _archive_existing_jobs(table_name, reason="load_type_change", mapping_tag=_mapping_tag)
+    _source_tag = _derive_source_tag(source_config)
+    archived_ids = _archive_existing_jobs(table_name, reason="load_type_change", mapping_tag=_mapping_tag, source_tag=_source_tag)
 
     group_id = uuid.uuid4().hex[:12]
     ts = datetime.now().isoformat()
