@@ -135,14 +135,20 @@ def save_config(cfg: dict) -> dict:
             # executions, each with its own poll-until-complete latency, making
             # "Save Config" take many seconds for a config with 15-20+ keys).
             params = {"user": user}
-            values_rows = []
+            select_rows = []
             for i, (key, value) in enumerate(cfg.items()):
                 val_str = json.dumps(value, default=str) if not isinstance(value, str) else value
                 params[f"k{i}"] = key
                 params[f"v{i}"] = val_str
-                values_rows.append(f"(%(k{i})s, %(v{i})s)")
+                # Databricks SQL rejects a column-aliased VALUES table inside
+                # a MERGE's USING clause (COLUMN_ALIASES_NOT_ALLOWED) -- this
+                # silently broke every "Save Config" ever since the single-
+                # MERGE optimization was introduced, no matter what field was
+                # being changed. A UNION ALL of aliased SELECTs is equivalent
+                # and MERGE has no issue with ordinary SELECT column aliases.
+                select_rows.append(f"SELECT %(k{i})s AS config_key, %(v{i})s AS config_value")
             sql = f"""MERGE INTO {fqn} AS t
-                    USING (VALUES {", ".join(values_rows)}) AS s(config_key, config_value)
+                    USING ({" UNION ALL ".join(select_rows)}) AS s
                     ON t.config_key = s.config_key
                     WHEN MATCHED THEN UPDATE SET config_value = s.config_value, updated_by = %(user)s, updated_at = current_timestamp()
                     WHEN NOT MATCHED THEN INSERT (config_key, config_value, updated_by, updated_at) VALUES (s.config_key, s.config_value, %(user)s, current_timestamp())"""
