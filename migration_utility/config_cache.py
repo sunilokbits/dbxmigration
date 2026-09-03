@@ -84,8 +84,18 @@ def _load_legacy_config() -> dict:
     return {}
 
 
-def save_config(cfg: dict) -> None:
-    """Write config to Delta table AND update the in-memory cache."""
+def save_config(cfg: dict) -> dict:
+    """Write config to Delta table AND update the in-memory cache.
+
+    Returns {"durable": bool, "error": str|None}. ``durable`` is False when
+    the Delta write failed and the config was only written to the local
+    deployconfig.json fallback — that file lives on the app's own ephemeral
+    source tree, which Databricks Apps replaces wholesale on every deploy
+    (SNAPSHOT mode), so anything saved there is silently lost on the next
+    redeploy. Callers should surface a non-durable save to the user instead
+    of reporting a plain success, since the setting will otherwise appear
+    to vanish and have to be re-entered.
+    """
     global _cache
     with _lock:
         user = "system"
@@ -95,9 +105,11 @@ def save_config(cfg: dict) -> None:
         except RuntimeError:
             pass
 
-        try:
-            if not cfg:
-                raise ValueError("empty config — nothing to save")
+        last_exc = None
+        durable = False
+        if not cfg:
+            last_exc = ValueError("empty config — nothing to save")
+        else:
             from dbsql_client import execute_write
             fqn = _fqn()
             # Single MERGE for all keys at once — one Databricks SQL Warehouse
@@ -111,20 +123,34 @@ def save_config(cfg: dict) -> None:
                 params[f"k{i}"] = key
                 params[f"v{i}"] = val_str
                 values_rows.append(f"(%(k{i})s, %(v{i})s)")
-            execute_write(
-                f"""MERGE INTO {fqn} AS t
+            sql = f"""MERGE INTO {fqn} AS t
                     USING (VALUES {", ".join(values_rows)}) AS s(config_key, config_value)
                     ON t.config_key = s.config_key
                     WHEN MATCHED THEN UPDATE SET config_value = s.config_value, updated_by = %(user)s, updated_at = current_timestamp()
-                    WHEN NOT MATCHED THEN INSERT (config_key, config_value, updated_by, updated_at) VALUES (s.config_key, s.config_value, %(user)s, current_timestamp())""",
-                params,
+                    WHEN NOT MATCHED THEN INSERT (config_key, config_value, updated_by, updated_at) VALUES (s.config_key, s.config_value, %(user)s, current_timestamp())"""
+            # Retry once — a stopped SQL Warehouse waking up or a transient
+            # connection drop shouldn't be treated the same as a real
+            # failure that needs the non-durable fallback.
+            for attempt in (1, 2):
+                try:
+                    execute_write(sql, params)
+                    durable = True
+                    last_exc = None
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    logger.warning("Save config to Delta failed (attempt %d/2): %s", attempt, exc)
+
+        if not durable:
+            logger.warning(
+                "Config NOT saved durably — falling back to local deployconfig.json, "
+                "which will be lost on the next deploy: %s", last_exc,
             )
-        except Exception as exc:
-            logger.warning("Could not save config to Delta: %s", exc)
             # Fallback: write to deployconfig.json
             _save_legacy_config(cfg)
 
         _cache = cfg
+        return {"durable": durable, "error": str(last_exc) if last_exc else None}
 
 
 def _save_legacy_config(cfg: dict) -> None:

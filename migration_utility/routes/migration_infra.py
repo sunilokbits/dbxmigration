@@ -65,8 +65,11 @@ def save_migration_layer():
         cfg["migration_layers"] = MIGRATION_LAYERS[layer_key]["layers"]
         if data.get("layer_mappings"):
             cfg["layer_mappings"] = data["layer_mappings"]
-        save_config(cfg)
-        return jsonify({"success": True, "message": f"Layer pattern '{MIGRATION_LAYERS[layer_key]['label']}' saved."})
+        save_result = save_config(cfg)
+        msg = f"Layer pattern '{MIGRATION_LAYERS[layer_key]['label']}' saved."
+        if not save_result.get("durable"):
+            msg += " Warning: saved locally only — could not reach the Databricks SQL Warehouse, so this will be lost on the next deploy."
+        return jsonify({"success": True, "durable": save_result.get("durable", False), "message": msg})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 

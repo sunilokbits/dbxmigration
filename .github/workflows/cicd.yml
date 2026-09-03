@@ -142,6 +142,14 @@ jobs:
         run: |
           pip install -q requests databricks-sdk >/dev/null 2>&1 || true
           python3 deploy/grant_sp_warehouse.py || echo "WARN: Could not grant SP warehouse access (non-blocking)"
+      - name: Check existing config is preserved (never overwritten)
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        if: env.SQL_WAREHOUSE_ID != ''
+        run: |
+          pip install -q databricks-sdk >/dev/null 2>&1 || true
+          python3 deploy/check_existing_config.py || echo "WARN: Could not check existing config (non-blocking)"
       - name: Adopt pre-existing secret scope (dev)
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
@@ -285,6 +293,14 @@ jobs:
         run: |
           pip install -q requests databricks-sdk >/dev/null 2>&1 || true
           python3 deploy/grant_sp_warehouse.py || echo "WARN: Could not grant SP warehouse access (non-blocking)"
+      - name: Check existing config is preserved (never overwritten)
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        if: env.SQL_WAREHOUSE_ID != ''
+        run: |
+          pip install -q databricks-sdk >/dev/null 2>&1 || true
+          python3 deploy/check_existing_config.py || echo "WARN: Could not check existing config (non-blocking)"
       - name: databricks bundle deploy -t staging
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}

@@ -4459,7 +4459,11 @@ async function saveDeployConfig(){
     const r=await fetch('/api/v1/deploy-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
     const d=await r.json();
     if(!d.success) throw new Error(d.error||'Save failed');
-    toast('Configuration saved to deployconfig.json','tok');
+    if(d.durable===false){
+      toast(d.warning||'Saved locally only — this will be lost on the next deploy. Retry once the Databricks SQL Warehouse is reachable.','twarn',8000);
+    } else {
+      toast('Configuration saved','tok');
+    }
     _cachedDeployConfig=cfg; // update cache
     const banner=G('cfgSavedBanner'); banner.style.display='block';
     setTimeout(()=>{banner.style.display='none';},4000);

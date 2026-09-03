@@ -119,8 +119,19 @@ def save_deploy_config():
             if set_devops_token(pat):
                 data["devops_pat"] = ""
 
-        save_config(data)
-        return jsonify({"success": True})
+        save_result = save_config(data)
+        if not save_result.get("durable"):
+            return jsonify({
+                "success": True,
+                "durable": False,
+                "warning": (
+                    "Saved locally only — could not reach the Databricks SQL Warehouse "
+                    "to persist this to the config table, so these settings will be "
+                    f"lost on the next deploy ({save_result.get('error') or 'unknown error'}). "
+                    "Retry once the warehouse is reachable."
+                ),
+            })
+        return jsonify({"success": True, "durable": True})
     except Exception as e:
         logger.error("Failed to save config: %s", e)
         return jsonify({"success": False, "error": str(e)})
