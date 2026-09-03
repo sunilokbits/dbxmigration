@@ -442,10 +442,21 @@ TBL_SCH_HISTORY  = "wf_scheduler_history"
 #  DATABRICKS SQL EXECUTION HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 def _dbr_session():
-    """Return requests session with auth headers."""
+    """Return requests session with auth headers.
+
+    Resolves the token fresh on every call instead of trusting the frozen
+    _dbr_token global captured once at process start (_restore_from_deploy_
+    config runs only at module import). Otherwise rotating the token via
+    Settings > Secret Vault leaves every page backed by _exec_sql (Job
+    Manager, Pipeline Studio, ...) silently authenticating with the OLD
+    token, while routes that call get_databricks_token() directly
+    (Reconciliation, Scheduler) pick up the new one immediately -- exactly
+    the "some pages work, some show a permission error" split.
+    """
     s = requests.Session()
+    token = _resolve_databricks_token() or _dbr_token
     s.headers.update({
-        "Authorization": f"Bearer {_dbr_token}",
+        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     })
     return s
@@ -1513,7 +1524,11 @@ def _delete_dlt_pipelines_for_groups(group_ids) -> None:
     try:
         dcfg = _load_deploy_config()
         host = _dbr_host or dcfg.get("databricks_host", "")
-        token = _dbr_token or _resolve_databricks_token(dcfg)
+        # Fresh resolve first, not the frozen _dbr_token global -- otherwise
+        # rotating the token via Settings (e.g. to add serving-endpoint
+        # permissions) leaves this call still authenticating with whatever
+        # token was cached at process start.
+        token = _resolve_databricks_token(dcfg) or _dbr_token
         if not host or not token:
             return
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -2245,7 +2260,11 @@ def _execute_job_run(run_id: str, job_id: str):
         # ── Resolve Databricks connection ──
         dcfg = _load_deploy_config()
         host  = _dbr_host or dcfg.get("databricks_host", "")
-        token = _dbr_token or _resolve_databricks_token(dcfg)
+        # Fresh resolve first, not the frozen _dbr_token global -- otherwise
+        # rotating the token via Settings (e.g. to add serving-endpoint
+        # permissions) leaves this call still authenticating with whatever
+        # token was cached at process start.
+        token = _resolve_databricks_token(dcfg) or _dbr_token
         cat   = _dbr_catalog or dcfg.get("metadata_catalog", "") or "main"
         sch   = _dbr_schema or dcfg.get("metadata_schema", "") or "default"
         ws    = _notebooks_workspace_path or "/Shared/MetadataPipeline"
@@ -3204,7 +3223,7 @@ def run_pipeline_on_databricks(
     # Fallback chain: explicit arg → in-memory global → deployconfig.json → hardcoded default
     dcfg = _load_deploy_config() if (not host or not token or not catalog or not schema) else {}
     host  = host or _dbr_host or dcfg.get("databricks_host", "")
-    token = token or _dbr_token or _resolve_databricks_token(dcfg)
+    token = token or _resolve_databricks_token(dcfg) or _dbr_token
     ws    = workspace_path or _notebooks_workspace_path or "/Shared/MetadataPipeline"
     cat   = catalog or _dbr_catalog or dcfg.get("metadata_catalog", "") or "main"
     sch   = schema or _dbr_schema or dcfg.get("metadata_schema", "") or "default"
