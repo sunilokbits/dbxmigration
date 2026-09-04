@@ -2977,7 +2977,11 @@ def _compute_dashboard_stats(jobs: list, runs: list, groups_count: int) -> dict:
     total_runs = len(runs)
     success_runs = sum(1 for r in runs if r.get("status") == "success")
     failed_runs = sum(1 for r in runs if r.get("status") == "failed")
-    total_rows = sum(r.get("rows_processed", 0) or 0 for r in runs)
+    # rows_processed comes back as a string from the live Delta query (the
+    # SQL Statement Execution API returns every cell as a string) but as a
+    # real int from the in-memory JOB_RUNS fallback -- sum() with a plain
+    # int accumulator raises TypeError the moment it hits a string value.
+    total_rows = sum(int(r.get("rows_processed") or 0) for r in runs)
 
     # Per-stage job counts
     extract_jobs = sum(1 for j in jobs if j.get("stage") == "extract")
