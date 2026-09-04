@@ -154,7 +154,13 @@ def save_config(cfg: dict) -> dict:
                     WHEN NOT MATCHED THEN INSERT (config_key, config_value, updated_by, updated_at) VALUES (s.config_key, s.config_value, %(user)s, current_timestamp())"""
             # Retry once — a stopped SQL Warehouse waking up or a transient
             # connection drop shouldn't be treated the same as a real
-            # failure that needs the non-durable fallback.
+            # failure that needs the non-durable fallback. A brand-new
+            # workspace (e.g. staging on its first-ever save) legitimately
+            # doesn't have the app_config table yet -- self-heal by
+            # creating it (and every other app table, idempotently) before
+            # the retry instead of only ever falling back to the local
+            # file, which is what made every save on a fresh workspace
+            # look like it "didn't stick" on refresh.
             for attempt in (1, 2):
                 try:
                     execute_write(sql, params)
@@ -164,6 +170,13 @@ def save_config(cfg: dict) -> dict:
                 except Exception as exc:
                     last_exc = exc
                     logger.warning("Save config to Delta failed (attempt %d/2): %s", attempt, exc)
+                    if attempt == 1 and "TABLE_OR_VIEW_NOT_FOUND" in str(exc):
+                        try:
+                            from dbsql_client import ensure_tables
+                            ensure_tables()
+                            logger.info("app_config table created — retrying save")
+                        except Exception as ensure_exc:
+                            logger.warning("Could not create app_config table: %s", ensure_exc)
 
         if not durable:
             logger.warning(

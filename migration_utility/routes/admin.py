@@ -25,6 +25,33 @@ def _fqn(table: str) -> str:
     return f"{catalog}.{schema}.{table}"
 
 
+_last_ensured_catalog_schema = None
+
+
+def _ensure_app_tables():
+    """Lazily (re)create this app's own Delta tables (user_roles included)
+    against whatever catalog.schema get_catalog_schema() currently
+    resolves to. Switching the Metadata Catalog in Settings correctly
+    relocates WHERE user_roles is looked up, but nothing actually creates
+    it there until Settings' save handler or Create MetadataFlow happens
+    to run -- hitting User Management first crashed with a raw
+    TABLE_OR_VIEW_NOT_FOUND 500 instead of self-healing. Only re-runs the
+    (idempotent) DDL when the resolved catalog.schema actually changes,
+    not on every request.
+    """
+    global _last_ensured_catalog_schema
+    current = get_catalog_schema()
+    if current == _last_ensured_catalog_schema:
+        return
+    try:
+        from dbsql_client import ensure_tables, reset_tables_initialised
+        reset_tables_initialised()
+        ensure_tables()
+        _last_ensured_catalog_schema = current
+    except Exception as exc:
+        logger.warning("Could not ensure app tables in %s.%s: %s", current[0], current[1], exc)
+
+
 def _admin_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -38,6 +65,7 @@ def _admin_required(f):
 @login_required
 @_admin_required
 def list_users():
+    _ensure_app_tables()
     rows = execute_query(
         f"SELECT user_email, display_name, role, updated_at FROM {_fqn('user_roles')} ORDER BY user_email"
     )
@@ -57,6 +85,7 @@ def list_users():
 @login_required
 @_admin_required
 def create_user():
+    _ensure_app_tables()
     data = request.get_json(silent=True) or {}
     email = data.get("username", "").strip().lower()
     display_name = data.get("display_name", "").strip()
@@ -93,6 +122,7 @@ def create_user():
 @login_required
 @_admin_required
 def update_user(user_email):
+    _ensure_app_tables()
     user_email = user_email.strip().lower()
     data = request.get_json(silent=True) or {}
 
@@ -140,6 +170,7 @@ def update_user(user_email):
 @login_required
 @_admin_required
 def delete_user(user_email):
+    _ensure_app_tables()
     user_email = user_email.strip().lower()
 
     if user_email == session.get("user"):
