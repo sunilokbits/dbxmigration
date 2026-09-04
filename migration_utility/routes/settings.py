@@ -169,12 +169,25 @@ def save_deploy_config():
         # bronze, silver, reconciliation, loggingdetails) -- so a self-grant
         # attempt runs for whichever ones the user just typed a new catalog
         # name into, instead of only the Metadata Catalog.
+        def _is_real_catalog_name(name: str) -> bool:
+            # A handful of dropdown placeholders in index.html shipped without
+            # an explicit value="" on their <option> (e.g. the Reconciliation/
+            # Loggingdetails layer catalog selects), so an unselected <select>'s
+            # .value defaulted to its own placeholder TEXT ("— select catalog
+            # —") instead of "". That leaked straight into medallion_layer_
+            # mapping and triggered a nonsense auto-grant attempt on a catalog
+            # named "— select catalog —". Fixed at the source in index.html/
+            # main.js, but guard here too against any other dropdown with the
+            # same bug.
+            n = (name or "").strip()
+            return bool(n) and "select catalog" not in n.lower() and "—" not in n
+
         _catalogs_to_grant = {}
-        if _new_meta_cat:
+        if _new_meta_cat and _is_real_catalog_name(_new_meta_cat):
             _catalogs_to_grant[(_new_meta_cat, _new_meta_sch)] = "metadata_catalog"
         _layer_mapping = (data.get("existing_setting") or {}).get("medallion_layer_mapping") or {}
         for _layer_name, _layer_cfg in _layer_mapping.items():
-            if isinstance(_layer_cfg, dict) and _layer_cfg.get("catalog"):
+            if isinstance(_layer_cfg, dict) and _is_real_catalog_name(_layer_cfg.get("catalog", "")):
                 _catalogs_to_grant.setdefault(
                     (_layer_cfg["catalog"], _layer_cfg.get("schema", "")), f"layer:{_layer_name}"
                 )

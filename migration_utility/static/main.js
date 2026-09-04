@@ -636,7 +636,7 @@ function updDeployList(){
 
 async function deployAll(){
   const host=G('dbHost').value.trim(),token=G('dbToken').value.trim(),path=G('depPath').value.trim()||'/Shared/Migrations';
-  if(!host||!token){toast('Enter Workspace Host and Access Token.','terr');return;}
+  if(!host){toast('Enter Workspace Host in Settings.','terr');return;}
   if(!HELPER_RESULT){toast('Convert objects in Step 1 first.','tinfo');return;}
   const btn=G('btnDeployAll'),lbl=G('depBtnTxt'),prog=G('depProg');
   btn.disabled=true;lbl.textContent='Deploying…';
@@ -808,7 +808,7 @@ async function nbPrSubmit(mode, folderPath){
 
 async function testConn(){
   const host=G('dbHost').value.trim(),token=G('dbToken').value.trim();
-  if(!host||!token){toast('Host and token required.','terr');return;}
+  if(!host){toast('Host required.','terr');return;}
   G('connStatus').innerHTML='<div class="alert a-info"><span class="spin" style="border-top-color:var(--blue-fg)"></span> Connecting…</div>';
   G('connInfo').innerHTML='<div class="loading-state"><div class="spin spin-lg"></div><span>Fetching workspace info…</span></div>';
   try{
@@ -1620,7 +1620,7 @@ let _wfNbDeployed=false;
 
 async function wfDeployNotebooks(){
   const c=await _wfDbrCredsWithFallback();
-  if(!c.host||!c.token){toast('Configure Databricks connection in Settings first','terr');return;}
+  if(!c.host){toast('Configure Databricks connection in Settings first','terr');return;}
   const btn=G('btnWfDeployNb');btn.disabled=true;btn.textContent='Deploying…';
   const dot=G('wfNbDot'),lbl=G('wfNbLabel'),msg=G('wfNbMsg');
   const pipelineMode=(G('wfNbPipelineMode')||{}).value||'standard';
@@ -1688,7 +1688,7 @@ async function wfRunOnDatabricks(groupId, pwd){
   if(!_wfNbDeployed||!_wfMetaReady){
     try{
       const cfgr=await fetch('/api/v1/deploy-config');const cfgd=await cfgr.json();
-      if(cfgd.success&&cfgd.config?.databricks_host&&cfgd.config?.databricks_token){
+      if(cfgd.success&&cfgd.config?.databricks_host){
         _wfMetaReady=true;
         _wfNbDeployed=true;
       }
@@ -2578,7 +2578,11 @@ async function wfRefreshStats(){
 let _wfClustersLoaded=false;
 async function wfFetchClusters(){
   const c=await _wfDbrCredsWithFallback();
-  if(!c.host||!c.token) return;  // silently skip — no credentials configured yet
+  // Token is intentionally never echoed back to the browser as a real value
+  // (masked, or lives purely in Databricks Secrets) -- the backend resolves
+  // it server-side, so gating on c.token here silently emptied the cluster
+  // dropdown with zero feedback even when real running clusters existed.
+  if(!c.host) return;  // no host configured yet — nothing to query
   const sel=G('wfClusterSelect'), stat=G('wfClusterStatus'), info=G('wfClusterInfo');
   stat.textContent='Loading…';stat.style.color='var(--t4)';
   try{
@@ -2642,7 +2646,7 @@ async function wfStartCluster(){
   const opt=sel.options[sel.selectedIndex];
   if(opt&&opt.dataset.state==='RUNNING'){toast('Cluster is already running','tinfo');return;}
   const c=await _wfDbrCredsWithFallback();
-  if(!c.host||!c.token){toast('Configure Databricks connection in Settings first','terr');return;}
+  if(!c.host){toast('Configure Databricks connection in Settings first','terr');return;}
   const btn=G('btnStartCluster');
   btn.disabled=true;btn.textContent='Starting…';
   try{
@@ -3231,11 +3235,10 @@ wfRefreshPipelines=async function(){
 };
 
 async function wfFetchDbrOutput(runId){
-  const host=(G('wfDbrHost')||{}).value||'';
-  const token=(G('wfDbrToken')||{}).value||'';
-  if(!host||!token){_toast('Enter Databricks host & token first','warn');return;}
+  const c=await _wfDbrCredsWithFallback();
+  if(!c.host){_toast('Enter Databricks host in Settings first','warn');return;}
   try{
-    const r=await fetch('/api/v1/workflow/runs/'+runId+'/databricks-output',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host,token})});
+    const r=await fetch('/api/v1/workflow/runs/'+runId+'/databricks-output',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host:c.host,token:c.token})});
     const d=await r.json();
     if(!d.success){_toast(d.message||'Failed to fetch output','error');return;}
     let msg='';
@@ -3499,7 +3502,7 @@ function cfgExLoadSchemas(layer){
   const schSel=G('cfgEx'+cap+'Schema');
   if(!catSel||!schSel) return;
   const catalog=catSel.value;
-  if(!catalog){schSel.innerHTML='<option>\u2014 select catalog first \u2014</option>';return;}
+  if(!catalog){schSel.innerHTML='<option value="">\u2014 select catalog first \u2014</option>';return;}
   const saved=schSel.getAttribute('data-saved')||'';
   schSel.innerHTML='<option value="">\u2014 select schema \u2014</option>';
   (_cfgExSchemaMap[catalog]||[]).slice().sort().forEach(s=>{

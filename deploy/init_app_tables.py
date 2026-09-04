@@ -152,6 +152,16 @@ try:
     # see app_config using the exact same kind of call the app makes at
     # runtime, and only replace it with this (just-proven-working) deploy
     # identity's PAT when it can't.
+    # Print both a plain line (for anyone reading the raw log) and a GitHub
+    # Actions workflow-command-prefixed line, which turns into a check-run
+    # annotation retrievable via the public
+    # /repos/{owner}/{repo}/check-runs/{job_id}/annotations API without
+    # needing the elevated auth "download job logs" requires -- this is the
+    # only way to see what actually happened here without repo-admin rights.
+    def _report(level, msg):
+        print(msg)
+        print(f"::{level}::{msg}")
+
     try:
         secret_scope = _read_app_yml_env("DATABRICKS_SECRET_SCOPE", "migration-studio")
         needs_repair = True
@@ -159,8 +169,9 @@ try:
             import base64 as _b64
             stored_secret = w.secrets.get_secret(scope=secret_scope, key="databricks-token")
             stored_token = _b64.b64decode(stored_secret.value).decode("utf-8") if stored_secret.value else ""
-        except Exception:
+        except Exception as exc:
             stored_token = ""
+            _report("warning", f"Could not read databricks-token secret to test it ({exc}) — will reseed it")
 
         if stored_token and stored_token.strip().upper() != "REPLACE_ME":
             try:
@@ -171,20 +182,20 @@ try:
                     wait_timeout="30s",
                 )
                 needs_repair = False
-                print("databricks-token secret can already see app_config — no repair needed")
+                _report("notice", "databricks-token secret can already see app_config — no repair needed")
             except Exception as exc:
-                print(f"databricks-token secret cannot see app_config ({exc}) — repairing")
+                _report("warning", f"databricks-token secret cannot see app_config ({exc}) — repairing")
         else:
-            print("databricks-token secret is empty/placeholder — seeding it")
+            _report("notice", "databricks-token secret is empty/placeholder — seeding it")
 
         if needs_repair:
             deploy_token = os.environ.get("DATABRICKS_TOKEN", "")
             if deploy_token:
                 w.secrets.put_secret(scope=secret_scope, key="databricks-token", string_value=deploy_token)
-                print("Repaired databricks-token secret with the deploy identity's PAT")
+                _report("notice", "Repaired databricks-token secret with the deploy identity's PAT")
             else:
-                print("WARN: no DATABRICKS_TOKEN in this job's env to repair with")
+                _report("warning", "no DATABRICKS_TOKEN in this job's env to repair with")
     except Exception as exc:
-        print(f"WARN: could not verify/repair databricks-token secret (non-blocking): {exc}")
+        _report("warning", f"could not verify/repair databricks-token secret (non-blocking): {exc}")
 except Exception as exc:
     print(f"WARN: could not bootstrap app tables in {catalog}.{schema} (non-blocking): {exc}")
