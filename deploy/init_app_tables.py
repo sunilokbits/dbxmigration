@@ -27,6 +27,11 @@ EXISTS's SQL-level short-circuiting. Schema/table DDL doesn't have this
 issue (confirmed working) and still runs via the Statement Execution API.
 Idempotent and non-blocking throughout -- a permission/storage gap here
 is a metastore-admin problem to fix, not something to block the deploy on.
+
+Also verifies (and, if needed, repairs) the databricks-token Databricks
+Secret the app's own runtime queries actually use -- see the comment
+above the verify/repair block below for why a stale value there produces
+the exact same symptom as the tables never having been created at all.
 """
 import os
 import re
@@ -133,5 +138,53 @@ try:
         except Exception as exc:
             print(f"WARN: statement failed (non-blocking): {label} -> {exc}")
     print(f"Bootstrapped {ok_count}/{len(statements)} schema/table statement(s) in {catalog}.{schema}")
+
+    # The app's own runtime queries never use this script's/CI's deploy PAT
+    # directly -- they use whatever PAT is stored in the databricks-token
+    # Databricks Secret (deliberately never clobbered by the CI "Scaffold
+    # secret scope keys" step, to protect a value a client may have set via
+    # Settings > Secret Vault). Unity Catalog returns TABLE_OR_VIEW_NOT_FOUND
+    # -- not PERMISSION_DENIED -- for an object the querying principal can't
+    # see, which looks identical to "doesn't exist" in the app's own error
+    # message. That made every earlier catalog-existence fix look like it
+    # didn't work on a workspace whose stored secret is a stale/different/
+    # under-privileged token from an earlier deploy. Verify it can actually
+    # see app_config using the exact same kind of call the app makes at
+    # runtime, and only replace it with this (just-proven-working) deploy
+    # identity's PAT when it can't.
+    try:
+        secret_scope = _read_app_yml_env("DATABRICKS_SECRET_SCOPE", "migration-studio")
+        needs_repair = True
+        try:
+            import base64 as _b64
+            stored_secret = w.secrets.get_secret(scope=secret_scope, key="databricks-token")
+            stored_token = _b64.b64decode(stored_secret.value).decode("utf-8") if stored_secret.value else ""
+        except Exception:
+            stored_token = ""
+
+        if stored_token and stored_token.strip().upper() != "REPLACE_ME":
+            try:
+                test_w = WorkspaceClient(host=w.config.host, token=stored_token, auth_type="pat")
+                test_w.statement_execution.execute_statement(
+                    warehouse_id=wh_id,
+                    statement=f"SELECT 1 FROM `{catalog}`.`{schema}`.app_config LIMIT 1",
+                    wait_timeout="30s",
+                )
+                needs_repair = False
+                print("databricks-token secret can already see app_config — no repair needed")
+            except Exception as exc:
+                print(f"databricks-token secret cannot see app_config ({exc}) — repairing")
+        else:
+            print("databricks-token secret is empty/placeholder — seeding it")
+
+        if needs_repair:
+            deploy_token = os.environ.get("DATABRICKS_TOKEN", "")
+            if deploy_token:
+                w.secrets.put_secret(scope=secret_scope, key="databricks-token", string_value=deploy_token)
+                print("Repaired databricks-token secret with the deploy identity's PAT")
+            else:
+                print("WARN: no DATABRICKS_TOKEN in this job's env to repair with")
+    except Exception as exc:
+        print(f"WARN: could not verify/repair databricks-token secret (non-blocking): {exc}")
 except Exception as exc:
     print(f"WARN: could not bootstrap app tables in {catalog}.{schema} (non-blocking): {exc}")
