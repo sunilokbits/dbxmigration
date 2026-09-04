@@ -555,6 +555,12 @@ async function convertSelected(){
     setTimeout(()=>prog.style.width='0%',450);
     if(!d.success){G('codeOut').innerHTML='<div class="alert a-err" style="margin:14px;"><span class="a-ico">✕</span>'+(d.error||'Conversion failed')+'</div>';toast(d.error||'Conversion failed','terr');return;}
     HELPER_RESULT=d;renderSeparateFiles(d);updDeployList();
+    // Persist so the Deploy Notebooks page (and a "Push to DevOps"/"Deploy All"
+    // click after switching tabs or reloading) still finds this conversion --
+    // HELPER_RESULT was previously a plain in-memory global wiped by any reload,
+    // which made "Ready to Deploy" show "Convert objects in Step 1 first" even
+    // right after a successful conversion.
+    try{sessionStorage.setItem('ms_helper_result',JSON.stringify(d));}catch(e){}
     const msg=(d.sp_view_count||0)+' file'+((d.sp_view_count||0)!==1?'s':'')+(d.udf_count?' + HelperFunction.py ('+d.udf_count+' UDF'+(d.udf_count!==1?'s':'')+')'  :'')+' — '+d.object_count+' objects converted';
     toast(msg,'tok',4500);G('wf1').className='wf-step done';
   }catch(e){
@@ -806,9 +812,9 @@ async function nbPrSubmit(mode, folderPath){
 }
 
 
-async function testConn(){
+async function testConn(silent){
   const host=G('dbHost').value.trim(),token=G('dbToken').value.trim();
-  if(!host){toast('Host required.','terr');return;}
+  if(!host){if(!silent)toast('Host required.','terr');return;}
   G('connStatus').innerHTML='<div class="alert a-info"><span class="spin" style="border-top-color:var(--blue-fg)"></span> Connecting…</div>';
   G('connInfo').innerHTML='<div class="loading-state"><div class="spin spin-lg"></div><span>Fetching workspace info…</span></div>';
   try{
@@ -819,9 +825,24 @@ async function testConn(){
       let h=`<div class="alert a-info" style="margin-bottom:12px;"><span class="a-ico">🌐</span><span><strong>Host:</strong> ${host}</span></div>`;
       (d.clusters||[]).forEach(c=>{const sc=c.state==='RUNNING'?'tag-run':c.state==='TERMINATED'?'tag-stop':'tag-pend';h+=`<div class="cl-card"><div class="cl-name">${c.cluster_name} <span class="tag ${sc}">${c.state}</span></div><div class="cl-meta"><span>ID: ${c.cluster_id}</span><span>DBR ${c.spark_version||'N/A'}</span></div></div>`;});
       if(!(d.clusters||[]).length)h+='<div class="alert a-warn"><span class="a-ico">⚠</span> No clusters found.</div>';
-      G('connInfo').innerHTML=h;toast('Connected to Databricks!','tok');G('wf2').className='wf-step done';
-    }else{G('connStatus').innerHTML=`<div class="alert a-err"><span class="a-ico">✕</span>${d.error}</div>`;G('connInfo').innerHTML=`<pre style="font-size:11px;color:var(--t3);padding:10px;">${JSON.stringify(d,null,2)}</pre>`;toast('Connection failed: '+d.error,'terr');}
-  }catch(e){G('connStatus').innerHTML=`<div class="alert a-err"><span class="a-ico">✕</span>${e.message}</div>`;toast('Error: '+e.message,'terr');}
+      G('connInfo').innerHTML=h;if(!silent)toast('Connected to Databricks!','tok');G('wf2').className='wf-step done';
+    }else{G('connStatus').innerHTML=`<div class="alert a-err"><span class="a-ico">✕</span>${d.error}</div>`;G('connInfo').innerHTML=`<pre style="font-size:11px;color:var(--t3);padding:10px;">${JSON.stringify(d,null,2)}</pre>`;if(!silent)toast('Connection failed: '+d.error,'terr');}
+  }catch(e){G('connStatus').innerHTML=`<div class="alert a-err"><span class="a-ico">✕</span>${e.message}</div>`;if(!silent)toast('Error: '+e.message,'terr');}
+}
+
+// Deploy Notebooks page already has host/token from deployconfig.json (this is
+// a Databricks App -- DATABRICKS_HOST is always available) by the time the user
+// gets here, same as Workflow Manager's MetadataFlow tab auto-checking its own
+// connection (see the switchTab override's 'wf-metadata' branch below). This
+// page had no equivalent, so it always showed "Not Connected" until the user
+// manually clicked Test Connection even though the app was already configured.
+let _deployConnChecked=false;
+async function _autoCheckDeployConn(){
+  if(_deployConnChecked) return;
+  const host=(G('dbHost')||{}).value?.trim();
+  if(!host) return;
+  _deployConnChecked=true;
+  await testConn(true);
 }
 
 // ── UC Config Loader ─────────────────────────────────────────────────────────
@@ -1302,6 +1323,9 @@ async function hlRefreshStats(){
     if(id==='wf-metadata'){
       // Restore Deploy Notebooks card visibility on page reload / tab switch
       if(typeof wfCheckMetaStatus==='function') wfCheckMetaStatus();
+    }
+    if(id==='deploy'){
+      if(typeof _autoCheckDeployConn==='function') _autoCheckDeployConn();
     }
   };
 })();
@@ -3562,11 +3586,16 @@ async function cfgExTestAccess(layer){
     const r=await fetch('/api/v1/settings/validate-access',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({catalog,schema,layer})});
     const d=await r.json();
-    if(d.success){
+    // validate-access always returns success:true (it's a well-formed response,
+    // not an error) with the real pass/fail in valid:true/false + error -- checking
+    // d.success here showed a green "Validated" badge unconditionally, even when
+    // d.valid was false with a real catalog/schema/storage error in d.error.
+    if(d.success&&d.valid){
       statusEl.innerHTML='<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:#d1fae5;color:#059669;font-weight:600;">\u2713 Validated</span>';
       _cfgExLayerValidation[layer]=true;
     } else {
       statusEl.innerHTML='<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:#fee2e2;color:#dc2626;font-weight:600;">'+(d.error||'Failed')+'</span>';
+      _cfgExLayerValidation[layer]=false;
     }
   }catch(e){
     statusEl.innerHTML='<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:#fee2e2;color:#dc2626;font-weight:600;">Error</span>';
@@ -4775,8 +4804,24 @@ async function saveSecretVaultItem(key){
   }
   // Auto-populate source connection from deployconfig.json
   _srcSyncFromConfig();
-  // Auto-populate Databricks credentials from deployconfig.json
-  _dbrSyncFromConfig();
+  // Auto-populate Databricks credentials from deployconfig.json, then silently
+  // check connectivity so landing directly on #deploy (URL hash) also shows
+  // "Connected" instead of "Not Connected" without a manual Test Connection
+  // click -- the switchTab override's 'deploy' branch only covers switching
+  // TO the tab after this IIFE has already run, not this direct-hash-load path.
+  _dbrSyncFromConfig().then(()=>{ if(typeof _autoCheckDeployConn==='function') _autoCheckDeployConn(); });
+  // Restore a prior "Convert to PySpark" result so Deploy Notebooks / Push to
+  // DevOps still work after a reload or tab switch instead of demanding a
+  // re-conversion of objects that were already converted this session.
+  try{
+    const saved=sessionStorage.getItem('ms_helper_result');
+    if(saved){
+      HELPER_RESULT=JSON.parse(saved);
+      renderSeparateFiles(HELPER_RESULT);
+      updDeployList();
+      G('wf1').className='wf-step done';
+    }
+  }catch(e){}
 })();
 
 // ═══════════════════════════════════════════════════════════════════════════════

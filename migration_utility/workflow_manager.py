@@ -911,6 +911,43 @@ def _esc(val):
         return "NULL"
     return "'" + str(val).replace("'", "''") + "'"
 
+
+def _exec_sql_checked(sql: str, context: str, attempts: int = 3) -> bool:
+    """Run a write statement and actually verify it succeeded.
+
+    _exec_sql() never raises on a Delta-level failure (e.g. a MERGE that
+    lost a ConcurrentModificationException to another worker thread writing
+    the same row at the same time -- up to _MAX_WORKER_THREADS=20 of these
+    sync calls can race against wf_jobs/wf_runs/wf_pipelines concurrently)
+    -- it returns {"error": ...} or a status dict with state=="FAILED"
+    instead. Every _sync_*_to_dbr() caller used to call _exec_sql(sql) and
+    discard the result, so that kind of failure was invisible: the
+    in-memory job/run object got the correct final status, but the Delta
+    row silently kept whatever an earlier write had left there (e.g.
+    "created", never advancing to "success"/"failed") -- exactly what
+    stranded Pipeline Studio, the Dashboard tiles, and the Audit Log on a
+    stale status after the job had actually finished on Databricks.
+
+    Retries a bounded number of times (Delta concurrent-write conflicts are
+    normally transient and succeed a moment later) and logs -- rather than
+    silently swallowing -- a failure that persists after every attempt, so
+    it's at least visible instead of permanently and invisibly stranding a
+    row.
+    """
+    last_err = None
+    for attempt in range(1, attempts + 1):
+        result = _exec_sql(sql)
+        state = (result or {}).get("status", {}).get("state", "")
+        err = result.get("error") if isinstance(result, dict) else None
+        if not err and state != "FAILED":
+            return True
+        last_err = err or (result.get("status", {}).get("error", {}).get("message") if isinstance(result, dict) else None) or state or "unknown error"
+        if attempt < attempts:
+            time.sleep(0.5 * attempt)
+    logger.error("Sync to Databricks failed after %d attempt(s) (%s): %s", attempts, context, last_err)
+    return False
+
+
 def _sync_pipeline_to_dbr(group: dict):
     """Upsert a pipeline group to Databricks."""
     if not _metadata_initialized:
@@ -938,9 +975,9 @@ def _sync_pipeline_to_dbr(group: dict):
             {_esc(json.dumps(group.get('target_config') or {}))},
             current_timestamp(), current_timestamp()
         )"""
-        _exec_sql(sql)
-    except Exception:
-        pass  # non-blocking
+        _exec_sql_checked(sql, f"pipeline {group.get('group_id')}")
+    except Exception as exc:
+        logger.error("_sync_pipeline_to_dbr(%s) raised: %s", group.get('group_id'), exc)
 
 def _sync_job_to_dbr(job: dict):
     """Upsert a job to Databricks."""
@@ -978,9 +1015,9 @@ def _sync_job_to_dbr(job: dict):
             {_esc(json.dumps(job.get('target_config') or {}))},
             current_timestamp(), current_timestamp()
         )"""
-        _exec_sql(sql)
-    except Exception:
-        pass
+        _exec_sql_checked(sql, f"job {job.get('job_id')} status={job.get('status')}")
+    except Exception as exc:
+        logger.error("_sync_job_to_dbr(%s) raised: %s", job.get('job_id'), exc)
 
 def _sync_run_to_dbr(run: dict):
     """Insert/update a run record to Databricks."""
@@ -1009,9 +1046,9 @@ def _sync_run_to_dbr(run: dict):
             {_esc(run.get('started_at'))}, {run.get('rows_processed', 0)},
             {_esc(logs_str)}
         )"""
-        _exec_sql(sql)
-    except Exception:
-        pass
+        _exec_sql_checked(sql, f"run {run.get('run_id')} status={run.get('status')}")
+    except Exception as exc:
+        logger.error("_sync_run_to_dbr(%s) raised: %s", run.get('run_id'), exc)
 
 def _sync_watermark_to_dbr(table_name: str, wm: dict):
     """Upsert watermark to Databricks."""
@@ -1027,9 +1064,9 @@ def _sync_watermark_to_dbr(table_name: str, wm: dict):
             updated_at = current_timestamp()
         WHEN NOT MATCHED THEN INSERT (table_name, watermark_column, last_value, updated_at)
         VALUES ({_esc(table_name)}, {_esc(wm.get('column'))}, {_esc(wm.get('last_value'))}, current_timestamp())"""
-        _exec_sql(sql)
-    except Exception:
-        pass
+        _exec_sql_checked(sql, f"watermark {table_name}")
+    except Exception as exc:
+        logger.error("_sync_watermark_to_dbr(%s) raised: %s", table_name, exc)
 
 def _delete_pipeline_from_dbr(group_id: str):
     """Delete pipeline and associated jobs from Databricks."""
