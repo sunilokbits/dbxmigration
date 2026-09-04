@@ -4,7 +4,7 @@ import os, json
 
 from .auth import login_required
 from log_config import get_logger
-from config_cache import get_config, get_databricks_token
+from config_cache import get_config, get_databricks_token, normalize_host
 from audit import log_action
 from sp_converter import get_pyspark_code
 from databricks_connector import DatabricksConnector
@@ -18,7 +18,7 @@ databricks_bp = Blueprint("databricks", __name__, url_prefix="/api/v1")
 def _uc_creds(data=None):
     cfg = get_config()
     d = data or {}
-    host = (d.get("host") or "").strip() or cfg.get("databricks_host", "").rstrip("/")
+    host = normalize_host(d.get("host") or cfg.get("databricks_host", ""))
     token = (d.get("token") or "").strip()
     if not token or is_masked(token):
         token = get_databricks_token()
@@ -32,7 +32,7 @@ def _uc_creds(data=None):
 def test_databricks_connection():
     try:
         data = request.get_json()
-        host = data.get("host", "").strip()
+        host = normalize_host(data.get("host", ""))
         token = data.get("token", "").strip()
         # If token is masked, resolve from Key Vault
         if not token or is_masked(token):
@@ -56,7 +56,7 @@ def test_databricks_connection():
 def upload_notebook():
     try:
         data = request.get_json()
-        host = data.get("host", "").strip()
+        host = normalize_host(data.get("host", ""))
         token = data.get("token", "").strip()
         if not token or is_masked(token):
             token = get_databricks_token()
@@ -85,7 +85,7 @@ def upload_notebook():
 def upload_multiple_notebooks():
     try:
         data = request.get_json()
-        host = data.get("host", "").strip()
+        host = normalize_host(data.get("host", ""))
         token = data.get("token", "").strip()
         if not token or is_masked(token):
             token = get_databricks_token()
@@ -117,7 +117,7 @@ def upload_multiple_notebooks():
 def upload_helper_notebook():
     try:
         data = request.get_json()
-        host = data.get("host", "").strip()
+        host = normalize_host(data.get("host", ""))
         token = data.get("token", "").strip()
         if not token or is_masked(token):
             token = get_databricks_token()

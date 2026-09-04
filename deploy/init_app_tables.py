@@ -86,12 +86,35 @@ try:
         try:
             w.catalogs.create(name=catalog)
             print(f"Created catalog '{catalog}'")
-        except Exception as exc:
-            print(
-                f"WARN: could not create catalog '{catalog}' (non-blocking): {exc}\n"
-                f"  A metastore admin likely needs to create it manually with an explicit "
-                f"managed location, e.g.: CREATE CATALOG {catalog} MANAGED LOCATION '<abfss-path>'"
-            )
+        except Exception as exc1:
+            # This metastore has no default storage root, so a bare CREATE
+            # CATALOG (no explicit location) fails here too. Instead of
+            # giving up, piggyback on any external location that already
+            # exists in this workspace (e.g. the bronze/silver root the
+            # Infra Setup tool created) -- Unity Catalog only requires the
+            # storage_root to fall under a registered external location's
+            # URL, not that it have its own dedicated one.
+            created = False
+            try:
+                locations = list(w.external_locations.list())
+            except Exception:
+                locations = []
+            for loc in locations:
+                try:
+                    w.catalogs.create(name=catalog, storage_root=f"{loc.url.rstrip('/')}/{catalog}")
+                    print(f"Created catalog '{catalog}' under existing external location '{loc.name}'")
+                    created = True
+                    break
+                except Exception:
+                    continue
+            if not created:
+                print(
+                    f"WARN: could not create catalog '{catalog}' (non-blocking): {exc1}\n"
+                    f"  No usable external location found in this workspace either "
+                    f"({len(locations)} checked). A metastore admin needs to create the "
+                    f"catalog manually with an explicit managed location, e.g.: "
+                    f"CREATE CATALOG {catalog} MANAGED LOCATION '<abfss-path>'"
+                )
 
     ok_count = 0
     for stmt in statements:

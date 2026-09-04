@@ -4,7 +4,7 @@ from functools import wraps
 
 from flask import Blueprint, jsonify, request, session, Response
 from .auth import login_required
-from config_cache import get_config, get_databricks_token
+from config_cache import get_config, get_databricks_token, normalize_host
 from log_config import get_logger
 
 logger = get_logger(__name__)
@@ -258,7 +258,7 @@ def test_databricks_conn():
     try:
         import requests as req
         body = request.get_json(force=True)
-        host = (body.get("databricks_host") or "").rstrip("/")
+        host = normalize_host(body.get("databricks_host") or "")
         token = body.get("databricks_token") or ""
         # If token is masked, use the real one from secrets
         from secrets_helper import is_masked
@@ -303,7 +303,7 @@ def test_storage_credential():
         from secrets_helper import is_masked
 
         body = request.get_json(force=True)
-        host = (body.get("databricks_host") or "").rstrip("/")
+        host = normalize_host(body.get("databricks_host") or "")
         token = body.get("databricks_token") or ""
         cred_name = (body.get("storage_credential_name") or "").strip()
         test_url = (body.get("test_url") or "").strip()
@@ -311,7 +311,7 @@ def test_storage_credential():
 
         cfg = get_config()
         if not host:
-            host = (cfg.get("databricks_host") or "").rstrip("/")
+            host = cfg.get("databricks_host") or ""
         if not host:
             return jsonify({"success": False, "error": "Databricks host is required"})
         if not cred_name:

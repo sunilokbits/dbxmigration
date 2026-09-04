@@ -26,7 +26,13 @@ catalog_discovery_bp = Blueprint("catalog_discovery", __name__)
 # ══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
 # ══════════════════════════════════════════════════════════════════════════════
+# Databricks Apps injects DATABRICKS_HOST at runtime WITHOUT an https://
+# scheme, unlike a PAT-based deploy where a user pastes the full URL --
+# every direct `requests` call built from the bare env var died with
+# "Invalid URL ... No scheme supplied".
 _HOST = os.environ.get("DATABRICKS_HOST", "").rstrip("/")
+if _HOST and not _HOST.startswith("http"):
+    _HOST = "https://" + _HOST
 _WAREHOUSE_ID = os.environ.get("DATABRICKS_SQL_WAREHOUSE_ID", "")
 _CACHE_TTL_SECONDS = int(os.environ.get("CATALOG_CACHE_TTL", "300"))  # 5 min default
 _MAX_TABLES_PER_SCHEMA = int(os.environ.get("MAX_TABLES_PER_SCHEMA", "500"))

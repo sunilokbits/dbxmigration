@@ -265,12 +265,34 @@ def ensure_tables():
                     try:
                         w.catalogs.create(name=cat)
                         logger.info("Created catalog '%s'", cat)
-                    except Exception as exc:
-                        logger.warning(
-                            "Could not create catalog '%s' (non-blocking) -- a metastore "
-                            "admin likely needs to create it manually with an explicit "
-                            "managed location: %s", cat, exc,
-                        )
+                    except Exception as exc1:
+                        # No default storage root on this metastore -- a bare
+                        # CREATE CATALOG fails here too. Piggyback on any
+                        # external location already registered in this
+                        # workspace (e.g. bronze/silver root from the Infra
+                        # Setup tool); Unity Catalog only requires the
+                        # storage_root to fall under a registered location's
+                        # URL, not that the catalog have its own dedicated one.
+                        created = False
+                        try:
+                            locations = list(w.external_locations.list())
+                        except Exception:
+                            locations = []
+                        for loc in locations:
+                            try:
+                                w.catalogs.create(name=cat, storage_root=f"{loc.url.rstrip('/')}/{cat}")
+                                logger.info("Created catalog '%s' under external location '%s'", cat, loc.name)
+                                created = True
+                                break
+                            except Exception:
+                                continue
+                        if not created:
+                            logger.warning(
+                                "Could not create catalog '%s' (non-blocking, %d external "
+                                "location(s) checked) -- a metastore admin likely needs to "
+                                "create it manually with an explicit managed location: %s",
+                                cat, len(locations), exc1,
+                            )
             except Exception as exc:
                 logger.warning("Could not check/create catalog '%s' via SDK: %s", cat, exc)
 

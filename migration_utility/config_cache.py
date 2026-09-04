@@ -26,6 +26,25 @@ _cache_ts: float = 0.0
 _CACHE_TTL = 30  # seconds
 
 
+def normalize_host(host: str) -> str:
+    """Ensure a Databricks workspace host string has an https:// scheme.
+
+    Databricks Apps injects DATABRICKS_HOST at runtime WITHOUT a scheme
+    (e.g. "adb-xxxx.14.azuredatabricks.net"), unlike a PAT-based deploy
+    where a user typically pastes the full "https://..." URL. Every call
+    site that builds a raw request URL from this value (ai_converter.py,
+    routes/genie.py, routes/catalog_discovery.py, etc.) assumed a scheme
+    was always present, so on Databricks Apps this silently produced
+    "Invalid URL ... No scheme supplied" for every serving-endpoint call.
+    Centralizing the fix here (called from reload_config/save_config)
+    means every consumer of get_config()["databricks_host"] is covered.
+    """
+    host = (host or "").strip().rstrip("/")
+    if host and not host.startswith("http://") and not host.startswith("https://"):
+        host = "https://" + host
+    return host
+
+
 def _fqn() -> str:
     catalog = os.environ.get("DATABRICKS_CATALOG", "admin_source")
     schema = os.environ.get("DATABRICKS_SCHEMA", "migration_app")
@@ -84,6 +103,9 @@ def reload_config() -> dict:
             cfg = merged
             logger.info("Config hydrated from deployconfig.json (%d keys)", len(legacy))
 
+        if cfg.get("databricks_host"):
+            cfg["databricks_host"] = normalize_host(cfg["databricks_host"])
+
         _cache = cfg
         _cache_ts = time.time()
     return _cache
@@ -122,6 +144,9 @@ def save_config(cfg: dict) -> dict:
                 user = g.user.get("email", "system")
         except RuntimeError:
             pass
+
+        if cfg.get("databricks_host"):
+            cfg["databricks_host"] = normalize_host(cfg["databricks_host"])
 
         last_exc = None
         durable = False

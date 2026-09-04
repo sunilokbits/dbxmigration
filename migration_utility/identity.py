@@ -18,6 +18,13 @@ _DEVELOPER_GROUPS = {"migration-studio-developers"}
 # "users" group includes all workspace members → treat as Admin by default
 # Create migration-studio-developers / migration-studio-admins groups for finer control
 
+# Optional operator override: force these emails to Admin regardless of
+# workspace group membership or whatever is stored in user_roles. Recovery
+# lever for when nobody can reach User Management to fix a bad assignment.
+_FORCED_ADMIN_EMAILS = {
+    e.strip().lower() for e in os.environ.get("APP_ADMIN_EMAILS", "").split(",") if e.strip()
+}
+
 _workspace_client = None
 _ws_lock = threading.Lock()
 
@@ -59,16 +66,42 @@ def _apply_stored_role(user: dict) -> dict:
     what login_required actually let them do — the role always came from
     guessing Databricks workspace group membership instead. An explicit
     assignment now takes priority over that guess.
+
+    Also bootstraps the very first person to open a freshly deployed app
+    (any workspace: dev/staging/a new client) as Admin. Without this, a
+    brand-new deploy has an empty user_roles table, so whoever opens
+    Settings first is stuck on whatever _resolve_role() guessed from
+    workspace group membership (often Viewer, e.g. when the proxy doesn't
+    forward group claims) with no in-app way to promote themselves — User
+    Management itself requires Admin to use. This makes the first login
+    ever self-heal into an Admin instead of requiring a metastore/DBA to
+    hand-insert a user_roles row out of band.
     """
+    email = (user.get("email") or "").lower()
+    if email in _FORCED_ADMIN_EMAILS:
+        user["role"] = "Admin"
+        return user
     try:
-        from dbsql_client import execute_query, get_catalog_schema
+        from dbsql_client import execute_query, execute_write, get_catalog_schema
         catalog, schema = get_catalog_schema()
+        table = f"`{catalog}`.`{schema}`.user_roles"
         rows = execute_query(
-            f"SELECT role FROM `{catalog}`.`{schema}`.user_roles WHERE user_email = %(email)s",
+            f"SELECT role FROM {table} WHERE user_email = %(email)s",
             {"email": user["email"]},
         )
         if rows:
             user["role"] = rows[0]["role"]
+        else:
+            any_row = execute_query(f"SELECT 1 AS x FROM {table} LIMIT 1")
+            if not any_row:
+                execute_write(
+                    f"""INSERT INTO {table}
+                        (user_email, role, display_name, assigned_by, updated_at)
+                        VALUES (%(email)s, 'Admin', %(dn)s, 'system-bootstrap', current_timestamp())""",
+                    {"email": user["email"], "dn": user.get("display_name") or user["email"]},
+                )
+                user["role"] = "Admin"
+                logger.info("Bootstrapped first login '%s' as Admin (user_roles was empty)", user["email"])
     except Exception:
         pass  # table may not exist yet (e.g. fresh dev deploy) — keep the group-guessed role
     return user

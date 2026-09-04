@@ -83,3 +83,13 @@ env:
 
   - name: MAX_TABLES_PER_SCHEMA
     value: "500"
+
+  # Comma-separated emails always treated as Admin, independent of workspace
+  # group membership or the user_roles table (works even before that table
+  # exists). Whoever deploys/owns this app in a given workspace should be
+  # listed here, or added later via the workspace's App Settings > Environment
+  # after deploy. New workspaces also self-heal: the very first person to log
+  # in is auto-promoted to Admin when user_roles is still empty (see
+  # identity.py's _apply_stored_role()).
+  - name: APP_ADMIN_EMAILS
+    value: "sunil.kumar@insight.com"
