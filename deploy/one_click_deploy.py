@@ -461,17 +461,80 @@ def init_app_tables(cfg: dict, secrets_in: dict, report: Report):
     schema = cfg.get("app_schema", "migration_app")
     raw_sql = sql_path.read_text(encoding="utf-8")
     raw_sql = raw_sql.replace("${catalog}", catalog).replace("${schema}", schema)
-    statements = [s.strip() for s in raw_sql.split(";") if s.strip() and not s.strip().startswith("--")]
+    # Drop the raw CREATE CATALOG statement -- handled via the SDK existence
+    # check below instead. `CREATE CATALOG IF NOT EXISTS` fails with
+    # [INVALID_STATE] "Metastore storage root URL does not exist..." on a
+    # metastore with no default storage root EVEN WHEN the catalog already
+    # exists (the SQL-level IF NOT EXISTS short-circuit doesn't save it) --
+    # the same issue deploy/init_app_tables.py hits for dev/staging.
+    statements = [
+        s.strip() for s in raw_sql.split(";")
+        if s.strip() and not s.strip().startswith("--") and not s.strip().upper().startswith("CREATE CATALOG")
+    ]
 
     try:
+        from databricks.sdk import WorkspaceClient
         from databricks import sql as dbsql
         host = cfg["databricks_host"].replace("https://", "").rstrip("/")
         http_path = f"/sql/1.0/warehouses/{cfg['sql_warehouse_id']}"
+        w = WorkspaceClient(host=cfg["databricks_host"], token=secrets_in["databricks_token"])
+
+        try:
+            w.catalogs.get(catalog)
+        except Exception:
+            try:
+                w.catalogs.create(name=catalog)
+            except Exception:
+                created = False
+                try:
+                    locations = list(w.external_locations.list())
+                except Exception:
+                    locations = []
+                for loc in locations:
+                    try:
+                        w.catalogs.create(name=catalog, storage_root=f"{loc.url.rstrip('/')}/{catalog}")
+                        created = True
+                        break
+                    except Exception:
+                        continue
+                if not created:
+                    report.add("tables", f"Catalog '{catalog}'", "warn",
+                               "could not create — a metastore admin may need to create it manually "
+                               "with an explicit managed location", required=False)
+
         with dbsql.connect(server_hostname=host, http_path=http_path, access_token=secrets_in["databricks_token"]) as conn:
             with conn.cursor() as cur:
                 for stmt in statements:
                     cur.execute(stmt)
         report.add("tables", "App tables init", "pass", f"{len(statements)} statement(s) executed")
+
+        # Grant the app's own Service Principal durable Unity Catalog access
+        # to this catalog/schema, using the deploy PAT's admin rights. Without
+        # this, runtime queries only work as long as the "databricks-token"
+        # secret holds a PAT belonging to an identity that already has UC
+        # access -- if that secret is ever empty/stale/unreadable, the app
+        # silently falls back to its own M2M OAuth SP (never granted
+        # anything), and every query returns TABLE_OR_VIEW_NOT_FOUND,
+        # indistinguishable from the table not existing. This closes that
+        # gap independent of the secret's health. Idempotent, non-blocking.
+        try:
+            app_name = cfg.get("app_name", "dbxmigration")
+            apps = list(w.apps.list())
+            app = next((a for a in apps if a.name == app_name), None)
+            sp_id = app.service_principal_client_id if app else ""
+            if sp_id:
+                with dbsql.connect(server_hostname=host, http_path=http_path, access_token=secrets_in["databricks_token"]) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(f"GRANT USE CATALOG ON CATALOG `{catalog}` TO `{sp_id}`")
+                        cur.execute(
+                            f"GRANT USE SCHEMA, SELECT, MODIFY, CREATE TABLE ON SCHEMA `{catalog}`.`{schema}` TO `{sp_id}`"
+                        )
+                report.add("tables", "App SP catalog/schema grant", "pass", f"granted to {sp_id}")
+            else:
+                report.add("tables", "App SP catalog/schema grant", "warn",
+                           f"could not resolve service principal for app '{app_name}'", required=False)
+        except Exception as e:
+            report.add("tables", "App SP catalog/schema grant", "warn", str(e)[:300], required=False)
     except Exception as e:
         report.add("tables", "App tables init", "fail", str(e)[:300])
 

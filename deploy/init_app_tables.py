@@ -32,6 +32,12 @@ Also verifies (and, if needed, repairs) the databricks-token Databricks
 Secret the app's own runtime queries actually use -- see the comment
 above the verify/repair block below for why a stale value there produces
 the exact same symptom as the tables never having been created at all.
+
+And grants the app's own Service Principal direct Unity Catalog access to
+this catalog/schema (see the comment above that block) -- so a future
+empty/stale/unreadable databricks-token secret degrades to a warning
+instead of reproducing this entire "TABLE_OR_VIEW_NOT_FOUND on every save"
+incident again.
 """
 import os
 import re
@@ -83,6 +89,15 @@ for chunk in raw_sql.split(";"):
 try:
     from databricks.sdk import WorkspaceClient
     w = WorkspaceClient()
+
+    # Print both a plain line (for anyone reading the raw log) and a GitHub
+    # Actions workflow-command-prefixed line, which turns into a check-run
+    # annotation retrievable via the public
+    # /repos/{owner}/{repo}/check-runs/{job_id}/annotations API without
+    # needing the elevated auth "download job logs" requires.
+    def _report(level, msg):
+        print(msg)
+        print(f"::{level}::{msg}")
 
     try:
         w.catalogs.get(catalog)
@@ -139,6 +154,54 @@ try:
             print(f"WARN: statement failed (non-blocking): {label} -> {exc}")
     print(f"Bootstrapped {ok_count}/{len(statements)} schema/table statement(s) in {catalog}.{schema}")
 
+    # Grant the Databricks App's own Service Principal durable Unity Catalog
+    # access to this catalog/schema, using the deploy identity's admin
+    # rights (the same rights that just created the catalog/tables above).
+    #
+    # Without this grant, the ONLY thing that makes runtime queries work is
+    # the "databricks-token" secret happening to hold a PAT belonging to an
+    # identity that already has UC access (see the repair block below). If
+    # that secret is ever empty, a stale/placeholder value, or simply
+    # unreadable by the app (secret-scope ACL gap), dbsql_client.get_connection()
+    # silently falls back to the app's own M2M OAuth SP -- an identity UC has
+    # never granted anything to -- and every query returns
+    # TABLE_OR_VIEW_NOT_FOUND, indistinguishable from the table not existing.
+    # That's exactly the "Saved locally only" error users hit on Settings ->
+    # Save Config, and why the config only ever lands in the ephemeral local
+    # deployconfig.json fallback that SNAPSHOT deploys wipe on every release.
+    #
+    # Granting the SP directly here closes that gap for good, independent of
+    # the secret's health -- the app now has two independent, valid paths to
+    # its own tables instead of one fragile one. Idempotent (GRANT is safe to
+    # re-run) and non-blocking (a permission gap here is worth surfacing, not
+    # failing the deploy over).
+    app_name = _read_app_yml_env("DATABRICKS_APP_NAME", "dbxmigration")
+    try:
+        apps = list(w.apps.list())
+        app = next((a for a in apps if a.name == app_name), None)
+        sp_id = app.service_principal_client_id if app else ""
+        if not sp_id:
+            _report("warning", f"Could not resolve service principal for app '{app_name}' -- skipping SP grant")
+        else:
+            for grant_sql in (
+                f"GRANT USE CATALOG ON CATALOG `{catalog}` TO `{sp_id}`",
+                f"GRANT USE SCHEMA, SELECT, MODIFY, CREATE TABLE ON SCHEMA `{catalog}`.`{schema}` TO `{sp_id}`",
+            ):
+                try:
+                    resp = w.statement_execution.execute_statement(
+                        warehouse_id=wh_id, statement=grant_sql, wait_timeout="30s",
+                    )
+                    state = resp.status.state.value if resp.status and resp.status.state else "UNKNOWN"
+                    if state == "SUCCEEDED":
+                        print(f"OK: {grant_sql}")
+                    else:
+                        err = resp.status.error.message if resp.status and resp.status.error else state
+                        _report("warning", f"Grant failed (non-blocking): {grant_sql} -> {err}")
+                except Exception as exc:
+                    _report("warning", f"Grant failed (non-blocking): {grant_sql} -> {exc}")
+    except Exception as exc:
+        _report("warning", f"Could not grant app SP catalog/schema access (non-blocking): {exc}")
+
     # The app's own runtime queries never use this script's/CI's deploy PAT
     # directly -- they use whatever PAT is stored in the databricks-token
     # Databricks Secret (deliberately never clobbered by the CI "Scaffold
@@ -152,16 +215,6 @@ try:
     # see app_config using the exact same kind of call the app makes at
     # runtime, and only replace it with this (just-proven-working) deploy
     # identity's PAT when it can't.
-    # Print both a plain line (for anyone reading the raw log) and a GitHub
-    # Actions workflow-command-prefixed line, which turns into a check-run
-    # annotation retrievable via the public
-    # /repos/{owner}/{repo}/check-runs/{job_id}/annotations API without
-    # needing the elevated auth "download job logs" requires -- this is the
-    # only way to see what actually happened here without repo-admin rights.
-    def _report(level, msg):
-        print(msg)
-        print(f"::{level}::{msg}")
-
     try:
         secret_scope = _read_app_yml_env("DATABRICKS_SECRET_SCOPE", "migration-studio")
         needs_repair = True
