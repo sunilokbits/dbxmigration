@@ -12,6 +12,20 @@ import json, os, sys, threading, time, uuid
 from datetime import datetime
 from flask import Flask, render_template_string, request, jsonify, Response
 
+# Root-cause fix for the Windows console crash: this script's log lines use
+# box-drawing/emoji characters (=, [OK], [FAIL], ...), and Windows' default
+# console codepage (cp1252) can't encode them -- print() raises
+# UnicodeEncodeError and kills whatever step was running. Reconfiguring
+# stdout/stderr to UTF-8 (with a safe fallback for anything even UTF-8
+# can't represent) fixes this for every print() in the process, not just
+# the ones in this file -- Python 3.7+'s TextIOWrapper.reconfigure().
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 app = Flask(__name__)
 
 # ---------------------------------------------------------------------------
@@ -39,8 +53,18 @@ def _ts():
 
 def _log(msg, level="INFO"):
     line = f"[{_ts()}] [{level}] {msg}"
-    _log_lines.append(line)
-    print(line)
+    _log_lines.append(line)  # UI reads from here, unaffected by console encoding
+    try:
+        print(line)
+    except UnicodeEncodeError:
+        # Windows' default console codepage (cp1252) can't encode the
+        # box-drawing/emoji characters these log lines use (═, ✅, ❌, …).
+        # That raised straight out of print() and killed the whole step
+        # (and, since _log() is also what reports "Fatal error: ...", the
+        # crash message itself could fail to print for the same reason).
+        # Fall back to an ASCII-safe rendering so the run keeps going --
+        # the UI's log panel above already has the real, non-lossy text.
+        print(line.encode("ascii", errors="replace").decode("ascii"))
 
 
 def _get_credential(cfg):

@@ -9,6 +9,21 @@ import os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Windows' default console codepage (cp1252) can't encode the emoji/box-
+# drawing characters this codebase's print()/log statements use (e.g.
+# workflow_manager.py's background-thread status messages), which raises
+# UnicodeEncodeError and can silently kill whatever was printing -- this
+# was reproduced locally (a background hydration thread died on it).
+# Databricks Apps runs on Linux/UTF-8 so this never triggers there; this
+# only matters for `python app.py` on a Windows dev machine, but costs
+# nothing either way.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 from flask import Flask, redirect, request, jsonify, g
 from flask_compress import Compress
 from log_config import setup_logging, get_logger
