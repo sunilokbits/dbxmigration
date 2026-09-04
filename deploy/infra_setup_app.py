@@ -233,7 +233,7 @@ def step4_external_locations(cfg):
     cred_name = cfg.get("_cred_name", cfg.get("storage_credential_name", cfg["access_connector"]))
     base = f"abfss://{cfg['container']}@{cfg['storage_account']}.dfs.core.windows.net"
     env = cfg.get("_env", "dev")
-    loc_name = f"{env}-root-loc"
+    loc_name = cfg.get("external_location_name") or f"{env}-root-loc"
     _log(f"Creating single external location '{loc_name}' → {base}")
     ok, body = _databricks_api("POST", "/api/2.1/unity-catalog/external-locations", cfg,
                                 {"name": loc_name, "url": base, "credential_name": cred_name, "skip_validation": True})
@@ -360,6 +360,7 @@ def api_run():
         "access_connector": ac,
         "storage_credential_name": sc,
         "role_assignment": data.get("role_assignment", "Storage Blob Data Owner"),
+        "external_location_name": data.get("external_location_name", "").strip(),
         "folders": [landing_f, bronze_f, silver_f,
                    f"{env}/uc-managed/volumes", f"{env}/uc-managed/admin",
                    f"{env}/uc-managed/reconciliation", f"{env}/uc-managed/logging"],

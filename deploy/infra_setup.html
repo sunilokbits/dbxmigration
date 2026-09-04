@@ -138,6 +138,7 @@ input::placeholder{color:var(--surface2)}
     <div class="field"><label>Volumes Catalog (base)</label><input id="catVolumes" value="dev_volumes" oninput="updatePreview()"></div>
   </div>
   <div class="field" style="margin-top:8px;"><label>Default Schema</label><input id="defSchema" value="hr" style="max-width:200px;"></div>
+  <div class="field" style="margin-top:8px;"><label>External Location Name (Step 4 — blank uses &lt;env&gt;-root-loc)</label><input id="extLocName" placeholder="e.g. staging-root-loc" style="max-width:300px;"></div>
   <div class="preview" id="catPreview"></div>
   <div class="sep"></div>
   <div class="chk-row">
@@ -239,6 +240,7 @@ async function runSetup(){
     catalog_silver_base:$('catSilver').value.trim(),
     catalog_volumes_base:$('catVolumes').value.trim(),
     default_schema:$('defSchema').value.trim()||'hr',
+    external_location_name:$('extLocName').value.trim(),
     include_metadata:$('chkMeta').checked,
     catalog_admin:$('catAdmin').value.trim(),
     catalog_recon:$('catRecon').value.trim(),
