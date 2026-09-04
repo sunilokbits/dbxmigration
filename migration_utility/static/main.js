@@ -1441,8 +1441,13 @@ function _wfTargetConfig(){
 }
 
 async function wfCreateMetadataFlow(){
-  const c=_wfDbrCreds();
-  if(!c.host||!c.token){toast('Enter Databricks host and token','terr');return;}
+  // Token is intentionally never echoed back to the browser as a real value
+  // (it's masked in the config API response, or lives purely in Databricks
+  // Secrets and was never duplicated into the plaintext config at all) --
+  // the backend already resolves it server-side via get_databricks_token()
+  // whenever the client sends none, so only host needs to be present here.
+  const c=await _wfDbrCredsWithFallback();
+  if(!c.host){toast('Enter Databricks host in Settings','terr');return;}
   const btn=G('btnWfMeta');btn.disabled=true;btn.textContent='Provisioning tables…';
   const dot=G('wfMetaDot'),lbl=G('wfMetaLabel'),msg=G('wfMetaMsg');
   dot.style.background='#f59e0b';lbl.textContent='Provisioning…';
@@ -1707,7 +1712,9 @@ async function wfRunOnDatabricks(groupId, pwd){
       }
     }catch(e){}
   }
-  if(!c.host||!c.token){toast('Databricks host & token required — configure in MetadataFlow or Settings','terr');return false;}
+  // Same as wfCreateMetadataFlow() -- the backend resolves an empty/masked
+  // token from Databricks Secrets itself, so only host needs to be present.
+  if(!c.host){toast('Databricks host required — configure in MetadataFlow or Settings','terr');return false;}
   // Get cluster — try UI dropdown first, fallback to auto-detect running cluster
   let clusterId=(G('wfClusterSelect')||{}).value||'';
   if(!clusterId){
