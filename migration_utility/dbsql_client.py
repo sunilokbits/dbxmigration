@@ -245,10 +245,37 @@ def ensure_tables():
         # dynamic catalog/schema above discoverable, so it can't move with it.
         _static_cfg = _get_config()
         app_cfg_catalog, app_cfg_schema = _static_cfg["catalog"], _static_cfg["schema"]
+
+        # `CREATE CATALOG IF NOT EXISTS <name>` fails with
+        # [INVALID_STATE] "Metastore storage root URL does not exist..."
+        # on this metastore's default-storage config EVEN WHEN the catalog
+        # already exists -- the SQL-level "IF NOT EXISTS" short-circuit
+        # doesn't save it. Check existence via the SDK (a clean lookup with
+        # no storage-root side effects) and only attempt creation when a
+        # catalog is genuinely missing; never run the raw CREATE CATALOG
+        # statement. This mirrors deploy/init_app_tables.py, which hits the
+        # same metastore during deploy with the deploy identity's creds.
+        for cat in {catalog, app_cfg_catalog}:
+            try:
+                from databricks.sdk import WorkspaceClient
+                w = WorkspaceClient()
+                try:
+                    w.catalogs.get(cat)
+                except Exception:
+                    try:
+                        w.catalogs.create(name=cat)
+                        logger.info("Created catalog '%s'", cat)
+                    except Exception as exc:
+                        logger.warning(
+                            "Could not create catalog '%s' (non-blocking) -- a metastore "
+                            "admin likely needs to create it manually with an explicit "
+                            "managed location: %s", cat, exc,
+                        )
+            except Exception as exc:
+                logger.warning("Could not check/create catalog '%s' via SDK: %s", cat, exc)
+
         ddl_statements = [
-            f"CREATE CATALOG IF NOT EXISTS {catalog}",
             f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}",
-            f"CREATE CATALOG IF NOT EXISTS {app_cfg_catalog}",
             f"CREATE SCHEMA IF NOT EXISTS {app_cfg_catalog}.{app_cfg_schema}",
             f"""CREATE TABLE IF NOT EXISTS {catalog}.{schema}.migration_jobs (
                 job_id STRING NOT NULL,

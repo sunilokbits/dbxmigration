@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""Bootstrap this app's own Delta tables (app_config, user_roles, audit_log,
+job_schedules, migration_jobs, dm_models) using the DEPLOY identity's
+credentials, not the app's own runtime service principal.
+
+Why this needs to exist: one_click_deploy.py already does this for client
+deploys using the client's own PAT (see init_app_tables() there), but dev/
+staging never ran anything equivalent -- they relied entirely on the app's
+runtime SP self-healing via dbsql_client.ensure_tables() the first time a
+route touched these tables, and that self-heal has the exact same
+CREATE CATALOG issue described below.
+
+Verified against the live dev workspace before this script existed:
+`CREATE CATALOG IF NOT EXISTS admin_source` fails with
+[INVALID_STATE] "Metastore storage root URL does not exist. Default
+Storage is enabled in your account..." EVEN THOUGH admin_source already
+existed there -- this metastore's default-storage config makes bare
+`CREATE CATALOG IF NOT EXISTS <name>` (no MANAGED LOCATION) unreliable
+regardless of whether the catalog is already there, and that's exactly
+what cascaded into staging's "TABLE_OR_VIEW_NOT_FOUND" no matter how many
+times a save was retried -- the catalog itself never got created there.
+
+Fix: check catalog existence via the SDK first (Catalogs.get, a clean
+lookup with no storage-root side effects) and only attempt creation when
+it's genuinely missing, instead of relying on CREATE CATALOG IF NOT
+EXISTS's SQL-level short-circuiting. Schema/table DDL doesn't have this
+issue (confirmed working) and still runs via the Statement Execution API.
+Idempotent and non-blocking throughout -- a permission/storage gap here
+is a metastore-admin problem to fix, not something to block the deploy on.
+"""
+import os
+import re
+import sys
+from pathlib import Path
+
+wh_id = os.environ.get("SQL_WAREHOUSE_ID", "")
+
+if not wh_id:
+    print("No SQL_WAREHOUSE_ID set — skipping app table bootstrap")
+    sys.exit(0)
+
+
+def _read_app_yml_env(name, default):
+    try:
+        with open("app.yml", encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return default
+    m = re.search(rf'-\s*name:\s*{re.escape(name)}\s*\n\s*value:\s*"([^"]*)"', text)
+    return m.group(1) if m and m.group(1) else default
+
+
+catalog = _read_app_yml_env("DATABRICKS_CATALOG", "admin_source")
+schema = _read_app_yml_env("DATABRICKS_SCHEMA", "migration_app")
+
+sql_path = Path("src/sql/init_app_tables.sql")
+if not sql_path.is_file():
+    print(f"WARN: {sql_path} not found — skipping app table bootstrap")
+    sys.exit(0)
+
+raw_sql = sql_path.read_text(encoding="utf-8")
+raw_sql = raw_sql.replace("${catalog}", catalog).replace("${schema}", schema)
+# Drop full-line-comment-only chunks and the CREATE CATALOG statement (handled
+# separately below via the SDK) before splitting on ";" -- CREATE SCHEMA and
+# every CREATE TABLE run as-is through the Statement Execution API.
+statements = []
+for chunk in raw_sql.split(";"):
+    stmt = chunk.strip()
+    if not stmt:
+        continue
+    non_comment_lines = [l for l in stmt.splitlines() if l.strip() and not l.strip().startswith("--")]
+    if not non_comment_lines:
+        continue
+    if non_comment_lines[0].upper().startswith("CREATE CATALOG"):
+        continue  # handled via the SDK existence check below
+    statements.append(stmt)
+
+try:
+    from databricks.sdk import WorkspaceClient
+    w = WorkspaceClient()
+
+    try:
+        w.catalogs.get(catalog)
+        print(f"Catalog '{catalog}' already exists — skipping creation")
+    except Exception:
+        try:
+            w.catalogs.create(name=catalog)
+            print(f"Created catalog '{catalog}'")
+        except Exception as exc:
+            print(
+                f"WARN: could not create catalog '{catalog}' (non-blocking): {exc}\n"
+                f"  A metastore admin likely needs to create it manually with an explicit "
+                f"managed location, e.g.: CREATE CATALOG {catalog} MANAGED LOCATION '<abfss-path>'"
+            )
+
+    ok_count = 0
+    for stmt in statements:
+        label = stmt.splitlines()[0][:80]
+        try:
+            resp = w.statement_execution.execute_statement(
+                warehouse_id=wh_id, statement=stmt, wait_timeout="30s",
+            )
+            state = resp.status.state.value if resp.status and resp.status.state else "UNKNOWN"
+            if state == "SUCCEEDED":
+                print(f"OK: {label}")
+                ok_count += 1
+            else:
+                err = resp.status.error.message if resp.status and resp.status.error else state
+                print(f"WARN: statement failed (non-blocking): {label} -> {err}")
+        except Exception as exc:
+            print(f"WARN: statement failed (non-blocking): {label} -> {exc}")
+    print(f"Bootstrapped {ok_count}/{len(statements)} schema/table statement(s) in {catalog}.{schema}")
+except Exception as exc:
+    print(f"WARN: could not bootstrap app tables in {catalog}.{schema} (non-blocking): {exc}")

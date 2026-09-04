@@ -150,6 +150,15 @@ jobs:
         run: |
           pip install -q databricks-sdk >/dev/null 2>&1 || true
           python3 deploy/check_existing_config.py || echo "WARN: Could not check existing config (non-blocking)"
+      - name: Bootstrap app tables (catalog/schema/Delta tables)
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          SQL_WAREHOUSE_ID: ${{ env.SQL_WAREHOUSE_ID }}
+        if: env.SQL_WAREHOUSE_ID != ''
+        run: |
+          pip install -q databricks-sdk >/dev/null 2>&1 || true
+          python3 deploy/init_app_tables.py || echo "WARN: Could not bootstrap app tables (non-blocking)"
       - name: Adopt pre-existing secret scope (dev)
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
@@ -302,6 +311,15 @@ jobs:
         run: |
           pip install -q databricks-sdk >/dev/null 2>&1 || true
           python3 deploy/check_existing_config.py || echo "WARN: Could not check existing config (non-blocking)"
+      - name: Bootstrap app tables (catalog/schema/Delta tables)
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          SQL_WAREHOUSE_ID: ${{ env.SQL_WAREHOUSE_ID }}
+        if: env.SQL_WAREHOUSE_ID != ''
+        run: |
+          pip install -q databricks-sdk >/dev/null 2>&1 || true
+          python3 deploy/init_app_tables.py || echo "WARN: Could not bootstrap app tables (non-blocking)"
       - name: databricks bundle deploy -t staging
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
