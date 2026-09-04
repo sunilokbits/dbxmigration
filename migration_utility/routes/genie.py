@@ -1058,21 +1058,75 @@ def list_fm_endpoints():
     return jsonify({"endpoints": _DEFAULT_FM_ENDPOINTS})
 
 
+_RCA_KEYWORDS = (
+    "fail", "error", "broke", "broken", "issue", "wrong", "rca",
+    "root cause", "why did", "why is", "not working", "didn't work",
+    "crash", "exception", "stuck",
+)
+
+
+def _build_fm_messages(content: str, messages: list, top_n: int, history_n: int) -> list:
+    system_context = _build_configured_catalog_context() + get_relevant_schema_context(question=content, top_n=top_n)
+    # Only pull in recent-failures RCA context when the question actually
+    # looks failure-related -- it's cheap to build (one cached-friendly SQL
+    # query + a deterministic classifier, no extra LLM/embedding call), but
+    # there's no reason to spend the tokens on it for an unrelated question
+    # like "how many tables are in bronze".
+    lowered = content.lower()
+    if any(kw in lowered for kw in _RCA_KEYWORDS):
+        try:
+            import workflow_manager as _wfm
+            system_context += "\n" + _wfm.get_recent_failed_runs_context()
+        except Exception:
+            pass
+    chat_messages = [{"role": "system", "content": APP_CONTEXT_PREAMBLE + system_context}]
+    for msg in messages[-history_n:]:
+        chat_messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+    chat_messages.append({"role": "user", "content": content})
+    return chat_messages
+
+
+def _estimate_tokens(chat_messages: list) -> int:
+    """~4 chars/token heuristic (no tokenizer dependency in requirements.txt).
+
+    Only used to size the "standard" (never sent) prompt for the Token
+    Optimiser's before/after comparison -- the tokens actually billed always
+    come from the API's own usage.prompt_tokens on the request that's really
+    sent, never from this estimate.
+    """
+    total_chars = sum(len(m.get("content", "") or "") for m in chat_messages)
+    return max(1, total_chars // 4)
+
+
 @genie_bp.route("/api/v1/genie/fm/chat", methods=["POST"])
 @login_required
 def fm_chat():
-    """Chat with a Foundation Model endpoint. Returns response + token usage."""
+    """Chat with a Foundation Model endpoint. Returns response + token usage.
+
+    optimize_tokens (from the UI's "Token Optimiser" toggle) trims the two
+    parts of this prompt that actually grow the request -- the number of
+    ranked tables included in the schema context, and how much raw
+    conversation history gets resent -- instead of doing nothing, which is
+    what this flag previously did (accepted by this endpoint and never read).
+    """
     data = request.get_json() or {}
     endpoint_name = (data.get("endpoint") or "").strip()
     content = (data.get("content") or "").strip()
     messages = data.get("messages", [])
+    optimize_tokens = bool(data.get("optimize_tokens"))
     if not endpoint_name or not content:
         return jsonify({"error": "endpoint and content are required"}), 400
-    system_context = _build_configured_catalog_context() + get_relevant_schema_context(question=content)
-    chat_messages = [{"role": "system", "content": APP_CONTEXT_PREAMBLE + system_context}]
-    for msg in messages[-10:]:
-        chat_messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
-    chat_messages.append({"role": "user", "content": content})
+
+    top_n = 6 if optimize_tokens else 15
+    history_n = 4 if optimize_tokens else 10
+    chat_messages = _build_fm_messages(content, messages, top_n, history_n)
+
+    # Estimate-only: what the un-optimised (top_n=15, history=10) prompt would
+    # have cost, purely for the savings comparison the UI shows -- table/
+    # question embeddings are already cached, so this doesn't add a real
+    # embedding or LLM call, and it's never actually sent to the model.
+    standard_tokens_estimate = _estimate_tokens(_build_fm_messages(content, messages, 15, 10)) if optimize_tokens else None
+
     try:
         payload = {"messages": chat_messages, "max_tokens": 2048, "temperature": 0.1}
         r = requests.post(f"{_HOST}/serving-endpoints/{endpoint_name}/invocations", json=payload, headers=_serving_headers(), timeout=60)
@@ -1082,7 +1136,13 @@ def fm_chat():
         choices = resp.get("choices", [])
         response_text = choices[0].get("message", {}).get("content", "") if choices else "No response"
         usage = resp.get("usage", {})
-        return jsonify({"text": response_text, "usage": {"prompt_tokens": usage.get("prompt_tokens", 0), "completion_tokens": usage.get("completion_tokens", 0), "total_tokens": usage.get("total_tokens", 0)}, "model": resp.get("model", endpoint_name), "endpoint": endpoint_name})
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        result = {"text": response_text, "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": usage.get("completion_tokens", 0), "total_tokens": usage.get("total_tokens", 0)}, "model": resp.get("model", endpoint_name), "endpoint": endpoint_name}
+        if optimize_tokens:
+            standard = max(standard_tokens_estimate or 0, prompt_tokens)
+            savings_pct = max(0, round((1 - prompt_tokens / standard) * 100)) if standard else 0
+            result["token_comparison"] = {"standard_tokens": standard, "optimised_tokens": prompt_tokens, "savings_pct": savings_pct}
+        return jsonify(result)
     except requests.exceptions.Timeout:
         return jsonify({"error": "Endpoint request timed out"}), 504
     except Exception as exc:

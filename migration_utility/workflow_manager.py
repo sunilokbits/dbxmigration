@@ -2912,6 +2912,55 @@ def list_runs(job_id: str = None, group_id: str = None, status: str = None, limi
     return {"success": True, "runs": trimmed, "total": len(runs)}
 
 
+def get_recent_failed_runs_context(limit: int = 8) -> str:
+    """Recent failed runs + a deterministic root-cause diagnosis, formatted
+    for injection into the Genie AI FM-chat system prompt (routes/genie.py's
+    fm_chat) so "why did my job fail" / RCA questions get answered from real
+    error data run through self_healing_bot's existing rule-based classifier,
+    instead of the model guessing with no grounding at all -- the native
+    Genie Space path already has RCA guidance baked into its instructions
+    (deploy/genie_space_instructions.txt tells it to query wf_run_history/
+    wf_job_metadata/executionlog itself), but fm_chat bypasses Genie Space
+    entirely and only ever built catalog/schema context, never job-failure
+    context.
+
+    Reads live from Delta (wf_run_history), not the in-memory JOB_RUNS dict --
+    that dict is per-process and doesn't survive a worker restart/redeploy,
+    same reasoning as list_pipeline_groups_live() reading live rather than
+    from PIPELINE_GROUPS/JOB_REGISTRY.  Non-blocking: any failure here just
+    means Genie answers without this extra context, never a broken chat.
+    """
+    if not _metadata_initialized:
+        return ""
+    try:
+        sql = (
+            f"SELECT job_name, full_table, stage, error_message, completed_at "
+            f"FROM {_fqn(TBL_RUNS)} WHERE status = 'failed' "
+            f"ORDER BY completed_at DESC LIMIT {int(limit)}"
+        )
+        r = _exec_sql(sql)
+        if r.get("status", {}).get("state") != "SUCCEEDED":
+            return ""
+        rows = r.get("result", {}).get("data_array", []) or []
+        if not rows:
+            return ""
+        from self_healing_bot import diagnose_error
+        lines = ["Recent FAILED job runs (root-cause diagnosis, most recent first):\n"]
+        for row in rows:
+            job_name, full_table, stage, error_message, completed_at = (list(row) + [None] * 5)[:5]
+            diag = diagnose_error(error_message or "")
+            lines.append(
+                f"  • {job_name or full_table} (stage={stage}, failed at {completed_at}): "
+                f"{diag.get('category', 'UNKNOWN')} — {diag.get('description', '')}. "
+                f"Suggested fix: {diag.get('recommendation', 'Review manually.')} "
+                f"[raw error: {(error_message or '')[:200]}]"
+            )
+        return "\n".join(lines) + "\n"
+    except Exception as exc:
+        logger.warning("get_recent_failed_runs_context failed (non-blocking): %s", exc)
+        return ""
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  WATERMARK MANAGEMENT
 # ─────────────────────────────────────────────────────────────────────────────

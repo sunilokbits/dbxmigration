@@ -467,6 +467,40 @@ def _get_cached_table_embedding(key: str, text: str):
     return vec
 
 
+_question_embedding_cache: dict = {}   # normalized question -> {"vector": [...], "ts": float}
+_question_embedding_cache_lock = threading.Lock()
+_QUESTION_CACHE_TTL_SECONDS = 600  # a repeated/near-repeated question re-embeds at most every 10 min
+
+
+def _get_cached_question_embedding(question: str):
+    """Embedding for a chat question, cached by exact (normalized) text.
+
+    Table blurb embeddings were already cached (see _get_cached_table_embedding
+    above) since the schema barely changes -- but the question embedding
+    computed here was re-sent to databricks-gte-large-en on every single chat
+    message with no caching at all, even for the exact same or a repeated
+    question within the same conversation (a common pattern -- rephrasing,
+    retrying after an error, or two users asking the same thing). Caching it
+    the same way removes a redundant embedding call in that case at zero
+    correctness cost (the ranking result for an identical question is by
+    definition identical).
+    """
+    key = " ".join(question.strip().lower().split())
+    if not key:
+        return None
+    now = time.time()
+    with _question_embedding_cache_lock:
+        entry = _question_embedding_cache.get(key)
+        if entry and (now - entry["ts"]) < _QUESTION_CACHE_TTL_SECONDS:
+            return entry["vector"]
+    vecs = _embed_texts([question])
+    vec = vecs[0] if vecs and vecs[0] else None
+    if vec:
+        with _question_embedding_cache_lock:
+            _question_embedding_cache[key] = {"vector": vec, "ts": now}
+    return vec
+
+
 def get_relevant_schema_context(question: str = "", top_n: int = 15, configured_only: bool = True) -> str:
     """Scoped + ranked schema context for a specific question (see module
     docstring above for the chunking/caching/vector-similarity approach).
@@ -494,8 +528,7 @@ def get_relevant_schema_context(question: str = "", top_n: int = 15, configured_
     if not question.strip() or len(tables) <= top_n:
         ranked = tables[:top_n]
     else:
-        q_vecs = _embed_texts([question])
-        q_vec = q_vecs[0] if q_vecs and q_vecs[0] else None
+        q_vec = _get_cached_question_embedding(question)
 
         scored = []
         if q_vec:

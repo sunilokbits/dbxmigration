@@ -89,7 +89,18 @@ print(tmpfile)
     echo "Created Genie Space: $SPACE_ID"
 fi
 
-# Update the space with instructions (configure tab) if we have a space ID
+# Update the space with instructions/description (configure tab) if we have
+# a space ID. This runs for BOTH a freshly-created space and an already-
+# existing one found above -- an existing space previously only ever got its
+# `instructions`/`sample_questions` re-applied here; `title`/`description`
+# were only ever set once, in the create-space payload above, which is
+# skipped entirely once a space exists. That meant editing
+# genie_space_description.txt and merging to git had no effect on a workspace
+# that already had a Genie Space -- silently, since this whole step is
+# always non-blocking. Re-applying title/description here too closes that
+# gap: any edit to the git-tracked instruction/description files now
+# actually reaches the live Space on the next deploy, not just on the one
+# deploy that happened to create it.
 if [ -n "$SPACE_ID" ]; then
     python3 -c "
 import json, os
@@ -100,29 +111,40 @@ space_id = '$SPACE_ID'
 inst_file = '/tmp/genie_space_instructions.txt'
 if not os.path.isfile(inst_file):
     inst_file = os.path.join('$SCRIPT_DIR', 'genie_space_instructions.txt')
+desc_file = '/tmp/genie_space_description.txt'
+if not os.path.isfile(desc_file):
+    desc_file = os.path.join('$SCRIPT_DIR', 'genie_space_description.txt')
 
+instructions = ''
 if os.path.isfile(inst_file):
     with open(inst_file) as f:
         instructions = f.read().strip()
-else:
-    instructions = ''
 
+description = ''
+if os.path.isfile(desc_file):
+    with open(desc_file) as f:
+        description = f.read().strip()
+
+body = {
+    'title': 'DBX Migration — Full Workspace',
+    'sample_questions': [
+        'What recent actions were taken in the audit log?',
+        'Why did my last job fail? Give me a root cause analysis.',
+        'Which jobs have the highest failure rate?',
+        'Which tables have reconciliation mismatches?',
+        'Show me the last 10 pipeline runs with their status and duration',
+        'How many tables have been migrated successfully vs failed?',
+    ],
+}
 if instructions:
-    try:
-        w.api_client.do('PATCH', f'/api/2.0/genie/spaces/{space_id}', body={
-            'instructions': instructions,
-            'sample_questions': [
-                'What recent actions were taken in the audit log?',
-                'Which jobs have the highest failure rate?',
-                'Which tables have reconciliation mismatches?',
-                'Show me the last 10 pipeline runs with their status and duration',
-                'How many tables have been migrated successfully vs failed?',
-            ],
-        })
-        print(f'Updated Genie Space {space_id} with instructions and sample questions')
-    except Exception as e:
-        print(f'WARN: Could not update space instructions: {e}')
-else:
-    print('No instructions file found, skipping update')
-" 2>/dev/null || echo "WARN: Could not update Genie Space instructions (non-blocking)"
+    body['instructions'] = instructions
+if description:
+    body['description'] = description
+
+try:
+    w.api_client.do('PATCH', f'/api/2.0/genie/spaces/{space_id}', body=body)
+    print(f'Updated Genie Space {space_id}: title, description={bool(description)}, instructions={bool(instructions)}, sample_questions')
+except Exception as e:
+    print(f'WARN: Could not update Genie Space: {e}')
+" 2>/dev/null || echo "WARN: Could not update Genie Space (non-blocking)"
 fi

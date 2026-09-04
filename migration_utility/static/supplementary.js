@@ -1051,6 +1051,32 @@ window.aiConvertSelected = async function(){
   if(btnDL) btnDL.disabled = false;
   if(btnDLAll) btnDLAll.disabled = false;
 
+  // Deploy Notebooks / Push to DevOps (in main.js) only ever read from
+  // HELPER_RESULT -- the regular "Convert - SQL -> PySpark" button's result
+  // variable. AI conversion built its own separate AI_RESULTS array and never
+  // touched HELPER_RESULT, so "Ready to Deploy" stayed on "Convert objects in
+  // Step 1 first" and Deploy All / Push to DevOps had nothing to send, no
+  // matter how many objects were just AI-converted. Mirror AI_RESULTS into
+  // the same HELPER_RESULT shape the regular flow produces so both buttons
+  // (and the sessionStorage persistence across reloads) work unmodified.
+  try{
+    HELPER_RESULT = {
+      helper_code: '# AI-converted notebooks are self-contained -- no shared HelperFunction.py.\n',
+      helper_lines: 0,
+      udf_count: 0,
+      files: AI_RESULTS.map(function(r){
+        var full = r.header + r.code;
+        return {
+          name: r.name, filename: r.name + '.py', code: full,
+          object_type: r.objType, lines: full.split('\n').length,
+        };
+      }),
+    };
+    if(typeof updDeployList === 'function') updDeployList();
+    if(G('wf1')) G('wf1').className = 'wf-step done';
+    try{ sessionStorage.setItem('ms_helper_result', JSON.stringify(HELPER_RESULT)); }catch(e){}
+  }catch(e){}
+
   document.querySelectorAll('.nb-tab').forEach(function(t){ t.classList.remove('active'); });
   var firstTab = document.getElementById('nbt_ai_' + first.name.replace(/[^a-zA-Z0-9_]/g,'_'));
   if(firstTab) firstTab.classList.add('active');
