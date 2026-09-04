@@ -225,17 +225,15 @@ jobs:
         run: bash deploy/ensure_genie_space.sh
 
   # ---------------------------------------------------------------------------
-  # Only runs when manually dispatched with deploy_staging=true, so a normal
-  # push to main never fails on an unconfigured staging environment.
+  # Runs automatically on every push to main (staging environment + secrets
+  # are now configured), or on-demand via workflow_dispatch with
+  # deploy_staging=true.
   deploy-staging:
     name: "03 · Deploy to Staging + integration tests"
     needs: deploy-dev
-    # Only runs when manually dispatched with deploy_staging=true (see the
-    # comment above) -- there's no staging environment/secrets configured
-    # yet, so it was failing on every single push and making the whole
-    # workflow run show red even though dev deployed successfully every
-    # time. Re-enable the automatic push trigger once staging is set up.
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy_staging == true
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.deploy_staging == true)
     runs-on: ubuntu-latest
     environment: staging
     steps:
