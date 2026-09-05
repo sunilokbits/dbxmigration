@@ -2758,9 +2758,9 @@ function _wfRenderFilteredPipelines(){
         :'<span style="font-size:8px;padding:1px 5px;border-radius:6px;background:#3b82f6;color:#fff;font-weight:700;">Spark</span>';
       const _chk=_wfSelectedGroups.has(g.group_id)?'checked':'';
       const _SL={extract:'Extract',landing_to_bronze:'→Bronze',bronze_to_silver:'→Silver',dlt_bronze_silver:'⚡SDP'};
-      const _statusBg={created:'#f1f5f9',running:'#dbeafe',success:'#d1fae5',failed:'#fee2e2'};
-      const _statusFg={created:'#64748b',running:'#2563eb',success:'#059669',failed:'#dc2626'};
-      const _statusIco={created:'⏸',running:'🔄',success:'✅',failed:'❌'};
+      const _statusBg={created:'#f1f5f9',running:'#dbeafe',success:'#d1fae5',failed:'#fee2e2',in_progress:'#fef3c7'};
+      const _statusFg={created:'#64748b',running:'#2563eb',success:'#059669',failed:'#dc2626',in_progress:'#d97706'};
+      const _statusIco={created:'⏸',running:'🔄',success:'✅',failed:'❌',in_progress:'⏳'};
       /* Compact inline stage indicators */
       const stageIndicators=(g.jobs||[]).sort((a,b)=>a.order-b.order).map((j,i,arr)=>{
         const jc={created:'#94a3b8',running:'#3b82f6',success:'#10b981',failed:'#ef4444'};
@@ -2780,7 +2780,7 @@ function _wfRenderFilteredPipelines(){
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
               <span style="font-weight:700;font-size:12px;color:var(--t1);">${g.full_table}</span>
               ${_pmBadge}
-              <span style="display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:99px;font-size:9px;font-weight:600;background:${_statusBg[g.status]||'#f1f5f9'};color:${_statusFg[g.status]||'#64748b'};">${_statusIco[g.status]||'⏸'} ${g.status.toUpperCase()}</span>
+              <span style="display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:99px;font-size:9px;font-weight:600;background:${_statusBg[g.status]||'#f1f5f9'};color:${_statusFg[g.status]||'#64748b'};">${_statusIco[g.status]||'⏸'} ${g.status.toUpperCase().replace(/_/g,' ')}</span>
               ${_lastAct?'<span style="font-size:9px;color:var(--t4);">🕐 '+_lastAct+'</span>':''}
             </div>
             <div style="display:flex;align-items:center;gap:4px;margin-top:4px;flex-wrap:wrap;">

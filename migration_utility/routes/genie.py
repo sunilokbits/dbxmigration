@@ -1134,7 +1134,26 @@ def fm_chat():
             return jsonify({"error": f"Endpoint returned {r.status_code}: {r.text[:300]}"}), r.status_code
         resp = r.json()
         choices = resp.get("choices", [])
-        response_text = choices[0].get("message", {}).get("content", "") if choices else "No response"
+        raw_content = choices[0].get("message", {}).get("content", "") if choices else "No response"
+        # Some serving endpoints (observed on newer models like Sonnet 5 --
+        # Opus 4.6/4.7 happened to always return a plain string) return
+        # `content` as a list of Anthropic-style content blocks
+        # ([{"type": "text", "text": "..."}, ...]) instead of a plain string,
+        # even through this OpenAI-compatible /invocations endpoint. The
+        # frontend always expected a string (it calls .replace() on it to
+        # render markdown) and had no guard, so picking one of those models
+        # crashed the chat with "text.replace is not a function" -- normalize
+        # here so every model returns the same shape regardless of which
+        # response format its serving endpoint actually uses.
+        if isinstance(raw_content, list):
+            response_text = "".join(
+                (block.get("text", "") if isinstance(block, dict) else str(block))
+                for block in raw_content
+            )
+        elif raw_content is None:
+            response_text = ""
+        else:
+            response_text = str(raw_content)
         usage = resp.get("usage", {})
         prompt_tokens = usage.get("prompt_tokens", 0)
         result = {"text": response_text, "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": usage.get("completion_tokens", 0), "total_tokens": usage.get("total_tokens", 0)}, "model": resp.get("model", endpoint_name), "endpoint": endpoint_name}

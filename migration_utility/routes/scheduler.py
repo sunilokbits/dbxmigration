@@ -218,20 +218,29 @@ def sch_list_tables():
         for i, col in enumerate(columns):
             obj[col] = row[i] if i < len(row) else None
         tname = obj.get("table_name", "")
-        if not tname:
+        gid = obj.get("group_id", "")
+        if not tname or not gid:
             continue
-        if tname not in table_map:
-            table_map[tname] = {
+        # Keyed by group_id, NOT table_name: two different source
+        # connections can migrate a same-named table (e.g. "orders" from two
+        # different SQL Server instances), each as its own pipeline
+        # group/job set. Keying by table_name alone silently merged those
+        # into one dropdown entry -- only the first-seen group_id survived,
+        # but jobs from BOTH groups kept getting appended to it, so
+        # scheduling that entry could run a job that didn't even belong to
+        # the group you thought you selected.
+        if gid not in table_map:
+            table_map[gid] = {
                 "table_name": tname, "table_schema": obj.get("table_schema", "dbo"),
-                "full_table": obj.get("full_table", ""), "group_id": obj.get("group_id", ""),
+                "full_table": obj.get("full_table", ""), "group_id": gid,
                 "load_type": obj.get("load_type", "full"), "jobs": [],
             }
-        table_map[tname]["jobs"].append({
+        table_map[gid]["jobs"].append({
             "job_id": obj.get("job_id", ""), "job_name": obj.get("job_name", ""),
             "stage": obj.get("stage", ""), "load_type": obj.get("load_type", "full"),
         })
     tables = []
-    for tname, tinfo in table_map.items():
+    for gid, tinfo in table_map.items():
         tinfo["job_count"] = len(tinfo["jobs"])
         tables.append(tinfo)
     return jsonify({"success": True, "tables": tables})

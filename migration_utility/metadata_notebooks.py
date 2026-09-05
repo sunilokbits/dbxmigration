@@ -1032,8 +1032,15 @@ except Exception as _ce:
 MULTI_CATALOG  = bool(BRONZE_CATALOG and SILVER_CATALOG and TGT_SCHEMA and BRONZE_CATALOG != SILVER_CATALOG)
 
 if MULTI_CATALOG:
-    bronze_table = f"`{{BRONZE_CATALOG}}`.`{{TGT_SCHEMA}}`.`{{TABLE_NAME}}`"
-    silver_table = f"`{{SILVER_CATALOG}}`.`{{TGT_SCHEMA}}`.`{{TABLE_NAME}}`"
+    # Bronze and Silver are genuinely separate catalogs here, so there's no
+    # object-name collision risk from dropping the layer prefix -- just a
+    # plain, lowercased table name (Unity Catalog is case-insensitive for
+    # identifiers but stores/displays whatever case you give it; lowercase
+    # keeps every migrated table's name predictable regardless of the
+    # source system's own casing convention).
+    _TABLE_NAME_LC = TABLE_NAME.lower()
+    bronze_table = f"`{{BRONZE_CATALOG}}`.`{{TGT_SCHEMA}}`.`{{_TABLE_NAME_LC}}`"
+    silver_table = f"`{{SILVER_CATALOG}}`.`{{TGT_SCHEMA}}`.`{{_TABLE_NAME_LC}}`"
     DQ_CATALOG   = SILVER_CATALOG
     DQ_SCHEMA    = TGT_SCHEMA
     print(f"✅ Multi-catalog medallion: {{BRONZE_CATALOG}}.{{TGT_SCHEMA}} → {{SILVER_CATALOG}}.{{TGT_SCHEMA}} (no prefix)")
@@ -1057,8 +1064,14 @@ else:
         TARGET_SCHEMA = TGT_SCHEMA
     else:
         TARGET_SCHEMA = SCHEMA
-    bronze_table = f"`{{TARGET_CATALOG}}`.`{{TARGET_SCHEMA}}`.`bronze_{{TABLE_NAME}}`"
-    silver_table = f"`{{TARGET_CATALOG}}`.`{{TARGET_SCHEMA}}`.`silver_{{TABLE_NAME}}`"
+    # Bronze and Silver share the SAME catalog.schema in this fallback (no
+    # separate silver_catalog configured) -- the bronze_/silver_ prefix stays
+    # here specifically because it's the only thing preventing Silver from
+    # being written to the exact same table Bronze just used. Table name
+    # itself is still lowercased.
+    _TABLE_NAME_LC = TABLE_NAME.lower()
+    bronze_table = f"`{{TARGET_CATALOG}}`.`{{TARGET_SCHEMA}}`.`bronze_{{_TABLE_NAME_LC}}`"
+    silver_table = f"`{{TARGET_CATALOG}}`.`{{TARGET_SCHEMA}}`.`silver_{{_TABLE_NAME_LC}}`"
     DQ_CATALOG   = TARGET_CATALOG
     DQ_SCHEMA    = TARGET_SCHEMA
 
@@ -2394,7 +2407,13 @@ def _make_bronze(job):
     src   = f"{{LANDING_PATH}}/{{tbl}}"
     # Use simple names — Spark Declarative Pipeline's catalog/schema controls where tables
     # are published.  3-part names cause "Failed to analyze flow" errors.
-    bronze_full = f"bronze_{{tbl}}"
+    # A single Lakeflow/DLT pipeline publishes EVERY table it defines to ONE
+    # target catalog.schema (set on the pipeline itself, not per-table) --
+    # Bronze and Silver are defined in this same pipeline, so without some
+    # prefix they'd collide on the exact same table name in that one schema.
+    # This is the one spot the bronze_/silver_ prefix stays for a real
+    # technical reason, not cosmetics; table name itself is still lowercased.
+    bronze_full = f"bronze_{{tbl.lower()}}"
 
     @dlt.table(
         name=bronze_full,
@@ -2479,8 +2498,9 @@ def _make_silver(job):
     t_sch       = tcfg.get("target_schema", "")
     # Use simple names — must match the bronze name used in _make_bronze.
     # Spark Declarative Pipeline's catalog/schema controls where tables are published.
-    bronze_name = f"bronze_{{tbl}}"
-    silver_full = f"silver_{{tbl}}"
+    # Same one-pipeline-one-schema reasoning as _make_bronze above.
+    bronze_name = f"bronze_{{tbl.lower()}}"
+    silver_full = f"silver_{{tbl.lower()}}"
 
     @dlt.table(
         name=silver_full,

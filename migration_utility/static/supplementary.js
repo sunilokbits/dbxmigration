@@ -644,6 +644,17 @@ var _fmSqlCounter=0;
 function _renderBotText(id,text,tokenHtml){
   var el=$g(id);if(!el)return;
   var c=el.querySelector('.genie-msg-content');if(!c)return;
+  // Defensive: some serving endpoints have been seen returning content as a
+  // list of blocks rather than a plain string (fixed server-side in fm_chat,
+  // but guard here too so a future/unknown response shape degrades to a
+  // rendered string instead of throwing "text.replace is not a function").
+  if(Array.isArray(text)){
+    text=text.map(function(b){return b&&typeof b==='object'?(b.text||''):String(b);}).join('');
+  }else if(text==null){
+    text='';
+  }else if(typeof text!=='string'){
+    text=String(text);
+  }
   var html=text
     .replace(/```(sql)?\n?([\s\S]*?)```/g,function(m,lang,code){
       _fmSqlCounter++;

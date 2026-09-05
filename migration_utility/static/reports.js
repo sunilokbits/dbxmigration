@@ -1060,7 +1060,12 @@ async function schLoadTables(){
     sel.innerHTML='<option value="">— Select a table —</option>';
     tables.forEach(t=>{
       const opt=document.createElement('option');
-      opt.value=t.table_name;
+      // group_id, not table_name -- two different source connections can
+      // migrate a same-named table as two separate pipeline groups, and
+      // <select> options sharing one value make schEditSchedule's
+      // by-value lookup (and this dropdown's own selection) pick whichever
+      // one happens to come first, not necessarily the one you meant.
+      opt.value=t.group_id;
       opt.textContent=t.full_table+' ('+t.job_count+' jobs — '+t.load_type+')';
       opt.dataset.tableName=t.table_name;
       opt.dataset.tableSchema=t.table_schema;
@@ -1092,22 +1097,24 @@ function schEditSchedule(scheduleId){
   if(!s){showToast('Schedule not found','error');return;}
   _schEditingId=scheduleId;
 
-  // Select the table in dropdown (or add it if not loaded)
+  // Select the table in dropdown (or add it if not loaded) -- matched by
+  // group_id, not table_name, since two different pipeline groups can share
+  // the same table_name (different source connections).
   const sel=G('schTableSelect');
   let found=false;
   for(let i=0;i<sel.options.length;i++){
-    if(sel.options[i].value===s.table_name){sel.selectedIndex=i;found=true;break;}
+    if(sel.options[i].value===(s.group_id||'')){sel.selectedIndex=i;found=true;break;}
   }
   if(!found){
     const opt=document.createElement('option');
-    opt.value=s.table_name;
+    opt.value=s.group_id||s.table_name;
     opt.textContent=s.table_name;
     opt.dataset.tableName=s.table_name;
     opt.dataset.tableSchema=s.table_schema||'dbo';
     opt.dataset.groupId=s.group_id||'';
     opt.dataset.jobs=JSON.stringify([]);
     sel.appendChild(opt);
-    sel.value=s.table_name;
+    sel.value=s.group_id||s.table_name;
   }
   sel.disabled=true; // Can't change table when editing
   sel.dispatchEvent(new Event('change'));
@@ -1153,11 +1160,11 @@ function schCancelEdit(){
 
 async function schCreateSchedule(){
   const sel=G('schTableSelect');
-  const tableName=sel.value;
-  if(!tableName){showToast('Please select a table','error');return;}
+  if(!sel.value){showToast('Please select a table','error');return;}
   const opt=sel.options[sel.selectedIndex];
+  const tableName=opt.dataset.tableName||'';
   const tableSchema=opt.dataset.tableSchema||'dbo';
-  const groupId=opt.dataset.groupId||'';
+  const groupId=opt.dataset.groupId||sel.value;
   const schType=G('schType').value;
 
   const body={

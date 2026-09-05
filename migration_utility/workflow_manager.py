@@ -11,6 +11,7 @@ Manages medallion pipeline jobs with:
 """
 
 import os
+import re
 import uuid
 import json
 import logging
@@ -675,23 +676,44 @@ def init_metadata_flow(host: str, token: str, catalog: str = "main",
 
         # 3. Run history
         f"""CREATE TABLE IF NOT EXISTS {_fqn(TBL_RUNS)} (
-            run_id           STRING NOT NULL,
-            job_id           STRING,
-            job_name         STRING,
-            stage            STRING,
-            full_table       STRING,
-            load_type        STRING,
-            watermark_column STRING,
-            watermark_value  STRING,
-            status           STRING,
-            started_at       TIMESTAMP,
-            completed_at     TIMESTAMP,
-            duration_sec     DOUBLE,
-            rows_processed   BIGINT,
-            error_message    STRING,
-            logs             STRING
+            run_id               STRING NOT NULL,
+            job_id               STRING,
+            job_name             STRING,
+            stage                STRING,
+            full_table           STRING,
+            load_type            STRING,
+            watermark_column     STRING,
+            watermark_value      STRING,
+            status               STRING COMMENT 'created | running | success | failed -- PARTIAL SDP outcomes are stored as failed here; see dlt_status for the raw pipeline-level detail',
+            started_at           TIMESTAMP,
+            completed_at         TIMESTAMP,
+            duration_sec         DOUBLE,
+            rows_processed       BIGINT,
+            error_message        STRING,
+            logs                 STRING,
+            source_tag           STRING COMMENT 'Source connection identifier (server+database) — disambiguates a same-named table migrated from two different sources',
+            dlt_status           STRING COMMENT 'Raw status string from the SDP/DLT orchestrator notebook exit payload: SUCCESS | PARTIAL | FAILED',
+            dlt_pipeline_id      STRING COMMENT 'Databricks Lakeflow/DLT pipeline_id for this run, for cross-referencing the Pipelines UI',
+            dlt_update_id        STRING COMMENT 'Databricks Lakeflow/DLT update_id for this run, for cross-referencing the Pipelines UI run history',
+            extract_failed_count INT COMMENT 'Count of source tables that failed extraction in this run (0 on success)',
+            silver_failed_count  INT COMMENT 'Count of tables that failed to finalize into Silver in this run (0 on success)'
         ) USING DELTA
         COMMENT 'Job execution run history'""",
+
+        # 3b. Add the richer RCA/annotation columns above to a wf_run_history
+        # table that already existed before this change -- CREATE TABLE IF
+        # NOT EXISTS above is a no-op against an existing table, so an
+        # already-deployed workspace would otherwise never get these columns.
+        # Safe to re-run: ADD COLUMNS fails harmlessly (caught, logged,
+        # non-blocking) once the columns already exist.
+        f"""ALTER TABLE {_fqn(TBL_RUNS)} ADD COLUMNS (
+            source_tag           STRING,
+            dlt_status           STRING,
+            dlt_pipeline_id      STRING,
+            dlt_update_id        STRING,
+            extract_failed_count INT,
+            silver_failed_count  INT
+        )""",
 
         # 4. Watermarks
         f"""CREATE TABLE IF NOT EXISTS {_fqn(TBL_WATERMARKS)} (
@@ -1034,17 +1056,27 @@ def _sync_run_to_dbr(run: dict):
             duration_sec = {run.get('duration_sec') or 'NULL'},
             rows_processed = {run.get('rows_processed', 0)},
             error_message = {_esc(run.get('error'))},
-            logs = {_esc(logs_str)}
+            logs = {_esc(logs_str)},
+            source_tag = {_esc(run.get('source_tag', ''))},
+            dlt_status = {_esc(run.get('dlt_status', ''))},
+            dlt_pipeline_id = {_esc(run.get('dlt_pipeline_id', ''))},
+            dlt_update_id = {_esc(run.get('dlt_update_id', ''))},
+            extract_failed_count = {run.get('extract_failed_count', 0) or 0},
+            silver_failed_count = {run.get('silver_failed_count', 0) or 0}
         WHEN NOT MATCHED THEN INSERT (
             run_id, job_id, job_name, stage, full_table, load_type,
-            watermark_column, watermark_value, status, started_at, rows_processed, logs
+            watermark_column, watermark_value, status, started_at, rows_processed, logs,
+            source_tag, dlt_status, dlt_pipeline_id, dlt_update_id, extract_failed_count, silver_failed_count
         ) VALUES (
             {_esc(run['run_id'])}, {_esc(run['job_id'])}, {_esc(run.get('job_name'))},
             {_esc(run.get('stage'))}, {_esc(run.get('full_table'))},
             {_esc(run.get('load_type'))}, {_esc(run.get('watermark_column', ''))},
             {_esc(run.get('watermark_value'))}, {_esc(run.get('status'))},
             {_esc(run.get('started_at'))}, {run.get('rows_processed', 0)},
-            {_esc(logs_str)}
+            {_esc(logs_str)},
+            {_esc(run.get('source_tag', ''))}, {_esc(run.get('dlt_status', ''))},
+            {_esc(run.get('dlt_pipeline_id', ''))}, {_esc(run.get('dlt_update_id', ''))},
+            {run.get('extract_failed_count', 0) or 0}, {run.get('silver_failed_count', 0) or 0}
         )"""
         _exec_sql_checked(sql, f"run {run.get('run_id')} status={run.get('status')}")
     except Exception as exc:
@@ -1402,7 +1434,7 @@ def full_sync_to_dbr() -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 #  JOB NAMING CONVENTION
 # ─────────────────────────────────────────────────────────────────────────────
-def _job_name(stage: str, table_name: str, target_config: dict = None) -> str:
+def _job_name(stage: str, table_name: str, target_config: dict = None, source_tag: str = "") -> str:
     """
     Generate standard job name per convention:
       1. ExtractToVolumes_<Table>   — extract from SQL source → dev_volumes
@@ -1413,12 +1445,22 @@ def _job_name(stage: str, table_name: str, target_config: dict = None) -> str:
       1. SqlExtract_<Table>         — extract from SQL source
       2. LandingToBronze_<Table>    — landing to bronze
       3. BronzeToSilver_<Table>     — bronze to silver
+
+    source_tag (from _derive_source_tag(source_config)) is appended to every
+    name when given. Two different source connections (e.g. two SQL Server
+    instances, or SQL Server vs Snowflake) can legitimately have a table of
+    the exact same name -- without this, their job names collided (only the
+    target catalog/schema and table name were ever part of the name), making
+    it impossible to tell them apart in Job Manager/Pipeline Studio and
+    risking one being mistaken for a re-run of the other.
     """
     clean = table_name.replace(".", "_").replace("[", "").replace("]", "").strip()
     tc = target_config or {}
     vol_cat = tc.get("volumes_catalog", "")
     brz_cat = tc.get("bronze_catalog", "")
     slv_cat = tc.get("silver_catalog", "")
+    src_tag = _sanitize_identifier(source_tag) if source_tag else ""
+    src_suffix = f"__{src_tag}" if src_tag else ""
 
     if vol_cat and brz_cat and slv_cat:
         # Multi-catalog medallion naming — includes schema for differentiation
@@ -1426,20 +1468,20 @@ def _job_name(stage: str, table_name: str, target_config: dict = None) -> str:
         tgt_sch = tc.get("target_schema", "")
         sch_tag = f"_{tgt_sch}" if tgt_sch else ""
         prefix_map = {
-            "extract":           f"ExtractTo_{vol_cat}{sch_tag}_{clean}",
-            "landing_to_bronze":  f"{vol_cat}_To_{brz_cat}{sch_tag}_{clean}",
-            "bronze_to_silver":   f"{brz_cat}_To_{slv_cat}{sch_tag}_{clean}",
-            "dlt_bronze_silver":  f"SDP_{vol_cat}_To_{slv_cat}{sch_tag}_{clean}",
+            "extract":           f"ExtractTo_{vol_cat}{sch_tag}_{clean}{src_suffix}",
+            "landing_to_bronze":  f"{vol_cat}_To_{brz_cat}{sch_tag}_{clean}{src_suffix}",
+            "bronze_to_silver":   f"{brz_cat}_To_{slv_cat}{sch_tag}_{clean}{src_suffix}",
+            "dlt_bronze_silver":  f"SDP_{vol_cat}_To_{slv_cat}{sch_tag}_{clean}{src_suffix}",
         }
     else:
         # Legacy naming
         prefix_map = {
-            "extract":           f"SqlExtract_{clean}",
-            "landing_to_bronze":  f"LandingToBronze_{clean}",
-            "bronze_to_silver":   f"BronzeToSilver_{clean}",
-            "dlt_bronze_silver":  f"SDP_BronzeToSilver_{clean}",
+            "extract":           f"SqlExtract_{clean}{src_suffix}",
+            "landing_to_bronze":  f"LandingToBronze_{clean}{src_suffix}",
+            "bronze_to_silver":   f"BronzeToSilver_{clean}{src_suffix}",
+            "dlt_bronze_silver":  f"SDP_BronzeToSilver_{clean}{src_suffix}",
         }
-    return prefix_map.get(stage, f"{stage}_{clean}")
+    return prefix_map.get(stage, f"{stage}_{clean}{src_suffix}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1590,6 +1632,18 @@ def _derive_mapping_tag(target_config: dict) -> str:
     elif brz:
         return brz
     return ""
+
+
+def _sanitize_identifier(raw: str) -> str:
+    """Lowercase, alnum/underscore-only, collapsed-underscore identifier --
+    safe to use in a job name or (elsewhere) a Unity Catalog table/schema
+    name. Source server hostnames/account names commonly contain dots,
+    hyphens, colons (e.g. a port number) that aren't valid there as-is."""
+    if not raw:
+        return ""
+    s = re.sub(r"[^a-z0-9_]+", "_", raw.strip().lower())
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s[:60]
 
 
 def _derive_source_tag(source_config: dict) -> str:
@@ -1918,7 +1972,7 @@ def create_pipeline_for_table(
         job_id = uuid.uuid4().hex[:12]
         job = {
             "job_id":           job_id,
-            "job_name":         _job_name(stage, table_name, target_config),
+            "job_name":         _job_name(stage, table_name, target_config, source_tag=_source_tag),
             "stage":            stage,
             "group_id":         group_id,
             "table_schema":     table_schema,
@@ -1936,6 +1990,7 @@ def create_pipeline_for_table(
             "updated_at":       ts,
             "source_config":    source_config,
             "target_config":    target_config,
+            "source_tag":       _source_tag,
             "order":            stage_list.index(stage) + 1,
             "enabled":          True,
         }
@@ -2097,6 +2152,13 @@ def list_pipeline_groups() -> dict:
             overall = "success"
         elif any(s == "running" for s in statuses):
             overall = "running"
+        elif any(s == "success" for s in statuses):
+            # Some stages finished (e.g. Extract succeeded) but a later
+            # stage (e.g. SDP) hasn't been run yet -- "created" as the badge
+            # here read as "nothing has happened", which was confusing for
+            # a group that's genuinely partway through. Not the same as
+            # every job still sitting untouched.
+            overall = "in_progress"
         else:
             overall = "created"
 
@@ -2204,6 +2266,11 @@ def list_pipeline_groups_live() -> dict:
                 overall = "success"
             elif any(s == "running" for s in statuses):
                 overall = "running"
+            elif any(s == "success" for s in statuses):
+                # Some stages finished but a later one hasn't been run yet --
+                # see the identical branch in list_pipeline_groups() above
+                # for why bare "created" was misleading here.
+                overall = "in_progress"
             else:
                 overall = "created"
             grp["status"] = overall
@@ -2354,6 +2421,7 @@ def run_job(job_id: str, force_full: bool = False) -> dict:
         "load_type":        load_type,
         "watermark_column": job.get("watermark_column", ""),
         "watermark_value":  watermark_value,
+        "source_tag":       job.get("source_tag", ""),
         "status":           "running",
         "started_at":       ts,
         "completed_at":     None,
@@ -2677,30 +2745,72 @@ def _execute_job_run(run_id: str, job_id: str):
 
                 if result_state == "SUCCESS":
                     # For DLT orchestrator: Databricks reports SUCCESS (notebook
-                    # completed) but the internal DLT pipeline may have FAILED.
-                    # Check the notebook result JSON for the real status.
+                    # completed) but the internal DLT pipeline may have FAILED
+                    # or PARTIALLY failed (some tables extracted/finalized,
+                    # others didn't). Check the notebook result JSON for the
+                    # real status instead of trusting the notebook-level
+                    # result_state alone.
                     _internal_failed = False
-                    if stage == "dlt_bronze_silver" and nb_result:
-                        try:
-                            _p = json.loads(nb_result)
-                            _ist = (_p.get("status") or "").upper()
-                            if _ist == "FAILED":
+                    _dlt_err = ""
+                    _dlt_detail = {}
+                    if stage == "dlt_bronze_silver":
+                        if nb_result:
+                            try:
+                                _p = json.loads(nb_result)
+                                _ist = (_p.get("status") or "").upper()
+                                _dlt_detail = {
+                                    "pipeline_id":     _p.get("pipeline_id", ""),
+                                    "update_id":       _p.get("update_id", ""),
+                                    "dlt_status":      _p.get("dlt_status", ""),
+                                    "extract_failed":  _p.get("extract_failed", 0),
+                                    "silver_failed":   _p.get("silver_failed", 0),
+                                }
+                                # PARTIAL was previously not checked at all here --
+                                # some tables failing extraction or silver
+                                # finalization while the notebook itself still
+                                # exits cleanly showed as a plain "success",
+                                # which is exactly the false-positive this app
+                                # was reporting.
+                                if _ist in ("FAILED", "PARTIAL"):
+                                    _internal_failed = True
+                                    _dlt_err = _p.get("dlt_status", "") or ("SDP pipeline " + _ist.lower())
+                                    _ext_fail = _p.get("extract_failed", 0)
+                                    _slv_fail = _p.get("silver_failed", 0)
+                                    if _ext_fail:
+                                        _dlt_err += f" ({_ext_fail} extract(s) failed)"
+                                    if _slv_fail:
+                                        _dlt_err += f" ({_slv_fail} silver finalize(s) failed)"
+                                    run["logs"].append(f"[{end_ts}] ⚠️ SDP pipeline {_ist} — {_dlt_err}")
+                            except Exception as _parse_exc:
+                                # A malformed/unparseable result for this stage
+                                # means the real outcome can't be verified --
+                                # that must NOT default to success (it silently
+                                # did before, via this same bare `except: pass`).
                                 _internal_failed = True
-                                _dlt_err = _p.get("dlt_status", "") or "SDP pipeline failed"
-                                _ext_fail = _p.get("extract_failed", 0)
-                                if _ext_fail:
-                                    _dlt_err += f" ({_ext_fail} extract(s) failed)"
-                                run["logs"].append(f"[{end_ts}] ⚠️ SDP pipeline FAILED — {_dlt_err}")
-                        except Exception:
-                            pass
+                                _dlt_err = f"Could not verify SDP pipeline outcome — notebook result was not valid JSON: {_parse_exc}"
+                                run["logs"].append(f"[{end_ts}] ⚠️ {_dlt_err}")
+                        else:
+                            # No result at all for a stage that's expected to
+                            # always report one (dbutils.notebook.exit was
+                            # never reached, or output wasn't retrievable) --
+                            # same reasoning: unverifiable is not success.
+                            _internal_failed = True
+                            _dlt_err = "Could not verify SDP pipeline outcome — notebook returned no result"
+                            run["logs"].append(f"[{end_ts}] ⚠️ {_dlt_err}")
 
                     if _internal_failed:
                         with _lock:
                             run["status"] = "failed"
-                            run["error"] = "SDP pipeline failed — redeploy notebooks and re-run"
+                            run["error"] = _dlt_err or "SDP pipeline failed — redeploy notebooks and re-run"
                             run["completed_at"] = end_ts
                             run["duration_sec"] = round(
                                 (datetime.fromisoformat(end_ts) - datetime.fromisoformat(run["started_at"])).total_seconds(), 1)
+                            if _dlt_detail:
+                                run["dlt_status"] = _dlt_detail.get("dlt_status", "")
+                                run["dlt_pipeline_id"] = _dlt_detail.get("pipeline_id", "")
+                                run["dlt_update_id"] = _dlt_detail.get("update_id", "")
+                                run["extract_failed_count"] = _dlt_detail.get("extract_failed", 0)
+                                run["silver_failed_count"] = _dlt_detail.get("silver_failed", 0)
                             job["status"] = "failed"
                             job["last_status"] = "failed"
                             job["fail_count"] += 1
@@ -2713,6 +2823,10 @@ def _execute_job_run(run_id: str, job_id: str):
                             run["duration_sec"] = round(
                                 (datetime.fromisoformat(end_ts) - datetime.fromisoformat(run["started_at"])).total_seconds(), 1)
                             run["logs"].append(f"[{end_ts}] ✅ Job completed in {run['duration_sec']}s ({rows:,} rows)")
+                            if _dlt_detail:
+                                run["dlt_status"] = _dlt_detail.get("dlt_status", "")
+                                run["dlt_pipeline_id"] = _dlt_detail.get("pipeline_id", "")
+                                run["dlt_update_id"] = _dlt_detail.get("update_id", "")
                             job["status"] = "success"
                             job["last_status"] = "success"
                             job["updated_at"] = end_ts
@@ -2934,23 +3048,44 @@ def get_recent_failed_runs_context(limit: int = 8) -> str:
         return ""
     try:
         sql = (
-            f"SELECT job_name, full_table, stage, error_message, completed_at "
+            f"SELECT job_name, full_table, stage, error_message, completed_at, "
+            f"source_tag, dlt_status, extract_failed_count, silver_failed_count "
             f"FROM {_fqn(TBL_RUNS)} WHERE status = 'failed' "
             f"ORDER BY completed_at DESC LIMIT {int(limit)}"
         )
         r = _exec_sql(sql)
         if r.get("status", {}).get("state") != "SUCCEEDED":
-            return ""
+            # Falls back to the pre-annotation column set for a workspace
+            # where the ADD COLUMNS migration hasn't reached this table yet.
+            sql = (
+                f"SELECT job_name, full_table, stage, error_message, completed_at "
+                f"FROM {_fqn(TBL_RUNS)} WHERE status = 'failed' "
+                f"ORDER BY completed_at DESC LIMIT {int(limit)}"
+            )
+            r = _exec_sql(sql)
+            if r.get("status", {}).get("state") != "SUCCEEDED":
+                return ""
         rows = r.get("result", {}).get("data_array", []) or []
         if not rows:
             return ""
         from self_healing_bot import diagnose_error
         lines = ["Recent FAILED job runs (root-cause diagnosis, most recent first):\n"]
         for row in rows:
-            job_name, full_table, stage, error_message, completed_at = (list(row) + [None] * 5)[:5]
+            (job_name, full_table, stage, error_message, completed_at,
+             source_tag, dlt_status, extract_failed_count, silver_failed_count) = (list(row) + [None] * 9)[:9]
             diag = diagnose_error(error_message or "")
+            detail_bits = []
+            if source_tag:
+                detail_bits.append(f"source={source_tag}")
+            if dlt_status:
+                detail_bits.append(f"dlt_status={dlt_status}")
+            if extract_failed_count:
+                detail_bits.append(f"{extract_failed_count} extract(s) failed")
+            if silver_failed_count:
+                detail_bits.append(f"{silver_failed_count} silver finalize(s) failed")
+            detail_str = f" [{', '.join(detail_bits)}]" if detail_bits else ""
             lines.append(
-                f"  • {job_name or full_table} (stage={stage}, failed at {completed_at}): "
+                f"  • {job_name or full_table} (stage={stage}, failed at {completed_at}){detail_str}: "
                 f"{diag.get('category', 'UNKNOWN')} — {diag.get('description', '')}. "
                 f"Suggested fix: {diag.get('recommendation', 'Review manually.')} "
                 f"[raw error: {(error_message or '')[:200]}]"
@@ -3350,6 +3485,11 @@ def _poll_databricks_run(connector, dbr_run_id, group_id: str):
             output_lines = []
             dlt_failed = False
             extract_failed = False
+            # True once the notebook's own JSON result has been successfully
+            # parsed -- an unparseable/missing result for a run whose stages
+            # need internal verification (extract succeeded? DLT pipeline
+            # actually completed?) must NOT silently default to success below.
+            _internal_verified = False
             if output_info.get("success"):
                 nb_result = output_info.get("notebook_result", "")
                 error_trace = output_info.get("error_trace", "")
@@ -3361,12 +3501,21 @@ def _poll_databricks_run(connector, dbr_run_id, group_id: str):
                     try:
                         import json as _json
                         _nr = _json.loads(nb_result)
+                        _internal_verified = True
                         _actual_dlt = _nr.get("dlt_status", "")
+                        _top_status = (_nr.get("status") or "").upper()
                         _actual_extract_fail = _nr.get("extract_failed", 0)
+                        _actual_silver_fail = _nr.get("silver_failed", 0)
 
-                        if _actual_dlt == "FAILED":
+                        # PARTIAL (some tables extracted/finalized, others
+                        # didn't) was previously not checked here at all --
+                        # only an exact "FAILED" flipped dlt_failed, so a
+                        # partially-failed run fell through to "success".
+                        # Likewise silver_failed>0 was only ever logged, never
+                        # used to actually flag the run as failed.
+                        if _actual_dlt == "FAILED" or _top_status in ("FAILED", "PARTIAL") or _actual_silver_fail > 0:
                             dlt_failed = True
-                            output_lines.append(f"[{ts}] ⚠️ SDP pipeline FAILED — Bronze/Silver not processed")
+                            output_lines.append(f"[{ts}] ⚠️ SDP pipeline {_top_status or _actual_dlt or 'FAILED'} — Bronze/Silver not fully processed")
                         elif _actual_dlt == "COMPLETED":
                             output_lines.append(f"[{ts}] ✅ SDP pipeline COMPLETED")
 
@@ -3374,10 +3523,12 @@ def _poll_databricks_run(connector, dbr_run_id, group_id: str):
                             extract_failed = True
                             output_lines.append(f"[{ts}] ⚠️ {_actual_extract_fail} extract(s) failed (SDP may use previous landing data)")
 
-                        if _nr.get("silver_failed", 0) > 0:
-                            output_lines.append(f"[{ts}] ⚠️ silver_failed={_nr['silver_failed']}")
-                    except Exception:
-                        pass
+                        if _actual_silver_fail > 0:
+                            output_lines.append(f"[{ts}] ⚠️ silver_failed={_actual_silver_fail}")
+                    except Exception as _parse_exc:
+                        output_lines.append(f"[{ts}] ⚠️ Could not verify SDP pipeline outcome — notebook result was not valid JSON: {_parse_exc}")
+                else:
+                    output_lines.append(f"[{ts}] ⚠️ Could not verify SDP pipeline outcome — notebook returned no result")
                 if error_msg:
                     output_lines.append(f"[{ts}] 🔴 Error: {error_msg[:500]}")
                 if error_trace:
@@ -3392,14 +3543,29 @@ def _poll_databricks_run(connector, dbr_run_id, group_id: str):
                 for rid, run in _runs_for_dbr(dbr_run_str, grp_job_ids):
                         # Set per-job status based on actual stage results
                         stage = run.get("stage", "")
-                        if stage == "extract":
-                            run["status"] = "failed" if extract_failed else "success"
+                        if local_status != "success":
+                            # Databricks-level failure (the run itself didn't
+                            # even reach a clean SUCCESS result_state) always
+                            # wins -- previously the extract/dlt-stage branches
+                            # below decided status purely from the notebook's
+                            # own JSON, completely ignoring this, so a
+                            # Databricks-killed/crashed run whose notebook
+                            # result happened to look benign could still show
+                            # "success" for these specific stages.
+                            run["status"] = "failed"
+                            run["error"] = "Databricks run did not succeed" + (f" — {state_msg}" if state_msg else "")
+                        elif stage == "extract":
+                            run["status"] = "failed" if (extract_failed or not _internal_verified) else "success"
                             if extract_failed:
                                 run["error"] = "Extract failed — check source table"
+                            elif not _internal_verified:
+                                run["error"] = "Could not verify extract outcome — notebook result was missing/invalid"
                         elif stage in ("dlt_bronze_silver", "landing_to_bronze", "bronze_to_silver"):
-                            run["status"] = "failed" if dlt_failed else "success"
+                            run["status"] = "failed" if (dlt_failed or not _internal_verified) else "success"
                             if dlt_failed:
-                                run["error"] = "SDP pipeline failed"
+                                run["error"] = "SDP pipeline failed or partially failed"
+                            elif not _internal_verified:
+                                run["error"] = "Could not verify SDP pipeline outcome — notebook result was missing/invalid"
                         else:
                             run["status"] = local_status
                         run["completed_at"] = ts
@@ -3421,12 +3587,13 @@ def _poll_databricks_run(connector, dbr_run_id, group_id: str):
                                 job["fail_count"] = job.get("fail_count", 0) + 1
                             _sync_job_to_dbr(job)
 
+                _group_failed = local_status != "success" or dlt_failed or extract_failed or not _internal_verified
                 if grp:
-                    grp["status"] = "failed" if dlt_failed else local_status
+                    grp["status"] = "failed" if _group_failed else local_status
                     _sync_pipeline_to_dbr(grp)
 
             # ── Notify scheduler (and any other listeners) of completion ──
-            final_status = "failed" if dlt_failed else local_status
+            final_status = "failed" if _group_failed else local_status
             for cb in _pipeline_complete_callbacks:
                 try:
                     cb(group_id, final_status)
