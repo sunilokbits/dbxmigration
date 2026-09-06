@@ -66,9 +66,19 @@ def _admin_required(f):
 @_admin_required
 def list_users():
     _ensure_app_tables()
-    rows = execute_query(
-        f"SELECT user_email, display_name, role, updated_at FROM {_fqn('user_roles')} ORDER BY user_email"
-    )
+    try:
+        rows = execute_query(
+            f"SELECT user_email, display_name, role, updated_at FROM {_fqn('user_roles')} ORDER BY user_email"
+        )
+    except Exception as exc:
+        # ensure_tables() creating user_roles can itself silently fail (a
+        # Unity Catalog permission gap, most commonly) -- surface a specific,
+        # actionable message here instead of letting this raise all the way
+        # out to Flask's generic 500 handler, which the frontend can only
+        # show as an opaque "Internal server error" toast.
+        cat, sch = get_catalog_schema()
+        logger.error("list_users query failed against %s.%s.user_roles: %s", cat, sch, exc)
+        return jsonify({"success": False, "error": f"Could not read user_roles from {cat}.{sch} — {str(exc)[:200]}"}), 500
     users = [
         {
             "username": r["user_email"],
@@ -98,20 +108,30 @@ def create_user():
     if not display_name:
         display_name = email.split("@")[0].replace(".", " ").title()
 
-    existing = execute_query(
-        f"SELECT user_email FROM {_fqn('user_roles')} WHERE user_email = %(email)s",
-        {"email": email},
-    )
+    try:
+        existing = execute_query(
+            f"SELECT user_email FROM {_fqn('user_roles')} WHERE user_email = %(email)s",
+            {"email": email},
+        )
+    except Exception as exc:
+        cat, sch = get_catalog_schema()
+        logger.error("create_user lookup failed against %s.%s.user_roles: %s", cat, sch, exc)
+        return jsonify({"success": False, "error": f"Could not read user_roles from {cat}.{sch} — {str(exc)[:200]}"}), 500
     if existing:
         return jsonify({"success": False, "error": f"User '{email}' already has a role assignment"}), 409
 
     admin_email = session.get("user", "system")
-    execute_write(
-        f"""INSERT INTO {_fqn('user_roles')}
-            (user_email, role, display_name, assigned_by, updated_at)
-            VALUES (%(email)s, %(role)s, %(dn)s, %(admin)s, current_timestamp())""",
-        {"email": email, "role": role, "dn": display_name, "admin": admin_email},
-    )
+    try:
+        execute_write(
+            f"""INSERT INTO {_fqn('user_roles')}
+                (user_email, role, display_name, assigned_by, updated_at)
+                VALUES (%(email)s, %(role)s, %(dn)s, %(admin)s, current_timestamp())""",
+            {"email": email, "role": role, "dn": display_name, "admin": admin_email},
+        )
+    except Exception as exc:
+        cat, sch = get_catalog_schema()
+        logger.error("create_user insert failed against %s.%s.user_roles: %s", cat, sch, exc)
+        return jsonify({"success": False, "error": f"Could not write to user_roles in {cat}.{sch} — {str(exc)[:200]}"}), 500
 
     log_action("user_role_created", "user", email, {"role": role})
     logger.info("Role '%s' assigned to '%s' by '%s'", role, email, admin_email)

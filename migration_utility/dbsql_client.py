@@ -296,6 +296,22 @@ def ensure_tables():
             except Exception as exc:
                 logger.warning("Could not check/create catalog '%s' via SDK: %s", cat, exc)
 
+        # Best-effort self-grant before attempting the DDL below. This can
+        # only succeed if the identity running THIS process (the app's own
+        # M2M SP, or whatever PAT is in the databricks-token secret) already
+        # has authority to grant (catalog owner / MANAGE) -- usually only
+        # deploy/init_app_tables.py's elevated deploy identity truly has
+        # that, so this is a bonus safety net, not the primary fix, for the
+        # exact silent failure mode this whole function is prone to: every
+        # CREATE TABLE below fails one-by-one, caught by a bare except and
+        # only ever logged (never surfaced to the user), leaving an empty
+        # schema that looks identical to "never ran" from the UI.
+        for _cat, _sch in {(catalog, schema), (app_cfg_catalog, app_cfg_schema)}:
+            try:
+                ensure_catalog_access(_cat, _sch)
+            except Exception:
+                pass
+
         ddl_statements = [
             f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}",
             f"CREATE SCHEMA IF NOT EXISTS {app_cfg_catalog}.{app_cfg_schema}",
@@ -354,14 +370,41 @@ def ensure_tables():
 
         conn = get_connection()
         cursor = conn.cursor()
+        _ddl_failures = []
         try:
             for ddl in ddl_statements:
                 try:
                     cursor.execute(ddl)
                 except Exception as exc:
-                    logger.warning("DDL skipped (may already exist): %s — %s", ddl[:80], exc)
+                    # A genuinely-benign "already exists" (idempotent re-run)
+                    # looks identical, in a bare except, to a permission
+                    # failure that means the table was NEVER created --
+                    # log the real distinction at ERROR so it's at least
+                    # findable in the app's server logs instead of
+                    # invisible, since nothing in the UI surfaces this.
+                    if "already exists" in str(exc).lower():
+                        logger.info("DDL skipped (already exists): %s", ddl[:80])
+                    else:
+                        _ddl_failures.append((ddl[:80], str(exc)))
+                        logger.error("DDL FAILED (table will be missing): %s — %s", ddl[:80], exc)
         finally:
             cursor.close()
+
+        if _ddl_failures:
+            # Don't mark this "done" -- ensure_tables() is a cheap once-per-
+            # process gate (see _tables_initialised check at the top), and
+            # if it silently claimed success while tables never actually got
+            # created (the exact bug this logging is meant to catch), every
+            # later request would skip retrying forever for the rest of
+            # this worker's lifetime. Leaving it False means the next call
+            # (e.g. the next request that touches these tables) tries again
+            # -- self-healing if the SP grant lands in the meantime.
+            logger.error(
+                "ensure_tables(): %d of %d statement(s) failed in %s.%s / %s.%s -- "
+                "will retry on next call instead of marking initialised",
+                len(_ddl_failures), len(ddl_statements), catalog, schema, app_cfg_catalog, app_cfg_schema,
+            )
+            return
 
         _tables_initialised = True
 

@@ -199,6 +199,48 @@ try:
                         _report("warning", f"Grant failed (non-blocking): {grant_sql} -> {err}")
                 except Exception as exc:
                     _report("warning", f"Grant failed (non-blocking): {grant_sql} -> {exc}")
+
+            # DATABRICKS_CATALOG/SCHEMA above are read from the git-tracked
+            # app.yml TEXT (via _read_app_yml_env) -- but a live deployment
+            # can override its actual runtime env vars directly in the
+            # Databricks App's own Settings > Environment UI (a supported
+            # customization path this app already documents, e.g. for
+            # APP_ADMIN_EMAILS), completely invisible to this script. When
+            # that happens, the grant above targets the WRONG catalog --
+            # the SP never gets access to the one the app is actually
+            # running against, every CREATE TABLE in dbsql_client.
+            # ensure_tables() silently fails (caught by a bare except,
+            # visible only in server logs), and Genie's system prompt falls
+            # back to its hardcoded default catalog name because the
+            # config it needs was never durably saved either. Grant
+            # broadly to every catalog matching this app's own naming
+            # convention (contains "admin_source", e.g. "admin_source" or
+            # a client's "dbx_admin_source") instead of the one exact name
+            # -- GRANT is idempotent/harmless to repeat, and the deploy
+            # identity here has full admin visibility to enumerate them.
+            if sp_id:
+                try:
+                    _drift_catalogs = [c.name for c in w.catalogs.list() if "admin_source" in c.name.lower() and c.name != catalog]
+                except Exception as exc:
+                    _drift_catalogs = []
+                    _report("warning", f"Could not list catalogs for drift-tolerant SP grant (non-blocking): {exc}")
+                for _cat in _drift_catalogs:
+                    for grant_sql in (
+                        f"GRANT USE CATALOG ON CATALOG `{_cat}` TO `{sp_id}`",
+                        f"GRANT USE SCHEMA, SELECT, MODIFY, CREATE TABLE ON SCHEMA `{_cat}`.`{schema}` TO `{sp_id}`",
+                    ):
+                        try:
+                            resp = w.statement_execution.execute_statement(
+                                warehouse_id=wh_id, statement=grant_sql, wait_timeout="30s",
+                            )
+                            state = resp.status.state.value if resp.status and resp.status.state else "UNKNOWN"
+                            if state == "SUCCEEDED":
+                                print(f"OK (drift-tolerant): {grant_sql}")
+                            else:
+                                err = resp.status.error.message if resp.status and resp.status.error else state
+                                _report("warning", f"Drift-tolerant grant failed (non-blocking): {grant_sql} -> {err}")
+                        except Exception as exc:
+                            _report("warning", f"Drift-tolerant grant failed (non-blocking): {grant_sql} -> {exc}")
     except Exception as exc:
         _report("warning", f"Could not grant app SP catalog/schema access (non-blocking): {exc}")
 

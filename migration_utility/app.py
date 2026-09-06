@@ -187,12 +187,21 @@ class _FMCache:
         s._c = _OrderedDict()
         s._max = max_size
         s._ttl = ttl
-    def _key(s, q):
+    def _key(s, q, scope=''):
         n = _re.sub(r'\s+', ' ', q.lower().strip())
         for w in ['please','can you','show me','i want to','give me']: n = n.replace(w, '')
-        return _hashlib.md5(n.strip().encode()).hexdigest()
-    def get(s, q):
-        k = s._key(q)
+        # `scope` (the resolved catalog.schema signature) is folded into the
+        # key so a cached answer generated while catalog resolution was wrong
+        # (e.g. before a Settings fix landed, or a catalog-drift bug) can
+        # never be replayed once resolve_configured_catalogs() starts
+        # returning something different -- otherwise the same question text
+        # keeps serving a stale/wrong-catalog answer for up to `ttl` seconds
+        # after the underlying bug is fixed, which looked like the fix
+        # "only working when you pick a different FM model" (really just a
+        # different-enough phrasing that missed the poisoned cache entry).
+        return _hashlib.md5(f"{scope}|{n.strip()}".encode()).hexdigest()
+    def get(s, q, scope=''):
+        k = s._key(q, scope)
         if k in s._c:
             e = s._c[k]
             if _time.time() - e['t'] < s._ttl:
@@ -200,8 +209,8 @@ class _FMCache:
                 return e['r']
             del s._c[k]
         return None
-    def put(s, q, r):
-        k = s._key(q)
+    def put(s, q, r, scope=''):
+        k = s._key(q, scope)
         s._c[k] = {'r': r, 't': _time.time()}
         if len(s._c) > s._max: s._c.popitem(last=False)
 
@@ -242,7 +251,16 @@ def _fm_chat_sdk_override():
     # the class of bug already fixed for _fqn()/get_catalog_schema().
     from routes.genie import resolve_configured_catalogs
     _cats = resolve_configured_catalogs()
-    _meta = ".".join(_cats["metadata"]) if all(_cats["metadata"]) else "admin_source.configtables"
+    # Settings' saved metadata_catalog/schema is the real preference; if that
+    # durable save hasn't landed yet, prefer this process' own actual runtime
+    # env vars (DATABRICKS_CATALOG/SCHEMA -- which can be overridden directly
+    # in the Databricks App's own Settings > Environment UI, independent of
+    # whatever the git-tracked app.yml default says) over a hardcoded guess
+    # that's only ever right for a deployment that never customized either.
+    _meta = (
+        ".".join(_cats["metadata"]) if all(_cats["metadata"])
+        else f"{os.environ.get('DATABRICKS_CATALOG', 'admin_source')}.{os.environ.get('DATABRICKS_SCHEMA', 'migration_app')}"
+    )
     _bronze = ".".join(_cats["bronze"]) if all(_cats["bronze"]) else "bronze.hr"
     _silver = ".".join(_cats["silver"]) if all(_cats["silver"]) else "silver.hr"
     # Reconciliation results live in the same catalog.schema as everything
@@ -285,7 +303,7 @@ def _fm_chat_sdk_override():
 
     if optimize_tokens:
         # Phase 1: Check response cache
-        cached = _fm_cache.get(content_text)
+        cached = _fm_cache.get(content_text, scope=_meta)
         if cached:
             optimizations_applied.append('cache_hit')
             return jfy({"text": cached['text'], "usage": cached.get('usage', {}),
@@ -399,7 +417,7 @@ def _fm_chat_sdk_override():
             result["optimization_applied"] = " | ".join(optimizations_applied)
             # Cache the response
             _fm_cache.put(content_text, {'text': response_text, 'usage': result['usage'],
-                                          'model': result['model'], 'standard_est': standard_total})
+                                          'model': result['model'], 'standard_est': standard_total}, scope=_meta)
 
         return jfy(result)
     except Exception as exc:
