@@ -1414,43 +1414,6 @@
             </div>
           </div>
 
-          <div class="cfg-subcard" style="margin-top:14px;">
-            <div style="font-size:11px;font-weight:700;color:var(--t2);margin-bottom:4px;">
-              <svg viewBox="0 0 24 24" style="width:12px;height:12px;vertical-align:-1px;margin-right:4px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
-              Reconciliation &amp; Logging Tables
-            </div>
-            <p style="font-size:10px;color:var(--t4);margin:0 0 8px;">Where source-vs-bronze audit results and pipeline execution logs are stored.</p>
-            <div style="display:flex;gap:2px;margin-bottom:10px;">
-              <button class="cfg-sub-tab active" id="cfgSubRecon" onclick="cfgSwitchSubTab('recon')">Reconciliation</button>
-              <button class="cfg-sub-tab" id="cfgSubLog" onclick="cfgSwitchSubTab('log')">Execution Logging</button>
-            </div>
-            <div id="cfgSubReconPanel">
-              <div class="cfg-grid-3">
-                <div><label class="lbl">Catalog</label><input class="inp" id="cfgReconCatalog" placeholder="reconciliation" value="reconciliation"></div>
-                <div><label class="lbl">Schema</label><input class="inp" id="cfgReconSchema" placeholder="hr" value="hr"></div>
-                <div><label class="lbl">Table Name</label><input class="inp" id="cfgReconTable" placeholder="ReconcilationDetails" value="ReconcilationDetails"></div>
-              </div>
-              <div style="margin-top:6px;">
-                <label class="lbl">Managed Location (ABFSS) <span style="font-weight:400;color:var(--t4);">(optional — auto-filled)</span>
-                  <button type="button" class="cfg-auto-btn" onclick="cfgAutoFillLoc('cfgReconLocation')" title="Re-derive from storage account">Re-derive</button>
-                </label>
-                <input class="inp" id="cfgReconLocation" placeholder="abfss://container@account.dfs.core.windows.net/path">
-              </div>
-            </div>
-            <div id="cfgSubLogPanel" style="display:none;">
-              <div class="cfg-grid-3">
-                <div><label class="lbl">Catalog</label><input class="inp" id="cfgLogCatalog" placeholder="logging" value="logging"></div>
-                <div><label class="lbl">Schema</label><input class="inp" id="cfgLogSchema" placeholder="hr" value="hr"></div>
-                <div><label class="lbl">Table Name</label><input class="inp" id="cfgLogTable" placeholder="ExecutionLog" value="ExecutionLog"></div>
-              </div>
-              <div style="margin-top:6px;">
-                <label class="lbl">Managed Location (ABFSS) <span style="font-weight:400;color:var(--t4);">(optional — auto-filled)</span>
-                  <button type="button" class="cfg-auto-btn" onclick="cfgAutoFillLoc('cfgLogLocation')" title="Re-derive from storage account">Re-derive</button>
-                </label>
-                <input class="inp" id="cfgLogLocation" placeholder="abfss://container@account.dfs.core.windows.net/path">
-              </div>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -1692,58 +1655,6 @@
               <div><label class="lbl">Container</label><input class="inp" id="cfgExSilverContainer" placeholder="e.g. datalake"></div>
               <div><label class="lbl">Base Path</label><input class="inp" id="cfgExSilverPath" placeholder="e.g. dev/uc-managed/silver"></div>
               <div style="display:flex;align-items:flex-end;"><button class="btn btn-xs" onclick="cfgExTestAccess('silver')" style="background:#10b981;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-weight:600;font-size:11px;">Test Access</button></div>
-            </div>
-          </div>
-
-          <!-- Reconciliation Layer -->
-          <div class="card" data-layer="reconciliation" style="border-left:4px solid #8b5cf6;">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-              <div style="width:32px;height:32px;border-radius:8px;background:#ede9fe;display:flex;align-items:center;justify-content:center;">
-                <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:#8b5cf6;stroke-width:2;"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-              </div>
-              <div>
-                <div style="font-weight:700;font-size:13px;color:var(--t1);">Reconciliation</div>
-                <div style="font-size:10px;color:var(--t3);">Data quality reconciliation layer</div>
-              </div>
-              <div style="margin-left:auto;" id="cfgReconciliationStatus">
-                <span style="font-size:10px;padding:3px 8px;border-radius:10px;background:#fee2e2;color:#dc2626;font-weight:600;">Not Validated</span>
-              </div>
-            </div>
-            <div class="cfg-grid" style="grid-template-columns:1fr 1fr 1fr;">
-              <div><label class="lbl">Target Catalog</label><select class="inp" id="cfgExReconciliationCatalog" onchange="cfgExLoadSchemas('reconciliation')"><option value="">— select catalog —</option></select></div>
-              <div><label class="lbl">Target Schema</label><select class="inp" id="cfgExReconciliationSchema"><option value="">— select catalog first —</option></select></div>
-              <div><label class="lbl">Storage Account</label><input class="inp" id="cfgExReconciliationStorage" placeholder="e.g. adlssqltodatabricks"></div>
-            </div>
-            <div class="cfg-grid" style="grid-template-columns:1fr 1fr 1fr;margin-top:8px;">
-              <div><label class="lbl">Container</label><input class="inp" id="cfgExReconciliationContainer" placeholder="e.g. datalake"></div>
-              <div><label class="lbl">Base Path</label><input class="inp" id="cfgExReconciliationPath" placeholder="e.g. dev/uc-managed/reconciliation"></div>
-              <div style="display:flex;align-items:flex-end;"><button class="btn btn-xs" onclick="cfgExTestAccess('reconciliation')" style="background:#8b5cf6;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-weight:600;font-size:11px;">Test Access</button></div>
-            </div>
-          </div>
-
-          <!-- LoggingDetails Layer -->
-          <div class="card" data-layer="loggingdetails" style="border-left:4px solid #06b6d4;">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-              <div style="width:32px;height:32px;border-radius:8px;background:#cffafe;display:flex;align-items:center;justify-content:center;">
-                <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:#06b6d4;stroke-width:2;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-              </div>
-              <div>
-                <div style="font-weight:700;font-size:13px;color:var(--t1);">Logging Details</div>
-                <div style="font-size:10px;color:var(--t3);">Migration logging &amp; audit trail</div>
-              </div>
-              <div style="margin-left:auto;" id="cfgLoggingdetailsStatus">
-                <span style="font-size:10px;padding:3px 8px;border-radius:10px;background:#fee2e2;color:#dc2626;font-weight:600;">Not Validated</span>
-              </div>
-            </div>
-            <div class="cfg-grid" style="grid-template-columns:1fr 1fr 1fr;">
-              <div><label class="lbl">Target Catalog</label><select class="inp" id="cfgExLoggingdetailsCatalog" onchange="cfgExLoadSchemas('loggingdetails')"><option value="">— select catalog —</option></select></div>
-              <div><label class="lbl">Target Schema</label><select class="inp" id="cfgExLoggingdetailsSchema"><option value="">— select catalog first —</option></select></div>
-              <div><label class="lbl">Storage Account</label><input class="inp" id="cfgExLoggingdetailsStorage" placeholder="e.g. adlssqltodatabricks"></div>
-            </div>
-            <div class="cfg-grid" style="grid-template-columns:1fr 1fr 1fr;margin-top:8px;">
-              <div><label class="lbl">Container</label><input class="inp" id="cfgExLoggingdetailsContainer" placeholder="e.g. datalake"></div>
-              <div><label class="lbl">Base Path</label><input class="inp" id="cfgExLoggingdetailsPath" placeholder="e.g. dev/uc-managed/loggingdetails"></div>
-              <div style="display:flex;align-items:flex-end;"><button class="btn btn-xs" onclick="cfgExTestAccess('loggingdetails')" style="background:#06b6d4;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-weight:600;font-size:11px;">Test Access</button></div>
             </div>
           </div>
 
@@ -2301,14 +2212,6 @@
             <div style="font-weight:600;color:#059669;">Silver</div>
             <select class="inp" id="wfLayerSilverCat" onchange="wfLayerLoadSchemas('silver')" style="font-size:10px;padding:3px 6px;"><option>— catalog —</option></select>
             <select class="inp" id="wfLayerSilverSch" style="font-size:10px;padding:3px 6px;"><option>— schema —</option></select>
-
-            <div style="font-weight:600;color:#8b5cf6;">Reconciliation</div>
-            <select class="inp" id="wfLayerReconciliationCat" onchange="wfLayerLoadSchemas('reconciliation')" style="font-size:10px;padding:3px 6px;"><option>— catalog —</option></select>
-            <select class="inp" id="wfLayerReconciliationSch" style="font-size:10px;padding:3px 6px;"><option>— schema —</option></select>
-
-            <div style="font-weight:600;color:#06b6d4;">LoggingDetails</div>
-            <select class="inp" id="wfLayerLoggingdetailsCat" onchange="wfLayerLoadSchemas('loggingdetails')" style="font-size:10px;padding:3px 6px;"><option>— catalog —</option></select>
-            <select class="inp" id="wfLayerLoggingdetailsSch" style="font-size:10px;padding:3px 6px;"><option>— schema —</option></select>
           </div>
           <div id="wfLayerMappingStatus" style="margin-top:8px;font-size:10px;color:var(--t4);"></div>
         </div>
@@ -3187,7 +3090,7 @@
               </button>
             </div>
           </div>
-          <div id="dbxExecLogStatus" style="font-size:11px;color:var(--t4);margin-bottom:8px;">Click "Fetch Databricks Logs" to load execution logs from the ExecutionLog table.</div>
+          <div id="dbxExecLogStatus" style="font-size:11px;color:var(--t4);margin-bottom:8px;">Click "Fetch Databricks Logs" to load execution logs from wf_run_history.</div>
           <div style="overflow-x:auto;max-height:400px;overflow-y:auto;">
             <table style="width:100%;border-collapse:collapse;font-size:12px;display:none;" id="dbxExecLogTable">
               <thead style="position:sticky;top:0;z-index:1;" id="dbxExecLogHead">

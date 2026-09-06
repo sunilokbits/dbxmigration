@@ -44,7 +44,7 @@ bronze_customers, bronze_products, bronze_categories, bronze_stores, bronze_fact
 customers, products, stores, fact_sales_orders, invoices, payments, dimemployee, dimdepartment, dimjobrole, dimlocation
 
 ### Operations
-- {LOG}.executionlog — pipeline execution logs
+- {META_CAT}.{META_SCH}.wf_run_history — per-run status/timing/error detail for every pipeline execution
 - {RECON}.reconcilationdetails — source vs target reconciliation
 
 ### Samples
@@ -73,8 +73,8 @@ customers, products, stores, fact_sales_orders, invoices, payments, dimemployee,
 - 02_Bronze, 02_Meta_Bronze
 - 03_Silver, 03_Meta_Silver
 - 04_Meta_Reconciliation
-- 05_Meta_ExecutionLog
 
 ## Data Flow
 SQL Server → Landing Zone (ADLS) → Bronze (Auto Loader) → Silver (cleaned) → Gold
-With reconciliation, execution logging, and watermark tracking at each stage.
+With reconciliation and watermark tracking at each stage; every run's status/
+timing/error detail is captured in wf_run_history.

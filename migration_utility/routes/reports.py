@@ -146,15 +146,18 @@ def add_audit_event():
 @reports_bp.route("/audit/execution-logs", methods=["GET"])
 @login_required
 def get_audit_execution_logs():
+    """Backed by wf_run_history, not a separate ExecutionLog table (removed --
+    it was a strict subset of wf_run_history, and a less accurate one: its
+    started_at/completed_at/duration_sec were never actually populated,
+    unlike wf_run_history's, which come from real run timestamps)."""
     cfg = get_config()
     dbx_host = cfg.get("databricks_host", "").rstrip("/")
     dbx_token = get_databricks_token()
     if not dbx_host or not dbx_token:
         return jsonify({"success": False, "logs": [], "error": "Databricks not configured."})
-    log_cfg = cfg.get("logging", {})
-    log_cat = log_cfg.get("catalog", "loggingdetails")
-    log_sch = log_cfg.get("schema", "hr")
-    log_tbl = log_cfg.get("table", "ExecutionLog")
+    log_cat = cfg.get("metadata_catalog", "admin_source") or "admin_source"
+    log_sch = cfg.get("metadata_schema", "configtables") or "configtables"
+    log_tbl = "wf_run_history"
     uc = UnityCatalogExecutor(dbx_host, dbx_token, log_cat, log_sch)
     wh_resp = uc.list_warehouses()
     warehouses = wh_resp.get("warehouses", [])
@@ -166,7 +169,7 @@ def get_audit_execution_logs():
     limit = min(int(request.args.get("limit", 200)), 2000)
     offset = max(int(request.args.get("offset", 0)), 0)
     fqn = f"`{log_cat}`.`{log_sch}`.`{log_tbl}`"
-    sql = f"SELECT * FROM {fqn} ORDER BY 1 DESC LIMIT {limit} OFFSET {offset}"
+    sql = f"SELECT * FROM {fqn} ORDER BY started_at DESC LIMIT {limit} OFFSET {offset}"
     result = uc._execute_statement(sql, wh_id, wait_timeout="30s")
     if result.get("error"):
         return jsonify({"success": False, "logs": [], "error": result["error"]})

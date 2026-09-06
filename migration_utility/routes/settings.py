@@ -452,12 +452,16 @@ def test_storage_credential():
 
 
 def _configured_catalog_names(cfg):
-    """Catalog names this app provisions, from the saved deploy config."""
+    """Catalog names this app provisions, from the saved deploy config.
+
+    Reconciliation is no longer its own catalog -- it always lives in a
+    fixed `reconciliation` schema under metadata_catalog (already covered
+    below), and the Logging layer / ExecutionLog table was removed
+    entirely.
+    """
     names = set(cfg.get("catalogs") or {})
     for key in ("metadata_catalog", "volume_catalog"):
         names.add((cfg.get(key) or "").strip())
-    for section in ("reconciliation", "logging"):
-        names.add(((cfg.get(section) or {}).get("catalog") or "").strip())
     return {name for name in names if name and name not in ("system", "__databricks_internal")}
 
 

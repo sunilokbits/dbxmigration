@@ -50,8 +50,9 @@ APP_CONTEXT_PREAMBLE = (
 
 def resolve_configured_catalogs() -> dict:
     """Resolve this deployment's actually-configured catalog.schema pairs,
-    read live from Settings -- Metadata Catalog, and each medallion/
-    reconciliation/logging catalog. Mirrors the same dynamic resolution
+    read live from Settings -- Metadata Catalog and each medallion catalog
+    (reconciliation is derived, not separately configured). Mirrors the
+    same dynamic resolution
     used for _fqn()/get_catalog_schema() and the deploy pipeline's Genie
     Space instructions rendering, so every place that needs to tell an
     LLM "here's where things live" resolves it the same way instead of
@@ -77,22 +78,18 @@ def resolve_configured_catalogs() -> dict:
     bronze_cat, bronze_sch = _layer("bronze")
     silver_cat, silver_sch = _layer("silver")
 
-    # reports.py/workflow.py's Reconciliation Report and execution-log routes
-    # read these from top-level "reconciliation"/"logging" keys, not the
-    # medallion mapping -- prefer those, fall back to the mapping's entries.
-    recon_top = cfg.get("reconciliation") or {}
-    recon_cat = recon_top.get("catalog") or _layer("reconciliation")[0]
-    recon_sch = recon_top.get("schema") or _layer("reconciliation")[1]
-    log_top = cfg.get("logging") or {}
-    log_cat = log_top.get("catalog") or _layer("loggingdetails")[0]
-    log_sch = log_top.get("schema") or _layer("loggingdetails")[1]
+    # Reconciliation results always live in a fixed `reconciliation` schema
+    # under the metadata catalog -- no longer a separate configurable
+    # catalog (see workflow_manager._recon_fqn). The "Logging" layer /
+    # ExecutionLog table was removed entirely -- wf_run_history already
+    # captures every run's status/timing/error detail.
+    recon_cat, recon_sch = (meta_cat, "reconciliation") if meta_cat else ("", "")
 
     return {
         "metadata": (meta_cat, meta_sch),
         "bronze": (bronze_cat, bronze_sch),
         "silver": (silver_cat, silver_sch),
         "reconciliation": (recon_cat, recon_sch),
-        "logging": (log_cat, log_sch),
     }
 
 
@@ -108,7 +105,6 @@ def _build_configured_catalog_context() -> str:
         ("Bronze layer (raw ingested data)", *resolved["bronze"]),
         ("Silver layer (cleaned/enriched data)", *resolved["silver"]),
         ("Reconciliation (source vs target row-count checks)", *resolved["reconciliation"]),
-        ("Logging (pipeline execution logs)", *resolved["logging"]),
     ]
     lines = [r for r in rows if r[1] and r[2]]
     if not lines:
@@ -228,9 +224,10 @@ Migration Studio App  ←→  Genie AI (this panel)
 | `admin_source` | `migration_app` | App runtime: migration jobs, audit log, user roles, schedules |
 | `bronze` | `hr` | Raw SQL Server ingestion: customers, products, sales orders, employees, invoices |
 | `silver` | `hr` | Cleaned/enriched HR data after medallion processing |
-| `loggingdetails` | `hr` | Pipeline execution logs (rows processed, duration, errors) |
-| `reconciliation` | `hr` | Source vs target row-count reconciliation results |
+| `admin_source` | `reconciliation` | Source vs target row-count reconciliation results (`reconcilationdetails`) |
 | `samples` | various | NYC taxi trips, TPC-H benchmark orders |
+
+Pipeline execution logs (rows processed, duration, errors) live in `admin_source.configtables.wf_run_history`, not a separate catalog.
 
 You can ask data questions about any of these — for example: *"Show total sales by product"* or *"Which migration jobs failed?"*"""
     ),
@@ -347,7 +344,7 @@ Config stored in `admin_source.configtables.wf_scheduler_config`.""",
     "reconciliation": """**Reconciliation** — Compare source vs target after migration.
 
 Checks row counts, numeric aggregate sums, NULL differences, and variance %.
-Results in `reconciliation.hr.reconcilationdetails`.""",
+Results in `admin_source.reconciliation.reconcilationdetails`.""",
 
     "data_quality": """**Data Quality** — Validate completeness, accuracy, consistency, freshness.
 

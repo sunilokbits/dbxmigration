@@ -429,12 +429,6 @@ def sch_run_now(schedule_id):
         password=get_source_password(),
         catalog=cfg.get("metadata_catalog", ""),
         schema=cfg.get("metadata_schema", ""),
-        recon_catalog=cfg.get("reconciliation", {}).get("catalog", "reconciliation"),
-        recon_schema=cfg.get("reconciliation", {}).get("schema", "hr"),
-        recon_table=cfg.get("reconciliation", {}).get("table", "ReconcilationDetails"),
-        log_catalog=cfg.get("logging", {}).get("catalog", "loggingdetails"),
-        log_schema=cfg.get("logging", {}).get("schema", "hr"),
-        log_table=cfg.get("logging", {}).get("table", "ExecutionLog"),
     )
     now = datetime.now(timezone.utc).isoformat()
     schedule["last_run"] = now
@@ -706,12 +700,6 @@ def _scheduler_tick_inner():
                 password=get_source_password(),
                 catalog=cfg.get("metadata_catalog", ""),
                 schema=cfg.get("metadata_schema", ""),
-                recon_catalog=cfg.get("reconciliation", {}).get("catalog", "reconciliation"),
-                recon_schema=cfg.get("reconciliation", {}).get("schema", "hr"),
-                recon_table=cfg.get("reconciliation", {}).get("table", "ReconcilationDetails"),
-                log_catalog=cfg.get("logging", {}).get("catalog", "loggingdetails"),
-                log_schema=cfg.get("logging", {}).get("schema", "hr"),
-                log_table=cfg.get("logging", {}).get("table", "ExecutionLog"),
             )
 
             jobs_str = " → ".join(job_names) if job_names else table_name

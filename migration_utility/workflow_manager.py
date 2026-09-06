@@ -517,6 +517,30 @@ def _fqn(table: str) -> str:
     return f"`{c}`.`{s}`.`{table}`"
 
 
+RECON_SCHEMA = "reconciliation"
+RECON_TABLE  = "reconcilationdetails"
+
+
+def _recon_fqn() -> str:
+    """Fully qualified reconciliation results table.
+
+    Always `{metadata_catalog}`.`reconciliation`.`reconcilationdetails` --
+    reconciliation previously had its own dedicated, user-configurable
+    catalog+schema in Settings for this single table. Consolidated into a
+    fixed schema under the metadata catalog (same catalog wf_* tables live
+    in) since one table doesn't need its own catalog. Table name is
+    lowercase, matching the same convention applied to bronze/silver table
+    names elsewhere.
+    """
+    try:
+        from config_cache import get_config as _get_app_cfg
+        dyn = _get_app_cfg() or {}
+        c = dyn.get("metadata_catalog") or _dbr_catalog or "main"
+    except Exception:
+        c = _dbr_catalog or "main"
+    return f"`{c}`.`{RECON_SCHEMA}`.`{RECON_TABLE}`"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  METADATA FLOW — INITIALISE DELTA TABLES IN DATABRICKS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -802,6 +826,28 @@ def init_metadata_flow(host: str, token: str, catalog: str = "main",
             executed_at      TIMESTAMP
         ) USING DELTA
         COMMENT 'Scheduler execution history — audit log for all scheduled runs'""",
+
+        # 9. Reconciliation results -- consolidated here from what used to be
+        # its own dedicated, user-configurable catalog for a single table
+        # (see _recon_fqn()). Schema created explicitly since it's a schema
+        # under the metadata catalog, not the metadata catalog's own schema.
+        f"CREATE SCHEMA IF NOT EXISTS `{_dbr_catalog}`.`{RECON_SCHEMA}`",
+        f"""CREATE TABLE IF NOT EXISTS {_recon_fqn()} (
+            recon_run_id    STRING NOT NULL,
+            pipeline_run_id STRING NOT NULL,
+            job_id          STRING NOT NULL,
+            source_table    STRING NOT NULL,
+            bronze_table    STRING NOT NULL,
+            column_name     STRING NOT NULL,
+            data_type       STRING,
+            source_value    DOUBLE,
+            bronze_value    DOUBLE,
+            variance        DOUBLE,
+            variance_pct    DOUBLE,
+            status          STRING,
+            recon_timestamp TIMESTAMP
+        ) USING DELTA
+        COMMENT 'Source vs Bronze reconciliation results — one row per compared column'""",
     ]
 
     results = []
@@ -3320,14 +3366,6 @@ def deploy_metadata_notebooks(
     landing_path: str = "/mnt/landing",
     workspace_path: str = "/Shared/MetadataPipeline",
     pipeline_mode: str = "standard",
-    recon_catalog: str = "reconciliation",
-    recon_schema: str = "hr",
-    recon_table: str = "ReconcilationDetails",
-    log_catalog: str = "logging",
-    log_schema: str = "hr",
-    log_table: str = "ExecutionLog",
-    recon_location: str = "",
-    log_location: str = "",
     cdc_mode: str = "watermark",
     primary_keys: list = None,
 ) -> dict:
@@ -3351,14 +3389,6 @@ def deploy_metadata_notebooks(
         landing_path=landing_path,
         workspace_path=workspace_path,
         pipeline_mode=pipeline_mode,
-        recon_catalog=recon_catalog,
-        recon_schema=recon_schema,
-        recon_table=recon_table,
-        log_catalog=log_catalog,
-        log_schema=log_schema,
-        log_table=log_table,
-        recon_location=recon_location,
-        log_location=log_location,
         cdc_mode=cdc_mode,
         primary_keys=primary_keys or [],
     )
@@ -3631,12 +3661,6 @@ def run_pipeline_on_databricks(
     catalog: str = "",
     schema: str = "",
     landing_path: str = "/mnt/landing",
-    recon_catalog: str = "reconciliation",
-    recon_schema: str = "hr",
-    recon_table: str = "ReconcilationDetails",
-    log_catalog: str = "logging",
-    log_schema: str = "hr",
-    log_table: str = "ExecutionLog",
 ) -> dict:
     """
     Submit the 00_Meta_Orchestrator notebook on Databricks to run a pipeline
@@ -3672,12 +3696,6 @@ def run_pipeline_on_databricks(
         "schema":         sch,
         "landing_path":   landing_path,
         "workspace_path": ws,
-        "recon_catalog":  recon_catalog,
-        "recon_schema":   recon_schema,
-        "recon_table":    recon_table,
-        "log_catalog":    log_catalog,
-        "log_schema":     log_schema,
-        "log_table":      log_table,
     }
 
     # Pass explicit data catalog params from the pipeline group's target_config

@@ -7,7 +7,12 @@ admin_source/bronze.hr/... names this app happened to be tested with.
 Placeholders in deploy/genie_space_{instructions,description}.txt:
   {META_CAT}.{META_SCH}  -- Metadata Catalog/Schema (wf_* + app tables)
   {BRONZE} {SILVER}      -- medallion layer target catalog.schema
-  {RECON} {LOG}          -- reconciliation / loggingdetails catalog.schema
+  {RECON}                -- reconciliation results, always {META_CAT}.reconciliation
+                            (no longer a separate configurable catalog)
+
+The "Logging" layer / ExecutionLog table was removed entirely -- wf_run_history
+already captures every run's status/timing/error detail, so there is no {LOG}
+placeholder to render anymore.
 
 Best-effort: on any failure this falls back to the static defaults
 (same as the app itself does before Settings has ever been configured)
@@ -39,8 +44,7 @@ placeholders = {
     "META_SCH": schema,
     "BRONZE": "bronze.hr",
     "SILVER": "silver.hr",
-    "RECON": "reconciliation.hr",
-    "LOG": "loggingdetails.hr",
+    "RECON": f"{catalog}.reconciliation",
 }
 
 try:
@@ -75,26 +79,18 @@ if wh_id:
 
         if cfg.get("metadata_catalog"):
             placeholders["META_CAT"] = cfg["metadata_catalog"]
+            # Reconciliation always lives in a fixed `reconciliation` schema
+            # under the metadata catalog (see workflow_manager._recon_fqn) --
+            # re-derive it here now that META_CAT may have just changed.
+            placeholders["RECON"] = f"{cfg['metadata_catalog']}.reconciliation"
         if cfg.get("metadata_schema"):
             placeholders["META_SCH"] = cfg["metadata_schema"]
 
         mapping = (cfg.get("existing_setting") or {}).get("medallion_layer_mapping") or {}
-        for layer_key, ph in (("bronze", "BRONZE"), ("silver", "SILVER"),
-                               ("reconciliation", "RECON"), ("loggingdetails", "LOG")):
+        for layer_key, ph in (("bronze", "BRONZE"), ("silver", "SILVER")):
             layer = mapping.get(layer_key) or {}
             if layer.get("catalog") and layer.get("schema"):
                 placeholders[ph] = f"{layer['catalog']}.{layer['schema']}"
-
-        # reports.py/workflow.py's Reconciliation Report and Audit execution-log
-        # routes actually read these from top-level "reconciliation"/"logging"
-        # config keys, not medallion_layer_mapping -- prefer those since they're
-        # the ones a USE CATALOG error actually refers to.
-        recon_top = cfg.get("reconciliation") or {}
-        if recon_top.get("catalog") and recon_top.get("schema"):
-            placeholders["RECON"] = f"{recon_top['catalog']}.{recon_top['schema']}"
-        log_top = cfg.get("logging") or {}
-        if log_top.get("catalog") and log_top.get("schema"):
-            placeholders["LOG"] = f"{log_top['catalog']}.{log_top['schema']}"
     except Exception as exc:
         print(f"Could not read app_config for Genie template rendering (using defaults): {exc}")
 else:

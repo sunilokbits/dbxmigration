@@ -271,14 +271,6 @@ def wf_deploy_notebooks():
         pipeline_mode=d.get("pipeline_mode", "standard").strip(),
         cdc_mode=d.get("cdc_mode", "watermark").strip(),
         primary_keys=d.get("primary_keys", []),
-        recon_catalog=d.get("recon_catalog", "reconciliation").strip(),
-        recon_schema=d.get("recon_schema", "hr").strip(),
-        recon_table=d.get("recon_table", "ReconcilationDetails").strip(),
-        log_catalog=d.get("log_catalog", "logging").strip(),
-        log_schema=d.get("log_schema", "hr").strip(),
-        log_table=d.get("log_table", "ExecutionLog").strip(),
-        recon_location=d.get("recon_location", "").strip(),
-        log_location=d.get("log_location", "").strip(),
     ))
 
 
@@ -305,14 +297,6 @@ def wf_generate_notebooks():
         pipeline_mode=d.get("pipeline_mode", "standard").strip(),
         cdc_mode=d.get("cdc_mode", "watermark").strip(),
         primary_keys=d.get("primary_keys", []),
-        recon_catalog=d.get("recon_catalog", "reconciliation").strip(),
-        recon_schema=d.get("recon_schema", "hr").strip(),
-        recon_table=d.get("recon_table", "ReconcilationDetails").strip(),
-        log_catalog=d.get("log_catalog", "logging").strip(),
-        log_schema=d.get("log_schema", "hr").strip(),
-        log_table=d.get("log_table", "ExecutionLog").strip(),
-        recon_location=d.get("recon_location", "").strip(),
-        log_location=d.get("log_location", "").strip(),
     )
     return jsonify(gen_result)
 
@@ -388,12 +372,6 @@ def wf_run_on_databricks(group_id):
         workspace_path=d.get("workspace_path", "").strip(),
         catalog=d.get("catalog", "").strip(), schema=d.get("schema", "").strip(),
         landing_path=d.get("landing_path", "/mnt/landing").strip(),
-        recon_catalog=d.get("recon_catalog", "reconciliation").strip(),
-        recon_schema=d.get("recon_schema", "hr").strip(),
-        recon_table=d.get("recon_table", "ReconcilationDetails").strip(),
-        log_catalog=d.get("log_catalog", "logging").strip(),
-        log_schema=d.get("log_schema", "hr").strip(),
-        log_table=d.get("log_table", "ExecutionLog").strip(),
     )
     if result.get("success"):
         log_action("pipeline_run_databricks", "pipeline", group_id,
@@ -831,10 +809,12 @@ def wf_recon_data():
         if not dbx_host or not dbx_token:
             return jsonify({"success": False, "rows": [], "error": "Databricks not configured."})
 
-        recon_cfg = cfg.get("reconciliation", {})
-        recon_cat = recon_cfg.get("catalog", "reconciliation")
-        recon_sch = recon_cfg.get("schema", "hr")
-        recon_tbl = recon_cfg.get("table", "ReconcilationDetails")
+        # Reconciliation results always live in a fixed `reconciliation`
+        # schema under the metadata catalog -- no longer a separate
+        # configurable catalog (see workflow_manager._recon_fqn).
+        recon_cat = cfg.get("metadata_catalog", "admin_source") or "admin_source"
+        recon_sch = "reconciliation"
+        recon_tbl = "reconcilationdetails"
 
         uc = UnityCatalogExecutor(dbx_host, dbx_token, recon_cat, recon_sch)
         wh_resp = uc.list_warehouses()

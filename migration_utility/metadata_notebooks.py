@@ -46,39 +46,31 @@ def generate_metadata_notebooks(
     landing_path: str = "",
     workspace_path: str = "/Shared/MetadataPipeline",
     pipeline_mode: str = "standard",
-    recon_catalog: str = "",
-    recon_schema: str = "",
-    recon_table: str = "",
-    log_catalog: str = "",
-    log_schema: str = "",
-    log_table: str = "",
-    recon_location: str = "",
-    log_location: str = "",
     cdc_mode: str = "watermark",
     primary_keys: list = None,
 ) -> dict:
     """
     Generate metadata-driven notebooks.
-    pipeline_mode: "standard" (4+2 notebooks) or "dlt" (3+2 notebooks with DLT).
+    pipeline_mode: "standard" (4 notebooks) or "dlt" (3+1 notebooks with DLT).
     All parameters fall back to values from deployconfig.json when not provided.
     Returns: {success, notebooks: [{name, code, description, layer, lines}], summary}
+
+    Reconciliation results always land in a fixed `reconciliation` schema
+    under the metadata catalog -- no longer a separate user-configurable
+    catalog (see _gen_reconciliation / workflow_manager._recon_fqn).
+    The separate "Logging" layer / ExecutionLog table has been removed
+    entirely: wf_run_history (workflow_manager.py) already captures every
+    run's status/timing/error detail, more accurately (ExecutionLog's
+    started_at/completed_at/duration_sec were never actually populated) and
+    without a redundant table -- see the Audit & Compliance page, which now
+    reads run history directly instead.
     """
     # ── Load defaults from deployconfig.json ──────────────────────────
     cfg = _load_deploy_config()
-    recon_cfg = cfg.get("reconciliation", {})
-    log_cfg   = cfg.get("logging", {})
 
     catalog        = catalog        or cfg.get("catalogs", {}).get("bronze", {}).get("schemas", [""])[0] and "main"
     schema         = schema         or "default"
     landing_path   = landing_path   or cfg.get("volume_path", "/mnt/landing")
-    recon_catalog  = recon_catalog  or recon_cfg.get("catalog", "reconciliation")
-    recon_schema   = recon_schema   or recon_cfg.get("schema", "hr")
-    recon_table    = recon_table    or recon_cfg.get("table", "ReconcilationDetails")
-    recon_location = recon_location or recon_cfg.get("location", "")
-    log_catalog    = log_catalog    or log_cfg.get("catalog", "logging")
-    log_schema     = log_schema     or log_cfg.get("schema", "hr")
-    log_table      = log_table      or log_cfg.get("table", "ExecutionLog")
-    log_location   = log_location   or log_cfg.get("location", "")
 
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
 
@@ -104,15 +96,9 @@ def generate_metadata_notebooks(
             },
             {
                 "name":        "04_Meta_Reconciliation",
-                "code":        _gen_reconciliation(catalog, schema, landing_path, recon_catalog, recon_schema, recon_table, ts, recon_location=recon_location),
+                "code":        _gen_reconciliation(catalog, schema, landing_path, ts),
                 "description": "Aggregate reconciliation — Source vs Bronze numeric column validation",
                 "layer":       "reconciliation",
-            },
-            {
-                "name":        "05_Meta_ExecutionLog",
-                "code":        _gen_execution_log(catalog, schema, log_catalog, log_schema, log_table, ts, log_location=log_location),
-                "description": "Execution logging — saves per-job run details to logging catalog",
-                "layer":       "logging",
             },
         ]
     else:
@@ -137,21 +123,15 @@ def generate_metadata_notebooks(
             },
             {
                 "name":        "00_Meta_Orchestrator",
-                "code":        _gen_orchestrator(catalog, schema, landing_path, workspace_path, ts, recon_catalog, recon_schema, recon_table, log_catalog, log_schema, log_table),
+                "code":        _gen_orchestrator(catalog, schema, landing_path, workspace_path, ts),
                 "description": "Orchestrator — reads metadata, chains all stages",
                 "layer":       "orchestrator",
             },
             {
                 "name":        "04_Meta_Reconciliation",
-                "code":        _gen_reconciliation(catalog, schema, landing_path, recon_catalog, recon_schema, recon_table, ts, recon_location=recon_location),
+                "code":        _gen_reconciliation(catalog, schema, landing_path, ts),
                 "description": "Aggregate reconciliation — Source vs Bronze numeric column validation",
                 "layer":       "reconciliation",
-            },
-            {
-                "name":        "05_Meta_ExecutionLog",
-                "code":        _gen_execution_log(catalog, schema, log_catalog, log_schema, log_table, ts, log_location=log_location),
-                "description": "Execution logging — saves per-job run details to logging catalog",
-                "layer":       "logging",
             },
         ]
 
@@ -1361,7 +1341,7 @@ dbutils.notebook.exit(exit_payload)
 #  4. METADATA-DRIVEN ORCHESTRATOR
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def _gen_orchestrator(catalog, schema, landing_path, workspace_path, ts, recon_catalog="reconciliation", recon_schema="hr", recon_table="ReconcilationDetails", log_catalog="logging", log_schema="hr", log_table="ExecutionLog"):
+def _gen_orchestrator(catalog, schema, landing_path, workspace_path, ts):
     return f'''# Databricks notebook source
 # MAGIC %md
 # MAGIC # 🎯 Metadata-Driven Orchestrator
@@ -1383,12 +1363,6 @@ dbutils.widgets.text("catalog", "{catalog}", "Metadata Catalog")
 dbutils.widgets.text("schema", "{schema}", "Metadata Schema")
 dbutils.widgets.text("landing_path", "{landing_path}", "Landing Base Path")
 dbutils.widgets.text("workspace_path", "{workspace_path}", "Notebook Workspace Path")
-dbutils.widgets.text("recon_catalog", "{recon_catalog}", "Reconciliation Catalog")
-dbutils.widgets.text("recon_schema", "{recon_schema}", "Reconciliation Schema")
-dbutils.widgets.text("recon_table", "{recon_table}", "Reconciliation Table")
-dbutils.widgets.text("log_catalog", "{log_catalog}", "Logging Catalog")
-dbutils.widgets.text("log_schema", "{log_schema}", "Logging Schema")
-dbutils.widgets.text("log_table", "{log_table}", "Logging Table")
 
 GROUP_ID       = dbutils.widgets.get("group_id").strip()
 LOAD_OVERRIDE  = dbutils.widgets.get("load_type").strip()
@@ -1397,12 +1371,6 @@ CATALOG        = dbutils.widgets.get("catalog").strip()
 SCHEMA         = dbutils.widgets.get("schema").strip()
 LANDING_PATH   = dbutils.widgets.get("landing_path").strip()
 WORKSPACE_PATH = dbutils.widgets.get("workspace_path").strip()
-RECON_CATALOG  = dbutils.widgets.get("recon_catalog").strip()
-RECON_SCHEMA   = dbutils.widgets.get("recon_schema").strip()
-RECON_TABLE    = dbutils.widgets.get("recon_table").strip()
-LOG_CATALOG    = dbutils.widgets.get("log_catalog").strip()
-LOG_SCHEMA     = dbutils.widgets.get("log_schema").strip()
-LOG_TABLE      = dbutils.widgets.get("log_table").strip()
 
 # COMMAND ----------
 
@@ -1553,9 +1521,6 @@ for group in groups:
                                 "catalog":       CATALOG,
                                 "schema":        SCHEMA,
                                 "landing_path":  LANDING_PATH,
-                                "recon_catalog": RECON_CATALOG,
-                                "recon_schema":  RECON_SCHEMA,
-                                "recon_table":   RECON_TABLE,
                             }}
                         )
                         recon_result = json.loads(recon_json) if recon_json else {{}}
@@ -1636,27 +1601,6 @@ exit_payload = json.dumps({{
     "errors":     error_details,
 }})
 
-# ── Execution Logging ──────────────────────────────────────────────
-print(f"\\n📝 Saving execution log to {{LOG_CATALOG}}.{{LOG_SCHEMA}}.{{LOG_TABLE}}…")
-try:
-    log_json = dbutils.notebook.run(
-        f"{{WORKSPACE_PATH}}/05_Meta_ExecutionLog",
-        timeout_seconds=600,
-        arguments={{
-            "catalog":      CATALOG,
-            "schema":       SCHEMA,
-            "log_catalog":  LOG_CATALOG,
-            "log_schema":   LOG_SCHEMA,
-            "log_table":    LOG_TABLE,
-            "results_json": json.dumps(results),
-            "groups_json":  json.dumps([{{"group_id": g["group_id"], "full_table": g["full_table"], "load_type": g.get("load_type","full")}} for g in groups]),
-            "orchestrator_status": "COMPLETED" if not failed else "PARTIAL",
-        }}
-    )
-    print(f"   ✅ Execution log saved")
-except Exception as log_err:
-    print(f"   ⚠️ Execution logging failed (non-blocking): {{log_err}}")
-
 dbutils.notebook.exit(exit_payload)
 '''
 
@@ -1665,8 +1609,13 @@ dbutils.notebook.exit(exit_payload)
 #  4b. AGGREGATE RECONCILIATION NOTEBOOK  (Source vs Bronze)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def _gen_reconciliation(catalog, schema, landing_path, recon_catalog, recon_schema, recon_table, ts, recon_location=""):
-    _loc_clause = f" MANAGED LOCATION '{recon_location}'" if recon_location else ""
+def _gen_reconciliation(catalog, schema, landing_path, ts):
+    # Reconciliation results always live in a fixed `reconciliation` schema
+    # under the metadata catalog (the same catalog CATALOG/`catalog` already
+    # points at) -- previously its own dedicated, user-configurable
+    # catalog+schema for this single table. One table doesn't need its own
+    # catalog, so this is no longer configurable from Settings; table name
+    # is lowercase, matching bronze/silver naming elsewhere.
     return f'''# Databricks notebook source
 # MAGIC %md
 # MAGIC # 🔍 Aggregate Reconciliation — Source vs Bronze
@@ -1679,7 +1628,7 @@ def _gen_reconciliation(catalog, schema, landing_path, recon_catalog, recon_sche
 # MAGIC 1. Identifies all numeric columns (int, bigint, float, decimal, numeric, smallint, tinyint, real, money)
 # MAGIC 2. Computes SUM for each numeric column from **Source** (via JDBC) and **Bronze** (Delta)
 # MAGIC 3. Compares row counts
-# MAGIC 4. Saves per-column results to `{recon_catalog}.{recon_schema}.{recon_table}`
+# MAGIC 4. Saves per-column results to `{{CATALOG}}.reconciliation.reconcilationdetails`
 # MAGIC 5. Each execution creates a unique `recon_run_id` — no duplicates, full audit trail
 # MAGIC ---
 
@@ -1696,9 +1645,6 @@ dbutils.widgets.text("password_b64", "", "Source DB Password (base64)")
 dbutils.widgets.text("catalog", "{catalog}", "Metadata Catalog")
 dbutils.widgets.text("schema", "{schema}", "Metadata Schema")
 dbutils.widgets.text("landing_path", "{landing_path}", "Landing Base Path")
-dbutils.widgets.text("recon_catalog", "{recon_catalog}", "Reconciliation Catalog")
-dbutils.widgets.text("recon_schema", "{recon_schema}", "Reconciliation Schema")
-dbutils.widgets.text("recon_table", "{recon_table}", "Reconciliation Table")
 
 import base64, json, uuid
 from datetime import datetime
@@ -1712,9 +1658,9 @@ PASSWORD     = base64.b64decode(_PWD_B64.encode("ascii")).decode("utf-8") if _PW
 CATALOG      = dbutils.widgets.get("catalog").strip()
 SCHEMA       = dbutils.widgets.get("schema").strip()
 LANDING_PATH = dbutils.widgets.get("landing_path").strip()
-RECON_CATALOG= dbutils.widgets.get("recon_catalog").strip()
-RECON_SCHEMA = dbutils.widgets.get("recon_schema").strip()
-RECON_TABLE  = dbutils.widgets.get("recon_table").strip()
+RECON_CATALOG= CATALOG
+RECON_SCHEMA = "reconciliation"
+RECON_TABLE  = "reconcilationdetails"
 
 RECON_RUN_ID = uuid.uuid4().hex[:12]
 
@@ -1728,10 +1674,6 @@ print(f"📦 Results → {{RECON_CATALOG}}.{{RECON_SCHEMA}}.{{RECON_TABLE}}")
 
 # COMMAND ----------
 
-try:
-    spark.sql(f"CREATE CATALOG IF NOT EXISTS `{{RECON_CATALOG}}`{_loc_clause}")
-except Exception as cat_err:
-    print(f"⚠️ Could not create catalog {{RECON_CATALOG}}: {{cat_err}} — assuming it exists")
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS `{{RECON_CATALOG}}`.`{{RECON_SCHEMA}}`")
 
 recon_full_table = f"`{{RECON_CATALOG}}`.`{{RECON_SCHEMA}}`.`{{RECON_TABLE}}`"
@@ -2050,262 +1992,6 @@ exit_payload = json.dumps({{
 }})
 
 print(f"\\n✅ RECONCILIATION COMPLETE — {{FULL_TABLE}} — {{total_checks}} checks ({{passed}} pass, {{warned}} warn, {{failed_}} fail)")
-dbutils.notebook.exit(exit_payload)
-'''
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  EXECUTION LOG NOTEBOOK
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def _gen_execution_log(catalog, schema, log_catalog, log_schema, log_table, ts, log_location=""):
-    """Generate the 05_Meta_ExecutionLog notebook.
-
-    This notebook is called by the Orchestrator AFTER all jobs complete.
-    It receives the per-job results JSON and the groups JSON, then writes
-    a full audit-trail row per job into the logging Delta table.
-    """
-    _log_loc_clause = f" MANAGED LOCATION '{log_location}'" if log_location else ""
-    return f'''# Databricks notebook source
-# MAGIC %md
-# MAGIC # 📝 Execution Log — Pipeline Run Audit Trail
-# MAGIC **Generated:** {ts}
-# MAGIC
-# MAGIC This notebook saves per-job execution details to
-# MAGIC `{{log_catalog}}.{{log_schema}}.{{log_table}}` as an append-only audit trail.
-# MAGIC
-# MAGIC **Logged per job:** job_id, job_name, stage, full_table, load_type,
-# MAGIC status, rows_processed, started_at, completed_at, duration_sec, error_message
-# MAGIC ---
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 📋 Widget Configuration
-
-# COMMAND ----------
-
-dbutils.widgets.text("catalog",              "{catalog}",      "Metadata Catalog")
-dbutils.widgets.text("schema",               "{schema}",       "Metadata Schema")
-dbutils.widgets.text("log_catalog",          "{log_catalog}",  "Log Catalog")
-dbutils.widgets.text("log_schema",           "{log_schema}",   "Log Schema")
-dbutils.widgets.text("log_table",            "{log_table}",    "Log Table")
-dbutils.widgets.text("results_json",         "{{}}", "Results JSON")
-dbutils.widgets.text("groups_json",          "[]", "Groups JSON")
-dbutils.widgets.text("orchestrator_status",  "",  "Orchestrator Status")
-
-import json, uuid
-from datetime import datetime
-from pyspark.sql.types import (StructType, StructField, StringType,
-                                LongType, DoubleType, TimestampType)
-
-CATALOG      = dbutils.widgets.get("catalog").strip()
-SCHEMA       = dbutils.widgets.get("schema").strip()
-LOG_CATALOG  = dbutils.widgets.get("log_catalog").strip()
-LOG_SCHEMA   = dbutils.widgets.get("log_schema").strip()
-LOG_TABLE    = dbutils.widgets.get("log_table").strip()
-RESULTS_JSON = dbutils.widgets.get("results_json").strip()
-GROUPS_JSON  = dbutils.widgets.get("groups_json").strip()
-ORCH_STATUS  = dbutils.widgets.get("orchestrator_status").strip()
-
-LOG_RUN_ID   = uuid.uuid4().hex[:12]
-LOG_TS       = datetime.now()
-
-print(f"📝 Execution Log Run: {{LOG_RUN_ID}}")
-print(f"📦 Target: {{LOG_CATALOG}}.{{LOG_SCHEMA}}.{{LOG_TABLE}}")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 📊 Parse Execution Results
-
-# COMMAND ----------
-
-try:
-    results_raw = json.loads(RESULTS_JSON)
-except Exception:
-    results_raw = []
-
-try:
-    groups = json.loads(GROUPS_JSON)
-except Exception:
-    groups = []
-
-# Build group lookup for load_type
-# groups can be a list of strings (group IDs) or a list of dicts
-group_lookup = {{}}
-for g in groups:
-    if isinstance(g, dict):
-        gid = g.get("group_id", "")
-        group_lookup[gid] = {{
-            "full_table": g.get("full_table", ""),
-            "load_type":  g.get("load_type", "full"),
-        }}
-    else:
-        # g is a plain group_id string
-        group_lookup[str(g)] = {{"full_table": "", "load_type": "full"}}
-
-# Normalise results — orchestrator sends a flat list of dicts
-if isinstance(results_raw, dict):
-    results_list = [results_raw]
-elif isinstance(results_raw, list):
-    results_list = results_raw
-else:
-    results_list = []
-
-print(f"📊 Received {{len(results_list)}} job results, {{len(groups)}} groups")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 💾 Ensure Logging Table Exists
-
-# COMMAND ----------
-
-from pyspark.sql.types import (StructType, StructField, StringType,
-                                LongType, DoubleType, TimestampType)
-
-try:
-    spark.sql(f"CREATE CATALOG IF NOT EXISTS `{{LOG_CATALOG}}`{_log_loc_clause}")
-except Exception as cat_err:
-    print(f"⚠️ Could not create catalog {{LOG_CATALOG}}: {{cat_err}} — assuming it exists")
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS `{{LOG_CATALOG}}`.`{{LOG_SCHEMA}}`")
-
-log_full_table = f"`{{LOG_CATALOG}}`.`{{LOG_SCHEMA}}`.`{{LOG_TABLE}}`"
-
-spark.sql(f"""
-    CREATE TABLE IF NOT EXISTS {{log_full_table}} (
-        log_run_id          STRING NOT NULL,
-        group_id            STRING NOT NULL,
-        full_table          STRING NOT NULL,
-        stage               STRING NOT NULL,
-        load_type           STRING,
-        status              STRING,
-        rows_processed      BIGINT,
-        started_at          STRING,
-        completed_at        STRING,
-        duration_sec        DOUBLE,
-        error_message       STRING,
-        orchestrator_status STRING,
-        log_timestamp       TIMESTAMP
-    ) USING DELTA
-""")
-print(f"📦 Table {{log_full_table}} ready")
-
-log_schema = StructType([
-    StructField("log_run_id",          StringType(),    False),
-    StructField("group_id",            StringType(),    False),
-    StructField("full_table",          StringType(),    False),
-    StructField("stage",               StringType(),    False),
-    StructField("load_type",           StringType(),    True),
-    StructField("status",              StringType(),    True),
-    StructField("rows_processed",      LongType(),      True),
-    StructField("started_at",          StringType(),    True),
-    StructField("completed_at",        StringType(),    True),
-    StructField("duration_sec",        DoubleType(),    True),
-    StructField("error_message",       StringType(),    True),
-    StructField("orchestrator_status", StringType(),    True),
-    StructField("log_timestamp",       TimestampType(), True),
-])
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 🔨 Build Log Rows
-
-# COMMAND ----------
-
-log_rows = []
-
-# results_list is a flat list of job result dicts from the orchestrator
-for entry in results_list:
-    job_name   = entry.get("job", "unknown")
-    status     = entry.get("status", "UNKNOWN")
-    rows       = entry.get("rows", 0)
-    error      = entry.get("error", "")
-
-    # Infer stage from job name pattern
-    if "Recon_" in job_name:
-        stage = "reconciliation"
-    elif job_name.startswith("ExtractTo_"):
-        stage = "extract"
-    elif "_To_bronze_" in job_name or "_To_Bronze_" in job_name:
-        stage = "landing_to_bronze"
-    elif "_To_silver_" in job_name or "_To_Silver_" in job_name:
-        stage = "bronze_to_silver"
-    else:
-        stage = "unknown"
-
-    # Try to match a group for full_table/load_type
-    full_table = job_name
-    load_type  = "full"
-    for gid, ginfo in group_lookup.items():
-        if ginfo.get("full_table", "") and ginfo["full_table"] in job_name:
-            full_table = ginfo["full_table"]
-            load_type  = ginfo.get("load_type", "full")
-            break
-
-    log_rows.append({{
-        "log_run_id":          LOG_RUN_ID,
-        "group_id":            job_name,
-        "full_table":          str(full_table),
-        "stage":               str(stage),
-        "load_type":           str(load_type),
-        "status":              str(status),
-        "rows_processed":      int(rows) if rows else 0,
-        "started_at":          "",
-        "completed_at":        "",
-        "duration_sec":        0.0,
-        "error_message":       str(error)[:2000] if error else "",
-        "orchestrator_status": str(ORCH_STATUS),
-        "log_timestamp":       LOG_TS,
-    }})
-
-print(f"📝 Built {{len(log_rows)}} log entries")
-
-if not log_rows:
-    print("⚠️ No execution data to log")
-    dbutils.notebook.exit(json.dumps({{"status": "SKIPPED", "reason": "No execution data"}}))
-
-for lr in log_rows[:5]:
-    icon = "✅" if lr["status"] == "SUCCESS" else ("⚠️" if lr["status"] == "SKIPPED" else "❌")
-    print(f"   {{icon}} {{lr['full_table']}} / {{lr['stage']}} → {{lr['status']}} ({{lr['rows_processed']:,}} rows, {{lr['duration_sec']:.1f}}s)")
-if len(log_rows) > 5:
-    print(f"   … and {{len(log_rows) - 5}} more")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 💾 Save to Logging Table
-
-# COMMAND ----------
-
-log_df = spark.createDataFrame(log_rows, schema=log_schema)
-log_df.write.mode("append").option("mergeSchema", "true").saveAsTable(log_full_table)
-
-total_logged = len(log_rows)
-success_count = sum(1 for r in log_rows if r["status"] == "SUCCESS")
-failed_count  = sum(1 for r in log_rows if r["status"] == "FAILED")
-
-print(f"\\n💾 Saved {{total_logged}} execution log records to {{log_full_table}}")
-print(f"   ✅ SUCCESS: {{success_count}}  ❌ FAILED: {{failed_count}}  📊 OTHER: {{total_logged - success_count - failed_count}}")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 📊 Summary
-
-# COMMAND ----------
-
-exit_payload = json.dumps({{
-    "status":       "COMPLETED",
-    "log_run_id":   LOG_RUN_ID,
-    "total_logged": total_logged,
-    "success":      success_count,
-    "failed":       failed_count,
-    "log_table":    log_full_table,
-}})
-
-print(f"\\n✅ EXECUTION LOG COMPLETE — {{total_logged}} entries saved to {{log_full_table}}")
 dbutils.notebook.exit(exit_payload)
 '''
 
@@ -3432,38 +3118,6 @@ else:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 📝 Phase 5 — Run Execution Logging
-
-# COMMAND ----------
-
-log_status = "SKIPPED"
-if dlt_status == "COMPLETED":
-    try:
-        log_nb = f"{{WORKSPACE_PATH}}/05_Meta_ExecutionLog"
-        print(f"📝 Running execution logging: {{log_nb}}")
-
-        # Build results JSON for the execution log
-        _log_results = json.dumps(extract_results)
-        _log_groups  = json.dumps([g.get("group_id","") for g in groups])
-        _orch_status = "COMPLETED" if dlt_status == "COMPLETED" and not extract_fail else "PARTIAL"
-
-        log_result = dbutils.notebook.run(log_nb, 1800, {{
-            "catalog": CATALOG, "schema": SCHEMA,
-            "results_json": _log_results,
-            "groups_json": _log_groups,
-            "orchestrator_status": _orch_status,
-        }})
-        log_status = "COMPLETED"
-        print(f"  ✅ Execution logging complete")
-    except Exception as log_err:
-        log_status = "FAILED"
-        print(f"  ❌ Execution logging failed: {{log_err}}")
-else:
-    print("⏭️ Skipping execution logging — Spark Declarative Pipeline did not complete successfully")
-
-# COMMAND ----------
-
-# MAGIC %md
 # MAGIC ## �📊 Orchestration Summary
 
 # COMMAND ----------
@@ -3477,7 +3131,6 @@ print(f"  📥 Extracts        : {{extract_ok}} ok / {{extract_fail}} failed")
 print(f"  ⚡ Spark Declarative Pipeline    : {{dlt_status}}")
 print(f"  🔄 Silver Relocated: {{silver_relocated}} ok / {{silver_failed}} failed")
 print(f"  📊 Reconciliation  : {{recon_status}}")
-print(f"  📝 Execution Log   : {{log_status}}")
 print(f"  📊 Rows (JDBC)     : {{total_rows:,}}")
 print(f"  🔗 Pipeline ID     : {{pipeline_id}}")
 
@@ -3495,7 +3148,6 @@ exit_payload = json.dumps({{
     "silver_relocated": silver_relocated,
     "silver_failed":   silver_failed,
     "recon_status":    recon_status,
-    "log_status":      log_status,
     "pipeline_id":     pipeline_id,
     "total_rows":      total_rows,
 }})

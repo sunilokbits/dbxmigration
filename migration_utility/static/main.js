@@ -699,12 +699,6 @@ async function nbPushToDevOps(mode){
           pipeline_mode:pipelineMode,
           cdc_mode:(G('cfgCdcMode')||{}).value||'watermark',
           primary_keys:(G('cfgPrimaryKeys')||{}).value ? G('cfgPrimaryKeys').value.split(',').map(s=>s.trim()).filter(Boolean) : [],
-          recon_catalog:G('cfgReconCatalog')?.value?.trim()||'reconciliation',
-          recon_schema:G('cfgReconSchema')?.value?.trim()||'hr',
-          recon_table:G('cfgReconTable')?.value?.trim()||'ReconcilationDetails',
-          log_catalog:G('cfgLogCatalog')?.value?.trim()||'logging',
-          log_schema:G('cfgLogSchema')?.value?.trim()||'hr',
-          log_table:G('cfgLogTable')?.value?.trim()||'ExecutionLog',
         })
       });
       const gd=await gr.json();
@@ -1658,14 +1652,6 @@ async function wfDeployNotebooks(){
         pipeline_mode:pipelineMode,
         cdc_mode:(G('cfgCdcMode')||{}).value||'watermark',
         primary_keys:(G('cfgPrimaryKeys')||{}).value ? G('cfgPrimaryKeys').value.split(',').map(s=>s.trim()).filter(Boolean) : [],
-        recon_catalog:G('cfgReconCatalog')?.value?.trim()||'reconciliation',
-        recon_schema:G('cfgReconSchema')?.value?.trim()||'hr',
-        recon_table:G('cfgReconTable')?.value?.trim()||'ReconcilationDetails',
-        recon_location:G('cfgReconLocation')?.value?.trim()||'',
-        log_catalog:G('cfgLogCatalog')?.value?.trim()||'logging',
-        log_schema:G('cfgLogSchema')?.value?.trim()||'hr',
-        log_table:G('cfgLogTable')?.value?.trim()||'ExecutionLog',
-        log_location:G('cfgLogLocation')?.value?.trim()||'',
       })
     });
     const d=await r.json();
@@ -1772,14 +1758,6 @@ async function wfRunOnDatabricks(groupId, pwd){
         password:pwd,
         workspace_path:G('wfNbWsPath')?.value?.trim()||'/Shared/MetadataPipeline',
         landing_path:G('wfNbLandingPath')?.value?.trim()||'/mnt/landing',
-        recon_catalog:G('cfgReconCatalog')?.value?.trim()||'reconciliation',
-        recon_schema:G('cfgReconSchema')?.value?.trim()||'hr',
-        recon_table:G('cfgReconTable')?.value?.trim()||'ReconcilationDetails',
-        recon_location:G('cfgReconLocation')?.value?.trim()||'',
-        log_catalog:G('cfgLogCatalog')?.value?.trim()||'logging',
-        log_schema:G('cfgLogSchema')?.value?.trim()||'hr',
-        log_table:G('cfgLogTable')?.value?.trim()||'ExecutionLog',
-        log_location:G('cfgLogLocation')?.value?.trim()||'',
       })
     });
     const d=await r.json();
@@ -3415,7 +3393,10 @@ function cfgOnApiAuthChange(){
 let _cfgSelectedMode = 'new';
 let _cfgExCatalogs = [];
 let _cfgExSchemaMap = {}; // catalog -> [schemas], shared shape with Pipeline Studio
-const _cfgExLayers = ['landing','bronze','silver','reconciliation','loggingdetails'];
+// Reconciliation/Logging removed: reconciliation is now a fixed schema
+// under the metadata catalog (not user-configurable), and the Logging
+// layer / ExecutionLog table was removed entirely in favor of wf_run_history.
+const _cfgExLayers = ['landing','bronze','silver'];
 let _cfgExLayerValidation = {};
 _cfgExLayers.forEach(l => _cfgExLayerValidation[l] = false);
 
@@ -3449,7 +3430,7 @@ function _cfgExPreFillFromConfig(){
   const cc=_cachedDeployConfig||{};
   const sa=(G('cfgStorageAcct')?.value)||cc.storage_account||'';
   const cn=(G('cfgContainer')?.value)||cc.container||'';
-  const defaults={landing:'dev/landing',bronze:'dev/uc-managed/bronze',silver:'dev/uc-managed/silver',reconciliation:'dev/uc-managed/reconciliation',loggingdetails:'dev/uc-managed/loggingdetails'};
+  const defaults={landing:'dev/landing',bronze:'dev/uc-managed/bronze',silver:'dev/uc-managed/silver'};
   _cfgExLayers.forEach(layer=>{
     const cap=layer.charAt(0).toUpperCase()+layer.slice(1);
     const sEl=G('cfgEx'+cap+'Storage');
@@ -3471,14 +3452,14 @@ function _cfgExUpdateSharedSummary(){
   const metaSch=(G('cfgMetaSchema')?.value)||cc.metadata_schema||'';
   const cdc=(G('cfgCdcMode')?.value)||(cc.cdc||{}).cdc_mode||'';
   const dlt=(G('cfgDltMode')?.value)||(cc.cdc||{}).dlt_mode||'';
-  const reconCat=(G('cfgReconCatalog')?.value)||(cc.reconciliation||{}).catalog||'';
-  const reconSch=(G('cfgReconSchema')?.value)||(cc.reconciliation||{}).schema||'';
+  // Reconciliation always lives in a fixed `reconciliation` schema under
+  // the metadata catalog -- no longer separately configurable.
   if(G('cfgExSharedHost')) G('cfgExSharedHost').textContent=host||'Not configured';
   if(G('cfgExSharedSource')) G('cfgExSharedSource').textContent=(src||'\u2014')+' / '+(srcDb||'\u2014');
   if(G('cfgExSharedMeta')) G('cfgExSharedMeta').textContent=(metaCat||'\u2014')+'.'+(metaSch||'\u2014');
   if(G('cfgExSharedCdc')) G('cfgExSharedCdc').textContent=cdc||'\u2014';
   if(G('cfgExSharedDlt')) G('cfgExSharedDlt').textContent=dlt||'\u2014';
-  if(G('cfgExSharedRecon')) G('cfgExSharedRecon').textContent=(reconCat||'\u2014')+'.'+(reconSch||'\u2014');
+  if(G('cfgExSharedRecon')) G('cfgExSharedRecon').textContent=(metaCat||'\u2014')+'.reconciliation';
 }
 
 /* Load ALL catalogs from UC into dropdowns */
@@ -3607,7 +3588,10 @@ window.cfgExTestAccess=cfgExTestAccess;
 /* ═══════════════════════════════════════════════════════
    Pipeline Studio — Layer → Catalog.Schema Mapping
    ═══════════════════════════════════════════════════════ */
-const _wfLayerNames = ['landing','bronze','silver','reconciliation','loggingdetails'];
+// Reconciliation/Logging removed: reconciliation is now a fixed schema
+// under the metadata catalog (not user-configurable), and the Logging
+// layer / ExecutionLog table was removed entirely in favor of wf_run_history.
+const _wfLayerNames = ['landing','bronze','silver'];
 let _wfLayerCatalogs = []; // cached catalog list
 let _wfLayerSchemaMap = {}; // catalog -> [schemas], same source as Data Modeling
 
@@ -3750,13 +3734,10 @@ function _wfLayerDefaultMapping(cfg){
   const schemasOf=n=>{const c=cats[n];const s=(c&&c.schemas)||[];return s[0]||'';};
   const byKeyword=kw=>Object.keys(cats).find(n=>n.toLowerCase().includes(kw))||'';
   const bronze=byKeyword('bronze'), silver=byKeyword('silver');
-  const recon=cfg.reconciliation||{}, log=cfg.logging||{};
   return {
-    landing:        {catalog: cfg.volume_catalog||'', schema: cfg.volume_schema||''},
-    bronze:         {catalog: bronze, schema: schemasOf(bronze)},
-    silver:         {catalog: silver, schema: schemasOf(silver)},
-    reconciliation: {catalog: recon.catalog||'', schema: recon.schema||''},
-    loggingdetails: {catalog: log.catalog||'', schema: log.schema||''},
+    landing: {catalog: cfg.volume_catalog||'', schema: cfg.volume_schema||''},
+    bronze:  {catalog: bronze, schema: schemasOf(bronze)},
+    silver:  {catalog: silver, schema: schemasOf(silver)},
   };
 }
 
@@ -3810,18 +3791,10 @@ function _collectConfig(){
     volume_catalog:  G('cfgVolCatalog').value.trim(),
     volume_schema:   G('cfgVolSchema').value.trim()||'default',
     volume_path:     G('cfgVolPath').value.trim(),
-    reconciliation: {
-      catalog:  G('cfgReconCatalog').value.trim()||'reconciliation',
-      schema:   G('cfgReconSchema').value.trim()||'hr',
-      table:    G('cfgReconTable').value.trim()||'ReconcilationDetails',
-      location: G('cfgReconLocation').value.trim(),
-    },
-    logging: {
-      catalog:  G('cfgLogCatalog').value.trim()||'logging',
-      schema:   G('cfgLogSchema').value.trim()||'hr',
-      table:    G('cfgLogTable').value.trim()||'ExecutionLog',
-      location: G('cfgLogLocation').value.trim(),
-    },
+    // Reconciliation results always live in a fixed `reconciliation` schema
+    // under the metadata catalog -- no longer configurable here. The
+    // "Logging" layer / ExecutionLog table was removed entirely --
+    // wf_run_history already captures every run's status/timing/error detail.
     cdc: {
       cdc_mode: (G('cfgCdcMode')||{}).value||'watermark',
       dlt_mode: (G('cfgDltMode')||{}).value||'standard',
@@ -3911,18 +3884,9 @@ function _populateConfig(c){
   G('cfgVolCatalog').value=c.volume_catalog||'';
   G('cfgVolSchema').value=c.volume_schema||'default';
   G('cfgVolPath').value=c.volume_path||'';
-  // Reconciliation
-  const rc=c.reconciliation||{};
-  G('cfgReconCatalog').value=rc.catalog||'reconciliation';
-  G('cfgReconSchema').value=rc.schema||'hr';
-  G('cfgReconTable').value=rc.table||'ReconcilationDetails';
-  G('cfgReconLocation').value=rc.location||'';
-  // Logging
-  const lc=c.logging||{};
-  G('cfgLogCatalog').value=lc.catalog||'logging';
-  G('cfgLogSchema').value=lc.schema||'hr';
-  G('cfgLogTable').value=lc.table||'ExecutionLog';
-  G('cfgLogLocation').value=lc.location||'';
+  // Reconciliation always lives in a fixed `reconciliation` schema under the
+  // metadata catalog now -- no longer loaded into separate fields here.
+  // The "Logging" layer / ExecutionLog table was removed entirely.
   // CDC / DLT
   const cc=c.cdc||{};
   if(G('cfgCdcMode')) G('cfgCdcMode').value=cc.cdc_mode||'watermark';
@@ -4057,8 +4021,6 @@ window.cfgAutoFillDependents=function(){
   fillIfEmpty('cfgVolCatalog', (Object.keys((_cachedDeployConfig||{}).catalogs||{})[0])||'dev_volumes');
   fillIfEmpty('cfgVolSchema', 'default');
   fillIfEmpty('cfgVolPath', base+'/dev/landing');
-  fillIfEmpty('cfgReconLocation', base+'/dev/uc-managed');
-  fillIfEmpty('cfgLogLocation', base+'/dev/uc-managed');
   document.querySelectorAll('[data-extloc] .cfg-extloc-url').forEach(f=>{if(!f.value.trim())f.value=base;});
   document.querySelectorAll('[data-catalog]').forEach(row=>{
     const nameInp=row.querySelector('.cfg-cat-name');
@@ -4093,17 +4055,6 @@ window.cfgAutoFillCatLoc=function(row){
   const catName=(nameInp&&nameInp.value.trim())||'';
   const locInp=row.querySelector('.cfg-cat-loc');
   if(locInp) locInp.value='abfss://'+cont+'@'+acct+'.dfs.core.windows.net/dev/uc-managed'+(catName?'/'+catName:'');
-};
-window.cfgSwitchSubTab=function(tab){
-  const recon=G('cfgSubReconPanel'),log=G('cfgSubLogPanel');
-  const tRecon=G('cfgSubRecon'),tLog=G('cfgSubLog');
-  if(tab==='recon'){
-    if(recon)recon.style.display='';if(log)log.style.display='none';
-    if(tRecon)tRecon.classList.add('active');if(tLog)tLog.classList.remove('active');
-  } else {
-    if(recon)recon.style.display='none';if(log)log.style.display='';
-    if(tRecon)tRecon.classList.remove('active');if(tLog)tLog.classList.add('active');
-  }
 };
 window.cfgTogglePw=function(fieldId,btn){
   const f=G(fieldId);if(!f)return;

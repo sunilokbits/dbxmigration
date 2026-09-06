@@ -374,10 +374,12 @@ def get_recon_data():
 
     dbx_host  = cfg.get("databricks_host", "").rstrip("/")
     dbx_token = get_databricks_token()
-    recon_cfg = cfg.get("reconciliation", {})
-    recon_cat = recon_cfg.get("catalog", "reconciliation")
-    recon_sch = recon_cfg.get("schema", "hr")
-    recon_tbl = recon_cfg.get("table", "ReconcilationDetails")
+    # Reconciliation results always live in a fixed `reconciliation` schema
+    # under the metadata catalog -- no longer a separate configurable
+    # catalog (see workflow_manager._recon_fqn).
+    recon_cat = cfg.get("metadata_catalog", "admin_source") or "admin_source"
+    recon_sch = "reconciliation"
+    recon_tbl = "reconcilationdetails"
 
     if not dbx_host or not dbx_token:
         return jsonify({"rows": [], "error": "Databricks host/token not configured."}), 400

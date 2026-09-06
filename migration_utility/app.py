@@ -236,7 +236,7 @@ def _fm_chat_sdk_override():
         return jfy({"error": "endpoint and content are required"}), 400
     # === FULL system prompt (standard mode) ===
     # Table locations resolved live from Settings (Metadata Catalog + each
-    # medallion/reconciliation/logging catalog) instead of being hardcoded
+    # medallion catalog) instead of being hardcoded
     # to admin_source/bronze.hr/silver.hr/... -- those go stale/wrong the
     # moment a deployment is configured with different catalogs, exactly
     # the class of bug already fixed for _fqn()/get_catalog_schema().
@@ -245,8 +245,12 @@ def _fm_chat_sdk_override():
     _meta = ".".join(_cats["metadata"]) if all(_cats["metadata"]) else "admin_source.configtables"
     _bronze = ".".join(_cats["bronze"]) if all(_cats["bronze"]) else "bronze.hr"
     _silver = ".".join(_cats["silver"]) if all(_cats["silver"]) else "silver.hr"
-    _log = ".".join(_cats["logging"]) if all(_cats["logging"]) else "loggingdetails.hr"
-    _recon = ".".join(_cats["reconciliation"]) if all(_cats["reconciliation"]) else "reconciliation.hr"
+    # Reconciliation always lives in a fixed `reconciliation` schema under
+    # the metadata catalog -- no longer a separate configurable catalog.
+    # The "Logging" layer / ExecutionLog table was removed entirely --
+    # wf_run_history (already listed under [{_meta}] below) already
+    # captures every run's status/timing/error detail.
+    _recon = ".".join(_cats["reconciliation"]) if all(_cats["reconciliation"]) else "admin_source.reconciliation"
     _sys_full = ("You are the AI assistant inside DBX Migration Studio, a SQL-to-Databricks migration accelerator.\n"
             "CRITICAL SQL RULES:\n"
             "1. ALWAYS use fully-qualified 3-part table names (catalog.schema.table) in ALL SQL.\n"
@@ -271,7 +275,6 @@ def _fm_chat_sdk_override():
             f"  {_meta}.wf_watermark_metadata — Incremental watermarks\n\n"
             f"[{_bronze}] — Raw ingested data: bronze_customers, bronze_products, bronze_stores, bronze_fact_sales_orders\n"
             f"[{_silver}] — Cleaned: customers, products, stores, fact_sales_orders, dimemployee\n"
-            f"[{_log}] — executionlog\n"
             f"[{_recon}] — reconcilationdetails\n\n"
             "=== END TABLES ===\n\n"
             "Now answer the question using ONLY these tables:\n")
@@ -349,7 +352,26 @@ def _fm_chat_sdk_override():
         raw = w.api_client.do("POST", f"/serving-endpoints/{endpoint_name}/invocations", body=payload)
         resp = _json.loads(raw.content) if hasattr(raw, "content") else raw
         choices = resp.get("choices", [])
-        response_text = choices[0].get("message", {}).get("content", "") if choices else "No response"
+        raw_content = choices[0].get("message", {}).get("content", "") if choices else "No response"
+        # Some serving endpoints (observed on newer models like Sonnet 5 --
+        # Opus 4.6/4.7 happened to always return a plain string) return
+        # `content` as a list of Anthropic-style content blocks
+        # ([{"type": "text", "text": "..."}, ...]) instead of a plain
+        # string. The frontend always expected a string (it calls
+        # .replace() on it to render markdown) with no guard, so picking
+        # one of those models crashed the chat with
+        # "text.replace is not a function". This is the handler actually
+        # invoked for /api/v1/genie/fm/chat (see the view_functions
+        # override below), not routes/genie.py's fm_chat.
+        if isinstance(raw_content, list):
+            response_text = "".join(
+                (block.get("text", "") if isinstance(block, dict) else str(block))
+                for block in raw_content
+            )
+        elif raw_content is None:
+            response_text = ""
+        else:
+            response_text = str(raw_content)
         usage = resp.get("usage", {})
         actual_total = usage.get("total_tokens", 0) or (usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0))
 
