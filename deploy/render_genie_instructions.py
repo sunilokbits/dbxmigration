@@ -5,10 +5,11 @@ each medallion layer's target catalog), instead of shipping the fixed
 admin_source/bronze.hr/... names this app happened to be tested with.
 
 Placeholders in deploy/genie_space_{instructions,description}.txt:
-  {META_CAT}.{META_SCH}  -- Metadata Catalog/Schema (wf_* + app tables)
+  {META_CAT}.{META_SCH}  -- Metadata Catalog/Schema (wf_* + app tables +
+                            reconcilationdetails -- reconciliation results
+                            live in this same catalog.schema, not a
+                            separate one, so there's no {RECON} placeholder)
   {BRONZE} {SILVER}      -- medallion layer target catalog.schema
-  {RECON}                -- reconciliation results, always {META_CAT}.reconciliation
-                            (no longer a separate configurable catalog)
 
 The "Logging" layer / ExecutionLog table was removed entirely -- wf_run_history
 already captures every run's status/timing/error detail, so there is no {LOG}
@@ -44,7 +45,6 @@ placeholders = {
     "META_SCH": schema,
     "BRONZE": "bronze.hr",
     "SILVER": "silver.hr",
-    "RECON": f"{catalog}.reconciliation",
 }
 
 try:
@@ -79,10 +79,6 @@ if wh_id:
 
         if cfg.get("metadata_catalog"):
             placeholders["META_CAT"] = cfg["metadata_catalog"]
-            # Reconciliation always lives in a fixed `reconciliation` schema
-            # under the metadata catalog (see workflow_manager._recon_fqn) --
-            # re-derive it here now that META_CAT may have just changed.
-            placeholders["RECON"] = f"{cfg['metadata_catalog']}.reconciliation"
         if cfg.get("metadata_schema"):
             placeholders["META_SCH"] = cfg["metadata_schema"]
 

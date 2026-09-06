@@ -138,9 +138,28 @@ def save_deploy_config():
         # cfgEx*) -- saving from whichever one wasn't populated in the
         # current session would otherwise submit all-blank layers and wipe
         # out catalogs actually configured via the other page.
-        existing_mapping = (existing.get("existing_setting") or {}).get("medallion_layer_mapping") or {}
+        # "reconciliation"/"loggingdetails" are no longer real layers --
+        # reconciliation now lives in the same catalog.schema as the
+        # metadata tables (workflow_manager._recon_fqn), and the Logging
+        # layer / ExecutionLog table was removed entirely. The frontend no
+        # longer sends either one, but a workspace saved before that change
+        # can still have them sitting in existing_mapping -- and the
+        # set-union merge below would otherwise carry them forward on every
+        # save forever (nothing ever explicitly clears a key the incoming
+        # request just doesn't send), which is exactly what kept granting
+        # UC access to "dbx_reconciliation"/"dbx_logging" catalogs that no
+        # longer conceptually exist. Purge them here so one save cleans up
+        # the stale state for good.
+        _stale_layers = ("reconciliation", "loggingdetails")
+        existing_mapping = {
+            k: v for k, v in ((existing.get("existing_setting") or {}).get("medallion_layer_mapping") or {}).items()
+            if k not in _stale_layers
+        }
         if isinstance(data.get("existing_setting"), dict):
-            incoming_mapping = data["existing_setting"].get("medallion_layer_mapping") or {}
+            incoming_mapping = {
+                k: v for k, v in (data["existing_setting"].get("medallion_layer_mapping") or {}).items()
+                if k not in _stale_layers
+            }
             merged_mapping = {}
             for layer_name in set(existing_mapping) | set(incoming_mapping):
                 existing_layer = existing_mapping.get(layer_name) or {}

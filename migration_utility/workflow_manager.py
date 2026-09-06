@@ -517,28 +517,24 @@ def _fqn(table: str) -> str:
     return f"`{c}`.`{s}`.`{table}`"
 
 
-RECON_SCHEMA = "reconciliation"
-RECON_TABLE  = "reconcilationdetails"
+RECON_TABLE = "reconcilationdetails"
 
 
 def _recon_fqn() -> str:
     """Fully qualified reconciliation results table.
 
-    Always `{metadata_catalog}`.`reconciliation`.`reconcilationdetails` --
-    reconciliation previously had its own dedicated, user-configurable
-    catalog+schema in Settings for this single table. Consolidated into a
-    fixed schema under the metadata catalog (same catalog wf_* tables live
-    in) since one table doesn't need its own catalog. Table name is
-    lowercase, matching the same convention applied to bronze/silver table
-    names elsewhere.
+    Lives in the exact same catalog.schema as wf_run_history/wf_job_metadata/
+    etc -- resolved the same fully-dynamic way via _fqn(), not a separate
+    hardcoded schema name. Reconciliation previously had its own dedicated,
+    user-configurable catalog+schema in Settings for this single table;
+    giving it its own fixed "reconciliation" schema name would have been
+    just as static/hardcoded in a different way. Piggybacking on whatever
+    metadata_catalog/metadata_schema is currently configured means it always
+    lands wherever the rest of this app's metadata tables land, with no
+    separate schema-creation step and no place for it to drift out of sync.
+    Table name is lowercase, matching bronze/silver elsewhere.
     """
-    try:
-        from config_cache import get_config as _get_app_cfg
-        dyn = _get_app_cfg() or {}
-        c = dyn.get("metadata_catalog") or _dbr_catalog or "main"
-    except Exception:
-        c = _dbr_catalog or "main"
-    return f"`{c}`.`{RECON_SCHEMA}`.`{RECON_TABLE}`"
+    return _fqn(RECON_TABLE)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -829,9 +825,9 @@ def init_metadata_flow(host: str, token: str, catalog: str = "main",
 
         # 9. Reconciliation results -- consolidated here from what used to be
         # its own dedicated, user-configurable catalog for a single table
-        # (see _recon_fqn()). Schema created explicitly since it's a schema
-        # under the metadata catalog, not the metadata catalog's own schema.
-        f"CREATE SCHEMA IF NOT EXISTS `{_dbr_catalog}`.`{RECON_SCHEMA}`",
+        # (see _recon_fqn()). Lands in the same catalog.schema as every
+        # other table in this list (no separate schema needed -- the
+        # CREATE SCHEMA above already covers it).
         f"""CREATE TABLE IF NOT EXISTS {_recon_fqn()} (
             recon_run_id    STRING NOT NULL,
             pipeline_run_id STRING NOT NULL,

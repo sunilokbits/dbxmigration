@@ -1646,6 +1646,13 @@ let rcStatusChart=null, rcVarianceChart=null, rcAllRows=[], rcTableSummaryData=[
 
 async function reconRefresh(){
   try{
+    // Reconciliation results live in the same catalog.schema as every other
+    // metadata table (wf_run_history etc) -- not a separate configurable
+    // catalog/schema, so this label reflects the actual resolved location
+    // instead of a hardcoded placeholder.
+    const cc=(typeof _cachedDeployConfig!=='undefined'&&_cachedDeployConfig)||{};
+    const dsEl=document.getElementById('reconDataSource');
+    if(dsEl) dsEl.textContent=(cc.metadata_catalog||'admin_source')+'.'+(cc.metadata_schema||'configtables')+'.reconcilationdetails';
     showToast('Loading reconciliation data from Databricks…','info');
     const r=await fetch('/api/v1/recon/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
     const data=await r.json();

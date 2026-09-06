@@ -245,12 +245,11 @@ def _fm_chat_sdk_override():
     _meta = ".".join(_cats["metadata"]) if all(_cats["metadata"]) else "admin_source.configtables"
     _bronze = ".".join(_cats["bronze"]) if all(_cats["bronze"]) else "bronze.hr"
     _silver = ".".join(_cats["silver"]) if all(_cats["silver"]) else "silver.hr"
-    # Reconciliation always lives in a fixed `reconciliation` schema under
-    # the metadata catalog -- no longer a separate configurable catalog.
-    # The "Logging" layer / ExecutionLog table was removed entirely --
-    # wf_run_history (already listed under [{_meta}] below) already
-    # captures every run's status/timing/error detail.
-    _recon = ".".join(_cats["reconciliation"]) if all(_cats["reconciliation"]) else "admin_source.reconciliation"
+    # Reconciliation results live in the same catalog.schema as everything
+    # else under [{_meta}] below (wf_run_history etc) -- not a separate
+    # catalog/schema. The "Logging" layer / ExecutionLog table was removed
+    # entirely -- wf_run_history already captures every run's status/
+    # timing/error detail.
     _sys_full = ("You are the AI assistant inside DBX Migration Studio, a SQL-to-Databricks migration accelerator.\n"
             "CRITICAL SQL RULES:\n"
             "1. ALWAYS use fully-qualified 3-part table names (catalog.schema.table) in ALL SQL.\n"
@@ -272,10 +271,10 @@ def _fm_chat_sdk_override():
             f"  {_meta}.wf_scheduler_config — Cron schedules\n"
             f"  {_meta}.wf_scheduler_history — Scheduler run history\n"
             f"  {_meta}.wf_source_tables — Discovered source tables\n"
-            f"  {_meta}.wf_watermark_metadata — Incremental watermarks\n\n"
+            f"  {_meta}.wf_watermark_metadata — Incremental watermarks\n"
+            f"  {_meta}.reconcilationdetails — Source vs Bronze reconciliation results (row counts, aggregate sums, variance %)\n\n"
             f"[{_bronze}] — Raw ingested data: bronze_customers, bronze_products, bronze_stores, bronze_fact_sales_orders\n"
-            f"[{_silver}] — Cleaned: customers, products, stores, fact_sales_orders, dimemployee\n"
-            f"[{_recon}] — reconcilationdetails\n\n"
+            f"[{_silver}] — Cleaned: customers, products, stores, fact_sales_orders, dimemployee\n\n"
             "=== END TABLES ===\n\n"
             "Now answer the question using ONLY these tables:\n")
 

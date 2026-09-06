@@ -45,7 +45,7 @@ customers, products, stores, fact_sales_orders, invoices, payments, dimemployee,
 
 ### Operations
 - {META_CAT}.{META_SCH}.wf_run_history — per-run status/timing/error detail for every pipeline execution
-- {RECON}.reconcilationdetails — source vs target reconciliation
+- {META_CAT}.{META_SCH}.reconcilationdetails — source vs target reconciliation
 
 ### Samples
 - samples.nyctaxi.trips — NYC taxi data

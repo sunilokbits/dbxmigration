@@ -78,12 +78,12 @@ def resolve_configured_catalogs() -> dict:
     bronze_cat, bronze_sch = _layer("bronze")
     silver_cat, silver_sch = _layer("silver")
 
-    # Reconciliation results always live in a fixed `reconciliation` schema
-    # under the metadata catalog -- no longer a separate configurable
-    # catalog (see workflow_manager._recon_fqn). The "Logging" layer /
-    # ExecutionLog table was removed entirely -- wf_run_history already
-    # captures every run's status/timing/error detail.
-    recon_cat, recon_sch = (meta_cat, "reconciliation") if meta_cat else ("", "")
+    # Reconciliation results live in the same catalog.schema as every other
+    # metadata table (wf_run_history etc) -- not a separate catalog/schema
+    # (see workflow_manager._recon_fqn). The "Logging" layer / ExecutionLog
+    # table was removed entirely -- wf_run_history already captures every
+    # run's status/timing/error detail.
+    recon_cat, recon_sch = (meta_cat, meta_sch) if (meta_cat and meta_sch) else ("", "")
 
     return {
         "metadata": (meta_cat, meta_sch),
@@ -224,7 +224,7 @@ Migration Studio App  ←→  Genie AI (this panel)
 | `admin_source` | `migration_app` | App runtime: migration jobs, audit log, user roles, schedules |
 | `bronze` | `hr` | Raw SQL Server ingestion: customers, products, sales orders, employees, invoices |
 | `silver` | `hr` | Cleaned/enriched HR data after medallion processing |
-| `admin_source` | `reconciliation` | Source vs target row-count reconciliation results (`reconcilationdetails`) |
+| `admin_source` | `configtables` | Also holds `reconcilationdetails` — source vs target row-count reconciliation results |
 | `samples` | various | NYC taxi trips, TPC-H benchmark orders |
 
 Pipeline execution logs (rows processed, duration, errors) live in `admin_source.configtables.wf_run_history`, not a separate catalog.
@@ -344,7 +344,8 @@ Config stored in `admin_source.configtables.wf_scheduler_config`.""",
     "reconciliation": """**Reconciliation** — Compare source vs target after migration.
 
 Checks row counts, numeric aggregate sums, NULL differences, and variance %.
-Results in `admin_source.reconciliation.reconcilationdetails`.""",
+Results in `admin_source.configtables.reconcilationdetails` (same catalog.schema
+as wf_run_history and this deployment's other metadata tables).""",
 
     "data_quality": """**Data Quality** — Validate completeness, accuracy, consistency, freshness.
 
