@@ -327,21 +327,23 @@ def ensure_tables():
                 updated_by STRING,
                 updated_at TIMESTAMP DEFAULT current_timestamp()
             ) USING DELTA
-            TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')""",
+            TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true', 'delta.feature.allowColumnDefaults' = 'supported')""",
 
             f"""CREATE TABLE IF NOT EXISTS {catalog}.{schema}.dm_models (
                 model_id STRING NOT NULL,
                 payload STRING NOT NULL,
                 updated_by STRING,
                 updated_at TIMESTAMP DEFAULT current_timestamp()
-            ) USING DELTA""",
+            ) USING DELTA
+            TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported')""",
 
             f"""CREATE TABLE IF NOT EXISTS {app_cfg_catalog}.{app_cfg_schema}.app_config (
                 config_key STRING NOT NULL,
                 config_value STRING,
                 updated_by STRING,
                 updated_at TIMESTAMP DEFAULT current_timestamp()
-            ) USING DELTA""",
+            ) USING DELTA
+            TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported')""",
 
             f"""CREATE TABLE IF NOT EXISTS {catalog}.{schema}.audit_log (
                 event_id STRING NOT NULL,
@@ -355,7 +357,7 @@ def ensure_tables():
                 response_status INT,
                 created_at TIMESTAMP DEFAULT current_timestamp()
             ) USING DELTA
-            TBLPROPERTIES ('delta.logRetentionDuration' = 'interval 90 days')""",
+            TBLPROPERTIES ('delta.logRetentionDuration' = 'interval 90 days', 'delta.feature.allowColumnDefaults' = 'supported')""",
 
             f"""CREATE TABLE IF NOT EXISTS {catalog}.{schema}.job_schedules (
                 schedule_id STRING NOT NULL,
@@ -363,7 +365,8 @@ def ensure_tables():
                 is_active BOOLEAN DEFAULT true,
                 created_by STRING,
                 updated_at TIMESTAMP DEFAULT current_timestamp()
-            ) USING DELTA""",
+            ) USING DELTA
+            TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported')""",
 
             f"""CREATE TABLE IF NOT EXISTS {catalog}.{schema}.user_roles (
                 user_email STRING NOT NULL,
@@ -371,7 +374,8 @@ def ensure_tables():
                 display_name STRING,
                 assigned_by STRING,
                 updated_at TIMESTAMP DEFAULT current_timestamp()
-            ) USING DELTA""",
+            ) USING DELTA
+            TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported')""",
         ]
 
         conn = get_connection()
