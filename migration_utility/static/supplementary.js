@@ -244,7 +244,95 @@ if(window.speechSynthesis)window.speechSynthesis.onvoiceschanged=function(){wind
 var _spaces=[],_suggestions=[],_currentSpace=null,_conversationId=null,_busy=false,_pollTimer=null;
 var _fmEndpoints=[],_selectedEndpoint=null,_fmMessages=[],_totalTokens={prompt:0,completion:0,total:0};
 var _tokenOptimiserEnabled=false,_tokenSavingsTotal={standard:0,optimised:0};
+var _requestGeneration=0,_requestControllers=new Set(),_activeTurn=null;
+var _GENIE_TIMEOUT_MS=120000,_REQUEST_TIMEOUT_MS=30000,_MAX_POLL_RETRIES=3;
 function $g(id){return document.getElementById(id);}
+
+function _errorMessage(error,depth){
+  if(error==null)return 'Unknown error';
+  if(typeof error==='string')return error||'Unknown error';
+  if(typeof error!=='object')return String(error);
+  if((depth||0)<4){
+    if(Array.isArray(error))return error.map(function(e){return _errorMessage(e,(depth||0)+1);}).join('; ');
+    var detail=error.message||error.error||error.detail||error.description||error.error_code||error.code;
+    if(detail)return _errorMessage(detail,(depth||0)+1);
+  }
+  try{return JSON.stringify(error)||'Unknown error';}catch(e){return 'Unknown error';}
+}
+
+function _requestError(message,status){
+  var error=new Error(message);
+  error.status=status||0;
+  error.retryable=status===408||status===429||(status>=500&&status<600);
+  return error;
+}
+
+// Read text first so HTML login redirects, empty bodies and proxy errors never
+// disappear behind response.json() SyntaxErrors (or the global error banner).
+async function _genieRequest(url,options,generation,timeoutMs){
+  var controller=new AbortController(),timedOut=false,timer;
+  function checkRequest(){
+    if(generation!==_requestGeneration)throw _requestError('Request superseded by a new conversation.',0);
+    if(timedOut)throw _requestError('Request timed out. Please try again.',408);
+  }
+  checkRequest();
+  _requestControllers.add(controller);
+  timer=setTimeout(function(){timedOut=true;controller.abort();},timeoutMs||_REQUEST_TIMEOUT_MS);
+  try{
+    var response=await fetch(url,Object.assign({},options,{signal:controller.signal}));
+    var raw=await response.text();
+    checkRequest();
+    var data=null,validJson=false;
+    try{data=JSON.parse(raw);validJson=true;}catch(e){/* Report the HTTP/body context below. */}
+    var http='HTTP '+response.status;
+    var html=/text\/html/i.test(response.headers.get('content-type')||'')||/^\s*<(?:!doctype|html|head|body|form)\b/i.test(raw);
+    if(response.status===401||response.status===403){
+      var detail=validJson?_errorMessage(data):'';
+      throw _requestError('Authentication or access denied ('+http+'). Your session may have expired; sign in again and check your permissions.'+(detail?' '+detail:''),response.status);
+    }
+    if(!validJson){
+      var reason=!raw.trim()?'an empty response':html?'HTML instead of JSON':'non-JSON content';
+      var hint=html&&(response.ok||response.redirected)?' Your session may have expired; sign in again and retry.':'';
+      var excerpt=!html&&raw.trim()?': '+raw.trim().replace(/\s+/g,' ').slice(0,300):'';
+      throw _requestError('Server returned '+reason+' ('+http+').'+hint+excerpt,response.status);
+    }
+    if(!response.ok)throw _requestError(http+': '+_errorMessage(data),response.status);
+    if(!data||typeof data!=='object'||Array.isArray(data))throw _requestError('Invalid JSON response ('+http+'): expected an object.',0);
+    if(data.error||data.error_code||data.success===false)throw _requestError(_errorMessage(data),response.status);
+    return data;
+  }catch(error){
+    checkRequest();
+    if(error instanceof TypeError){var networkError=_requestError('Network request failed: '+_errorMessage(error),0);networkError.retryable=true;throw networkError;}
+    throw error;
+  }finally{
+    clearTimeout(timer);_requestControllers.delete(controller);
+  }
+}
+
+function _invalidateRequests(){
+  _requestGeneration++;
+  if(_pollTimer){clearTimeout(_pollTimer);_pollTimer=null;}
+  if(_activeTurn)clearTimeout(_activeTurn.deadlineTimer);
+  _activeTurn=null;
+  _requestControllers.forEach(function(controller){controller.abort();});
+  _requestControllers.clear();
+}
+
+function _isCurrentTurn(turn){return !!turn&&turn===_activeTurn&&turn.generation===_requestGeneration&&!turn.finished;}
+function _expireTurn(turn){
+  if(!_isCurrentTurn(turn))return;
+  _requestControllers.forEach(function(controller){controller.abort();});
+  _failTurn(turn,(turn.fm?'FM request':'Genie response')+' timed out after 120 seconds. Please try again.');
+}
+function _guardTurn(turn){
+  if(!_isCurrentTurn(turn))return false;
+  if(Date.now()>=turn.deadline){_expireTurn(turn);return false;}
+  return true;
+}
+function _failTurn(turn,error){
+  if(!_isCurrentTurn(turn))return;
+  _renderBotError(turn.botId,error);_setDone(turn);
+}
 
 function genieInit(){
   fetch('/api/v1/genie/spaces').then(function(r){return r.json();}).then(function(d){
@@ -327,16 +415,9 @@ window.genieFmChanged=function(){
   var sel=$g('genieFmSelect');
   var val=sel?sel.value:'';
   _selectedEndpoint=val||null;
-  _fmMessages=[];
+  window.genieNewConversation();
   _totalTokens={prompt:0,completion:0,total:0};
   _updateTokenBadge();
-  if(val){
-    var epInfo=_fmEndpoints.find(function(e){return e.name===val;});
-    _setStatus('\u26a1 Model: '+(epInfo?epInfo.display_name:val),true);
-    _setInputEnabled(true);
-  } else if(_currentSpace){
-    _setStatus('Ready \u2014 '+(_currentSpace.name||_currentSpace.space_id),true);
-  }
 };
 
 function _updateTokenBadge(){
@@ -363,9 +444,9 @@ function _renderSpaces(){
 
 window.genieSpaceChanged=function(){
   var sel=$g('genieSpaceSelect'),spId=sel?sel.value:'';
-  if(!spId){_currentSpace=null;if($g('genieSpaceInfo'))$g('genieSpaceInfo').style.display='none';_setStatus('Select a Genie Space to begin',false);_setInputEnabled(false);return;}
+  if(!spId){_currentSpace=null;if($g('genieSpaceInfo'))$g('genieSpaceInfo').style.display='none';window.genieNewConversation();return;}
   _currentSpace=_spaces.find(function(s){return s.space_id===spId;})||{space_id:spId,name:spId};
-  _updateSpaceInfo();genieNewConversation();
+  _updateSpaceInfo();window.genieNewConversation();
 };
 
 function _updateSpaceInfo(){
@@ -418,12 +499,17 @@ window.genieSaveNewSpace=function(){
 };
 
 window.genieNewConversation=function(){
-  if(_pollTimer){clearTimeout(_pollTimer);_pollTimer=null;}
-  _conversationId=null;_busy=false;_showWelcome();_setBusy(false);
+  _invalidateRequests();
+  _conversationId=null;_fmMessages=[];_showWelcome();_setBusy(false);
   if($g('genieConvCard'))$g('genieConvCard').style.display='none';
   if($g('genieNewConvBtn'))$g('genieNewConvBtn').disabled=true;
   if($g('genieExportBtn'))$g('genieExportBtn').disabled=true;
-  if(_currentSpace)_setInputEnabled(true);
+  _setInputEnabled(!!(_currentSpace||_selectedEndpoint));
+  if(_selectedEndpoint){
+    var epInfo=_fmEndpoints.find(function(e){return e.name===_selectedEndpoint;});
+    _setStatus('\u26a1 Model: '+(epInfo?epInfo.display_name:_selectedEndpoint),true);
+  }else if(_currentSpace)_setStatus('Ready \u2014 '+(_currentSpace.name||_currentSpace.space_id),true);
+  else _setStatus('Select a Genie Space to begin',false);
 };
 
 function _showWelcome(){
@@ -492,21 +578,25 @@ window.genieSendMessage=function(){
   // Allow send if we have a space OR an FM endpoint selected
   if(!inp||(!_currentSpace&&!_selectedEndpoint)||_busy)return;
   var text=(inp.value||'').trim();if(!text)return;
+  _invalidateRequests();
   inp.value='';genieAutoResize(inp);
   _busy=true;_setInputEnabled(false);_setBusy(true);
   var welcome=$g('genieWelcome');if(welcome)welcome.remove();
   _appendUserMsg(text);
-  var botId='gBot'+Date.now();
+  var botId='gBot'+Date.now()+'_'+_requestGeneration;
+  var turn={botId:botId,generation:_requestGeneration,deadline:Date.now()+_GENIE_TIMEOUT_MS,fm:!!_selectedEndpoint,finished:false};
+  _activeTurn=turn;
+  turn.deadlineTimer=setTimeout(function(){_expireTurn(turn);},_GENIE_TIMEOUT_MS);
+  if($g('genieNewConvBtn'))$g('genieNewConvBtn').disabled=false;
   _appendBotPlaceholder(botId);
 
   // Route to FM endpoint if selected
   if(_selectedEndpoint){
-    _fmMessages.push({role:'user',content:text});
-    fetch('/api/v1/genie/fm/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({endpoint:_selectedEndpoint,content:text,messages:_fmMessages.slice(0,-1),optimize_tokens:_tokenOptimiserEnabled})})
-      .then(function(r){return r.json();})
+    _genieRequest('/api/v1/genie/fm/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({endpoint:_selectedEndpoint,content:text,messages:_fmMessages.slice(),optimize_tokens:_tokenOptimiserEnabled})},turn.generation,_GENIE_TIMEOUT_MS)
       .then(function(d){
-        if(d.error){_renderBotError(botId,d.error);_setDone();return;}
-        _fmMessages.push({role:'assistant',content:d.text});
+        if(!_guardTurn(turn))return;
+        if(d.text==null)throw new Error('FM response did not include an answer.');
+        _fmMessages.push({role:'user',content:text},{role:'assistant',content:d.text});
         // Track tokens
         if(d.usage){
           _totalTokens.prompt+=d.usage.prompt_tokens||0;
@@ -525,26 +615,27 @@ window.genieSendMessage=function(){
         }
         if(d.optimization_applied)tokenHtml+='<div style="font-size:8px;color:#6366F1;margin-top:2px;">\u2699\ufe0f '+d.optimization_applied+'</div>';
         _renderBotText(botId,d.text,tokenHtml);
-        _setDone();
-      }).catch(function(e){_renderBotError(botId,'FM request failed: '+e.message);_setDone();});
+        _setDone(turn);
+      }).catch(function(e){if(_guardTurn(turn))_failTurn(turn,'FM request failed: '+_errorMessage(e));});
     return;
   }
 
   // Default: Genie Space API
+  var spId=_currentSpace.space_id,cId=_conversationId;
   var url=_conversationId?'/api/v1/genie/message':'/api/v1/genie/start';
   var body=_conversationId
-    ?{space_id:_currentSpace.space_id,conversation_id:_conversationId,content:text}
-    :{space_id:_currentSpace.space_id,content:text};
-  fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
-    .then(function(r){return r.json();})
+    ?{space_id:spId,conversation_id:cId,content:text}
+    :{space_id:spId,content:text};
+  _genieRequest(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)},turn.generation,Math.min(_REQUEST_TIMEOUT_MS,turn.deadline-Date.now()))
     .then(function(d){
-      if(d.error){_renderBotError(botId,d.error);_setDone();return;}
-      var cId=d.conversation_id||(d.conversation&&d.conversation.id);
+      if(!_guardTurn(turn))return;
+      cId=d.conversation_id||(d.conversation&&d.conversation.id)||cId;
       var mId=d.message_id||(d.message&&d.message.id)||d.id;
+      if(!cId||!mId)throw new Error('Invalid conversation state: response is missing conversation/message IDs.');
       if(cId)_conversationId=cId;
-      _pollMessage(botId,_currentSpace.space_id,_conversationId,mId,0);
-    }).catch(function(e){_renderBotError(botId,'Request failed: '+e.message);_setDone();});
-}
+      _pollMessage(turn,spId,cId,mId,0,0);
+    }).catch(function(e){if(_guardTurn(turn))_failTurn(turn,'Request failed: '+_errorMessage(e));});
+};
 
 /* Handle Enter / Shift+Enter in the Genie textarea */
 window.genieHandleKey = function(e){
@@ -557,41 +648,54 @@ window.genieHandleKey = function(e){
   if(ta){ ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,120)+'px'; }
 };
 
-;
-
-function _pollMessage(botId,spId,cId,mId,n){
-  if(!spId||!cId||!mId){_renderBotError(botId,'Invalid conversation state');_setDone();return;}
-  var delay=Math.min(1500*Math.pow(1.35,n),7000);
+function _pollMessage(turn,spId,cId,mId,attempts,retries,retrying){
+  if(!_guardTurn(turn))return;
+  if(!spId||!cId||!mId){_failTurn(turn,'Invalid conversation state');return;}
+  // Normal pending polls do not consume the independent, total transient retry budget.
+  var delay=retrying?Math.min(1000*retries,3000):Math.min(1500*Math.pow(1.35,attempts),7000);
+  delay=Math.min(delay,turn.deadline-Date.now());
   _pollTimer=setTimeout(function(){
-    fetch('/api/v1/genie/poll?space_id='+encodeURIComponent(spId)+'&conversation_id='+encodeURIComponent(cId)+'&message_id='+encodeURIComponent(mId))
-      .then(function(r){return r.json();})
+    _pollTimer=null;
+    if(!_guardTurn(turn))return;
+    _genieRequest('/api/v1/genie/poll?space_id='+encodeURIComponent(spId)+'&conversation_id='+encodeURIComponent(cId)+'&message_id='+encodeURIComponent(mId),{},turn.generation,Math.min(_REQUEST_TIMEOUT_MS,turn.deadline-Date.now()))
       .then(function(d){
-        if(d.error){_renderBotError(botId,d.error);_setDone();return;}
-        var st=(d.status||'').toUpperCase();
-        _updateBotPlaceholder(botId,st);
-        if(st==='COMPLETED')_processCompleted(botId,spId,cId,mId,d);
-        else if(st==='FAILED'||st==='ERROR'){_renderBotError(botId,(d.error&&d.error.message)||d.message||'Genie returned an error');_setDone();}
-        else if(n>45){_renderBotError(botId,'Timeout waiting for response');_setDone();}
-        else _pollMessage(botId,spId,cId,mId,n+1);
+        if(!_guardTurn(turn))return;
+        var st=String(d.status||'').toUpperCase();
+        _updateBotPlaceholder(turn.botId,st);
+        if(st==='COMPLETED')_processCompleted(turn,spId,cId,mId,d);
+        else if(['FAILED','ERROR','CANCELLED','CANCELED','EXPIRED'].indexOf(st)!==-1)_failTurn(turn,d.error||d.message||('Genie request '+st.toLowerCase()+'.'));
+        else if(!st)_failTurn(turn,'Invalid polling response: missing status.');
+        else _pollMessage(turn,spId,cId,mId,attempts+1,retries,false);
       }).catch(function(e){
-        if(n<4)_pollMessage(botId,spId,cId,mId,n+1);
-        else{_renderBotError(botId,'Network error: '+e.message);_setDone();}
+        if(!_guardTurn(turn))return;
+        if(e.retryable&&retries<_MAX_POLL_RETRIES)_pollMessage(turn,spId,cId,mId,attempts,retries+1,true);
+        else _failTurn(turn,'Polling failed: '+_errorMessage(e));
       });
   },delay);
 }
 
-function _processCompleted(botId,spId,cId,mId,data){
-  var text='',sql='';
-  var atts=data.attachments||[];
-  atts.forEach(function(a){if(a.text)text=a.text.content||a.text.value||String(a.text)||text;if(a.query)sql=a.query.query||String(a.query)||sql;});
+function _processCompleted(turn,spId,cId,mId,data){
+  if(!_guardTurn(turn))return;
+  var text='',sql='',queryAttachment=null,botId=turn.botId;
+  var atts=Array.isArray(data.attachments)?data.attachments:[];
+  atts.forEach(function(a){
+    if(!a)return;
+    if(a.text)text=a.text.content||a.text.value||String(a.text)||text;
+    // The UI has one SQL/result block: consistently use the FIRST query's SQL and ID.
+    if(a.query&&!queryAttachment){queryAttachment=a;sql=typeof a.query==='string'?a.query:(a.query.query||'');}
+  });
   if(!text)text=data.text_response||data.text||data.summary||'';
-  var hasQuery=atts.some(function(a){return a.query&&(a.query.query||typeof a.query==='string');});
-  if(hasQuery&&sql){
-    fetch('/api/v1/genie/result?space_id='+encodeURIComponent(spId)+'&conversation_id='+encodeURIComponent(cId)+'&message_id='+encodeURIComponent(mId))
-      .then(function(r){return r.json();})
-      .then(function(rd){_renderBotComplete(botId,text,sql,rd);_setDone();})
-      .catch(function(){_renderBotComplete(botId,text,sql,null);_setDone();});
-  }else{_renderBotComplete(botId,text,sql,null);_setDone();}
+  if(queryAttachment){
+    var url='/api/v1/genie/result?space_id='+encodeURIComponent(spId)+'&conversation_id='+encodeURIComponent(cId)+'&message_id='+encodeURIComponent(mId);
+    if(queryAttachment.attachment_id!=null)url+='&attachment_id='+encodeURIComponent(queryAttachment.attachment_id);
+    _updateBotPlaceholder(botId,'FETCHING_DATA');
+    _genieRequest(url,{},turn.generation,Math.min(60000,turn.deadline-Date.now()))
+      .then(function(rd){if(!_guardTurn(turn))return;_renderBotComplete(botId,text,sql,rd);_setDone(turn);})
+      .catch(function(e){
+        if(!_guardTurn(turn))return;
+        _renderBotComplete(botId,text,sql,null,'Unable to retrieve query results: '+_errorMessage(e));_setDone(turn);
+      });
+  }else{_renderBotComplete(botId,text,sql,null);_setDone(turn);}
 }
 
 function _appendUserMsg(t){
@@ -620,7 +724,7 @@ function _updateBotPlaceholder(id,st){
     '</span>'+lbl;
 }
 
-function _renderBotComplete(id,text,sql,resultData){
+function _renderBotComplete(id,text,sql,resultData,resultError){
   var el=$g(id);if(!el)return;
   var c=el.querySelector('.genie-msg-content');if(!c)return;
   var ts=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
@@ -628,12 +732,14 @@ function _renderBotComplete(id,text,sql,resultData){
   if(text)html+='<div class="genie-msg-text">'+_fmtText(text)+'</div>';
   if(sql)html+=_renderSqlBlock(id,sql);
   if(resultData)html+=_renderResultsTable(resultData);
-  if(!text&&!sql&&!resultData)html='<div class="genie-msg-text" style="color:var(--t3);">Genie processed your request.</div>';
+  if(resultError)html+='<div class="genie-error-bubble">'+_esc(_errorMessage(resultError))+'</div>';
+  if(!text&&!sql&&!resultData&&!resultError)html='<div class="genie-msg-text" style="color:var(--t3);">Genie processed your request.</div>';
   html+='<div class="genie-msg-time">'+ts+'</div>';
   c.innerHTML=html;_scrollBottom();
 }
 
 function _renderBotError(id,msg){
+  msg=_errorMessage(msg);
   var el=$g(id);if(!el)return;
   var c=el.querySelector('.genie-msg-content');if(!c)return;
   c.innerHTML='<div class="genie-error-bubble"><div style="display:flex;align-items:center;gap:6px;font-weight:700;margin-bottom:4px;"><svg viewBox="0 0 24 24" style="width:13px;height:13px;stroke:#DC2626;fill:none;stroke-width:2;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>Genie error</div>'+_esc(msg)+'</div>';
@@ -743,16 +849,21 @@ function _renderSqlBlock(id,sql){
 }
 
 function _renderResultsTable(data){
+  if(data.error||data.error_code||data.success===false)throw new Error(_errorMessage(data));
+  data=data.statement_response||data;
+  var status=data.status||{},state=String(status.state||data.state||(typeof status==='string'?status:'')).toUpperCase();
+  if(data.error||data.error_code||status.error||data.success===false)throw new Error(_errorMessage(status.error||data));
+  if(state&&state!=='SUCCEEDED'&&state!=='COMPLETED')throw new Error('Query result is not successful ('+state+').');
   var cols=[],rows=[];
-  try{
-    if(data.manifest&&data.manifest.schema&&data.manifest.schema.columns)cols=data.manifest.schema.columns.map(function(c){return c.name||c;});
-    else if(data.schema&&data.schema.columns)cols=data.schema.columns.map(function(c){return c.name||c;});
-    else if(data.columns)cols=data.columns.map(function(c){return typeof c==='string'?c:(c.name||String(c));});
-    if(data.result)rows=(data.result.data_array||data.result.rows||[]);
-    else if(data.rows)rows=data.rows;
-    else if(Array.isArray(data.data))rows=data.data;
-  }catch(e){return '';}
-  if(!cols.length&&!rows.length)return '';
+  if(data.manifest&&data.manifest.schema&&data.manifest.schema.columns)cols=data.manifest.schema.columns.map(function(c){return c.name||c;});
+  else if(data.schema&&data.schema.columns)cols=data.schema.columns.map(function(c){return c.name||c;});
+  else if(data.columns)cols=data.columns.map(function(c){return typeof c==='string'?c:(c.name||String(c));});
+  var result=data.result||{};
+  var rowData=result.data_array||result.rows||data.rows||data.data;
+  if(rowData==null&&((data.manifest&&data.manifest.total_row_count===0)||result.row_count===0))rowData=[];
+  if(!Array.isArray(rowData))throw new Error('Query result response did not include row data.');
+  rows=rowData;
+  if(rows.length&&!cols.length)throw new Error('Query result response did not include column metadata.');
   var total=(data.manifest&&data.manifest.total_row_count)||rows.length;
   var html='<div class="genie-results-block">'+
     '<div class="genie-results-hd"><svg viewBox="0 0 24 24" style="width:13px;height:13px;stroke:#059669;fill:none;stroke-width:2;"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>'+
@@ -810,8 +921,11 @@ window.genieAutoResize=function(ta){ta.style.height='auto';ta.style.height=Math.
 function _setInputEnabled(on){var inp=$g('genieInput'),btn=$g('genieSendBtn');if(inp)inp.disabled=!on;if(btn)btn.disabled=!on;}
 function _setBusy(on){_busy=on;var chip=$g('genieThinkingChip');if(chip)chip.style.display=on?'flex':'none';}
 function _setStatus(t,active){var s=$g('genieChatStatus');if(!s)return;s.textContent=t;s.className='genie-status-dot'+(active?' active':'');}
-function _setDone(){
-  _busy=false;_setBusy(false);_setInputEnabled(true);
+function _setDone(turn){
+  if(!_isCurrentTurn(turn))return;
+  turn.finished=true;clearTimeout(turn.deadlineTimer);
+  if(_pollTimer){clearTimeout(_pollTimer);_pollTimer=null;}
+  _busy=false;_setBusy(false);_setInputEnabled(!!(_currentSpace||_selectedEndpoint));
   if($g('genieNewConvBtn'))$g('genieNewConvBtn').disabled=false;
   if($g('genieExportBtn'))$g('genieExportBtn').disabled=false;
   if(_conversationId){if($g('genieConvCard'))$g('genieConvCard').style.display='block';if($g('genieConvIdDisplay'))$g('genieConvIdDisplay').textContent=_conversationId;}

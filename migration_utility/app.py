@@ -99,21 +99,18 @@ def _resolve_genie_space_id() -> str:
     except Exception:
         return ""
 
-_GENIE_SPACE_ID = _resolve_genie_space_id()
-if not _GENIE_SPACE_ID:
-    logger.warning("GENIE_SPACE_ID not configured — Genie Space queries disabled until set (Settings or one-click deploy).")
-
 def _query_genie_space(question):
     """Route question through Genie Space API using SDK auth (same as Playground MCP)."""
     import time
     from databricks.sdk import WorkspaceClient
-    if not _GENIE_SPACE_ID:
+    space_id = _resolve_genie_space_id()
+    if not space_id:
         return None
     try:
         w = WorkspaceClient()
         # Start conversation using SDK api_client (handles M2M OAuth correctly)
         start_resp = w.api_client.do(
-            "POST", f"/api/2.0/genie/spaces/{_GENIE_SPACE_ID}/start-conversation",
+            "POST", f"/api/2.0/genie/spaces/{space_id}/start-conversation",
             body={"content": question}
         )
         conv_id = start_resp.get("conversation_id", "")
@@ -124,7 +121,7 @@ def _query_genie_space(question):
         for _ in range(20):
             time.sleep(3)
             poll_resp = w.api_client.do(
-                "GET", f"/api/2.0/genie/spaces/{_GENIE_SPACE_ID}/conversations/{conv_id}/messages/{msg_id}"
+                "GET", f"/api/2.0/genie/spaces/{space_id}/conversations/{conv_id}/messages/{msg_id}"
             )
             status = poll_resp.get("status", "")
             if status == "COMPLETED":
@@ -146,6 +143,8 @@ def _query_genie_space(question):
 # ── Token Optimiser: Intent Classifier + Response Cache ──────────────────────
 import re as _re, hashlib as _hashlib, time as _time
 from collections import OrderedDict as _OrderedDict
+from threading import Lock as _Lock
+import json as _json
 
 _DATA_PATTERNS = [r'\b(show|list|count|how many|get|find|select|query|fetch|total|number)\b',
                   r'\b(table|column|row|record|data|job|pipeline|run|migration|status)\b',
@@ -167,146 +166,162 @@ _PROMPT_MINIMAL = ("You are the AI assistant for DBX Migration Studio (SQL-to-Da
                    "Answer concisely about migration workflows, Databricks concepts, and SQL conversion.")
 
 def _prompt_data_slim() -> str:
-    """Same intent as _PROMPT_MINIMAL's tiering (a short, token-cheap
-    prompt for data_query intent) but the table prefix is resolved live
-    from Settings instead of hardcoded to admin_source.configtables --
-    a fixed string here would tell the model the wrong catalog the moment
-    a deployment is configured differently.
-    """
-    from routes.genie import resolve_configured_catalogs
-    meta = resolve_configured_catalogs()["metadata"]
-    prefix = ".".join(meta) if all(meta) else "admin_source.configtables"
+    """Short instructions only; actual schema is appended from discovery."""
     return ("You are the AI assistant for DBX Migration Studio.\n"
-        f"Key tables: {prefix}.wf_run_history (run_id,job_name,status[SUCCESS/FAILED/RUNNING],started_at,duration_sec,rows_processed,error_message), "
-        f"{prefix}.wf_job_metadata (job_name,last_status,enabled,run_count,fail_count).\n"
         "Always use 3-part names (catalog.schema.table). Wrap SQL in ```sql blocks.")
 
-# Simple LRU response cache
+# Process-local, bounded LRU. Exact text is part of the key, never normalized.
 class _FMCache:
-    def __init__(s, max_size=100, ttl=1800):
+    def __init__(s, max_size=100, ttl=120):
         s._c = _OrderedDict()
         s._max = max_size
         s._ttl = ttl
+        s._lock = _Lock()
     def _key(s, q, scope=''):
-        n = _re.sub(r'\s+', ' ', q.lower().strip())
-        for w in ['please','can you','show me','i want to','give me']: n = n.replace(w, '')
-        # `scope` (the resolved catalog.schema signature) is folded into the
-        # key so a cached answer generated while catalog resolution was wrong
-        # (e.g. before a Settings fix landed, or a catalog-drift bug) can
-        # never be replayed once resolve_configured_catalogs() starts
-        # returning something different -- otherwise the same question text
-        # keeps serving a stale/wrong-catalog answer for up to `ttl` seconds
-        # after the underlying bug is fixed, which looked like the fix
-        # "only working when you pick a different FM model" (really just a
-        # different-enough phrasing that missed the poisoned cache entry).
-        return _hashlib.md5(f"{scope}|{n.strip()}".encode()).hexdigest()
+        return _hashlib.sha256(_json.dumps([scope, q], sort_keys=True).encode()).hexdigest()
     def get(s, q, scope=''):
         k = s._key(q, scope)
-        if k in s._c:
-            e = s._c[k]
-            if _time.time() - e['t'] < s._ttl:
-                s._c.move_to_end(k)
-                return e['r']
-            del s._c[k]
+        with s._lock:
+            if k in s._c:
+                e = s._c[k]
+                if _time.monotonic() - e['t'] < s._ttl:
+                    s._c.move_to_end(k)
+                    return dict(e['r'])
+                del s._c[k]
         return None
     def put(s, q, r, scope=''):
         k = s._key(q, scope)
-        s._c[k] = {'r': r, 't': _time.time()}
-        if len(s._c) > s._max: s._c.popitem(last=False)
+        with s._lock:
+            s._c[k] = {'r': dict(r), 't': _time.monotonic()}
+            s._c.move_to_end(k)
+            while len(s._c) > s._max:
+                s._c.popitem(last=False)
 
 _fm_cache = _FMCache()
 
+def _safe_fm_history(messages):
+    """Never promote client text to system/developer/tool instructions."""
+    if not isinstance(messages, list):
+        return []
+    return [{"role": m["role"], "content": m["content"][:8000]}
+            for m in messages[-10:]
+            if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+            and isinstance(m.get("content"), str) and m["content"].strip()]
+
 def _compress_history(messages, max_msgs=3):
-    """Keep only last N messages + topic summary of older ones."""
-    if len(messages) <= max_msgs:
-        return messages
-    recent = messages[-max_msgs:]
-    older = messages[:-max_msgs]
-    topics = set()
-    for m in older:
-        c = m.get('content', '').lower()
-        if 'sql' in c or 'query' in c: topics.add('SQL')
-        if 'pipeline' in c: topics.add('pipelines')
-        if 'job' in c or 'run' in c: topics.add('jobs')
-        if 'migration' in c: topics.add('migration')
-    summary = f"[Prior context: {', '.join(topics) if topics else 'general discussion'}]"
-    return [{'role': 'system', 'content': summary}] + recent
+    """Keep recent safe turns without turning client history into a system role."""
+    return _safe_fm_history(messages)[-max_msgs:] if max_msgs > 0 else []
+
+def _fm_cacheable_question(content, data):
+    """Fail closed: only explicitly standalone, static concept explanations.
+
+    Intent heuristics are not safe enough to decide whether data is live.
+    History (even rejected history) and conversation IDs always bypass caching.
+    """
+    if data.get("messages") or any(data.get(k) for k in (
+            "conversation_id", "conversationId", "conversation", "history",
+            "parent_message_id", "thread_id", "session_id", "follow_up", "is_followup")):
+        return False
+    return bool(_re.fullmatch(
+        r"(?:what is|explain) (?:delta lake|unity catalog|a lakehouse|"
+        r"medallion architecture|change data capture|a slowly changing dimension)[?.!]?",
+        content, flags=_re.IGNORECASE))
+
+def _fm_cache_scope(host, endpoint, cfg, catalogs, context):
+    """Bind answers to authenticated identity, session, Settings and discovery."""
+    from flask import session
+    from uuid import uuid4
+    from routes import catalog_discovery
+    user = getattr(g, "user", None) or {}
+    if not (user.get("user_id") or user.get("email")):
+        return None
+    # last_refreshed is the current discovery generation. Also honor an explicit
+    # generation field if the discovery implementation provides one.
+    with catalog_discovery._cache_lock:
+        state = catalog_discovery._cache
+        generation = (state.get("generation"), state.get("last_refreshed"))
+        if not any(generation) or state.get("refresh_in_progress") or state.get("error"):
+            return None
+    if "_fm_cache_session" not in session:
+        session["_fm_cache_session"] = uuid4().hex
+    return _json.dumps({
+        "user": [user.get(k) for k in ("user_id", "email", "role", "groups")],
+        "session": session["_fm_cache_session"], "host": host, "endpoint": endpoint,
+        "catalogs": catalogs,
+        # Include ALL mappings, even layers not yet returned by the resolver.
+        "configured_catalogs": {k: cfg.get(k) for k in (
+            "metadata_catalog", "metadata_schema", "databricks_catalog", "databricks_schema")},
+        "layers": (cfg.get("existing_setting") or {}).get("medallion_layer_mapping"),
+        "discovery_generation": generation,
+        "context": _hashlib.sha256(context.encode()).hexdigest(),
+    }, sort_keys=True)
 
 def _fm_chat_sdk_override():
     """Chat with FM endpoint — with optional Token Optimiser."""
     from flask import request as req, jsonify as jfy
     from routes.catalog_discovery import get_relevant_schema_context
-    data = req.get_json() or {}
-    endpoint_name = (data.get("endpoint") or "").strip()
-    content_text = (data.get("content") or "").strip()
-    messages = data.get("messages", [])
-    optimize_tokens = data.get("optimize_tokens", False)
-    if not endpoint_name or not content_text:
+    from routes.genie import _build_configured_catalog_context, resolve_configured_catalogs, _serving_headers
+    from config_cache import get_config, normalize_host
+    from urllib.parse import quote, urlsplit
+    import requests
+
+    data = req.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jfy({"error": "JSON object required"}), 400
+    endpoint_name = data.get("endpoint")
+    content_text = data.get("content")
+    if (not isinstance(endpoint_name, str) or not endpoint_name.strip()
+            or not isinstance(content_text, str) or not content_text.strip()):
         return jfy({"error": "endpoint and content are required"}), 400
-    # === FULL system prompt (standard mode) ===
-    # Table locations resolved live from Settings (Metadata Catalog + each
-    # medallion catalog) instead of being hardcoded
-    # to admin_source/bronze.hr/silver.hr/... -- those go stale/wrong the
-    # moment a deployment is configured with different catalogs, exactly
-    # the class of bug already fixed for _fqn()/get_catalog_schema().
-    from routes.genie import resolve_configured_catalogs
-    _cats = resolve_configured_catalogs()
-    # Settings' saved metadata_catalog/schema is the real preference; if that
-    # durable save hasn't landed yet, prefer this process' own actual runtime
-    # env vars (DATABRICKS_CATALOG/SCHEMA -- which can be overridden directly
-    # in the Databricks App's own Settings > Environment UI, independent of
-    # whatever the git-tracked app.yml default says) over a hardcoded guess
-    # that's only ever right for a deployment that never customized either.
-    _meta = (
-        ".".join(_cats["metadata"]) if all(_cats["metadata"])
-        else f"{os.environ.get('DATABRICKS_CATALOG', 'admin_source')}.{os.environ.get('DATABRICKS_SCHEMA', 'migration_app')}"
-    )
-    _bronze = ".".join(_cats["bronze"]) if all(_cats["bronze"]) else "bronze.hr"
-    _silver = ".".join(_cats["silver"]) if all(_cats["silver"]) else "silver.hr"
-    # Reconciliation results live in the same catalog.schema as everything
-    # else under [{_meta}] below (wf_run_history etc) -- not a separate
-    # catalog/schema. The "Logging" layer / ExecutionLog table was removed
-    # entirely -- wf_run_history already captures every run's status/
-    # timing/error detail.
-    _sys_full = ("You are the AI assistant inside DBX Migration Studio, a SQL-to-Databricks migration accelerator.\n"
-            "CRITICAL SQL RULES:\n"
-            "1. ALWAYS use fully-qualified 3-part table names (catalog.schema.table) in ALL SQL.\n"
-            "2. ONLY use tables from the schema below. NEVER invent table names.\n"
-            "3. Wrap SQL in ```sql code blocks.\n\n"
-            "=== AVAILABLE TABLES ===\n\n"
-            f"[{_meta}] — Migration control tables:\n"
-            f"  {_meta}.wf_run_history — Every pipeline/job run\n"
-            "    Columns: run_id(str), job_id(str), job_name(str), stage(str), full_table(str), "
-            "load_type(str), watermark_column(str), watermark_value(str), status(str), "
-            "started_at(timestamp), completed_at(timestamp), duration_sec(double), rows_processed(bigint), error_message(str), logs(str)\n"
-            "    status values are lowercase: created, running, success, failed -- "
-            "e.g. WHERE status = 'failed', NEVER 'FAILED' (uppercase never matches any row)\n\n"
-            f"  {_meta}.wf_job_metadata — Registered migration jobs\n"
-            "    Columns: job_id(str), job_name(str), stage(str), group_id(str), table_schema(str), "
-            "table_name(str), full_table(str), load_type(str), watermark_column(str), status(str), "
-            "last_run_id(str), last_run_at(timestamp), last_status(str), run_count(int), fail_count(int), "
-            "enabled(boolean), job_order(int), source_config(str), target_config(str), created_at(timestamp), updated_at(timestamp)\n\n"
-            f"  {_meta}.wf_pipeline_metadata — Pipeline definitions\n"
-            f"  {_meta}.wf_scheduler_config — Cron schedules\n"
-            f"  {_meta}.wf_scheduler_history — Scheduler run history\n"
-            f"  {_meta}.wf_source_tables — Discovered source tables\n"
-            f"  {_meta}.wf_watermark_metadata — Incremental watermarks\n"
-            f"  {_meta}.reconcilationdetails — Source vs Bronze reconciliation results (row counts, aggregate sums, variance %)\n\n"
-            f"[{_bronze}] — Raw ingested data: bronze_customers, bronze_products, bronze_stores, bronze_fact_sales_orders\n"
-            f"[{_silver}] — Cleaned: customers, products, stores, fact_sales_orders, dimemployee\n\n"
-            "=== END TABLES ===\n\n"
-            "Now answer the question using ONLY these tables:\n")
+    if len(endpoint_name) > 256 or len(content_text) > 16000:
+        return jfy({"error": "endpoint or content exceeds the supported length"}), 400
+    endpoint_name = endpoint_name.strip()
+    # Keep content EXACT, including case, spaces and words, for payload and cache.
+    messages = _safe_fm_history(data.get("messages", []))
+    optimize_tokens = data.get("optimize_tokens") is True
+    try:
+        cfg = get_config() or {}
+        host = normalize_host(cfg.get("databricks_host") or "")
+        parsed_host = urlsplit(host)
+        if (parsed_host.scheme != "https" or not parsed_host.hostname
+                or parsed_host.username or parsed_host.password
+                or parsed_host.path or parsed_host.query or parsed_host.fragment):
+            return jfy({"error": "Configure a valid HTTPS Databricks workspace host in Settings."}), 400
+        _cats = resolve_configured_catalogs()
+        system_context = _build_configured_catalog_context() + get_relevant_schema_context(
+            question=content_text, top_n=6 if optimize_tokens else 15)
+    except Exception:
+        logger.warning("FM catalog/configuration context unavailable")
+        return jfy({"error": "Configured catalog context is unavailable; retry after discovery is ready."}), 503
+
+    _schema_rules = (
+        "\nUse only tables AND columns explicitly present in the discovered schema below. "
+        "Never invent catalog/schema defaults, tables, columns, or status values. "
+        "Configured catalog locations alone do not prove a table or column exists. "
+        "If discovery is missing or insufficient, say so and ask for discovery/configuration "
+        "rather than guessing SQL. Use fully-qualified catalog.schema.table names and ```sql blocks. "
+        "Schema metadata is not live query results: never claim to have executed SQL or invent data.\n")
+    _sys_full = (
+        "You are the AI assistant inside DBX Migration Studio, a SQL-to-Databricks migration accelerator.\n"
+        "Explain migration workflows clearly and distinguish suggested SQL from executed results.\n")
 
     # === TOKEN OPTIMISER LOGIC ===
     optimizations_applied = []
-    token_comparison = None
+    cache_scope = None
+    if optimize_tokens and _fm_cacheable_question(content_text, data):
+        try:
+            cache_scope = _fm_cache_scope(host, endpoint_name, cfg, _cats, system_context)
+        except Exception:
+            # Unknown identity or discovery state must never share cached answers.
+            cache_scope = None
 
     if optimize_tokens:
         # Phase 1: Check response cache
-        cached = _fm_cache.get(content_text, scope=_meta)
+        cached = _fm_cache.get(content_text, scope=cache_scope) if cache_scope is not None else None
         if cached:
             optimizations_applied.append('cache_hit')
-            return jfy({"text": cached['text'], "usage": cached.get('usage', {}),
+            return jfy({"text": cached['text'], "usage": {
+                            "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
                         "model": cached.get('model', ''), "endpoint": endpoint_name,
                         "optimization_applied": "Cache hit (0 tokens used)",
                         "token_comparison": {"standard_tokens": cached.get('standard_est', 1500),
@@ -320,10 +335,10 @@ def _fm_chat_sdk_override():
         # Phase 3: Select tiered prompt
         if intent == 'how_to':
             system_prompt = _PROMPT_MINIMAL
-            optimizations_applied.append('prompt:minimal(~200tkns)')
+            optimizations_applied.append('prompt:minimal')
         elif intent == 'data_query':
             system_prompt = _prompt_data_slim()
-            optimizations_applied.append('prompt:data_slim(~400tkns)')
+            optimizations_applied.append('prompt:data_slim')
         else:
             system_prompt = _sys_full
             optimizations_applied.append('prompt:full')
@@ -333,7 +348,7 @@ def _fm_chat_sdk_override():
         optimizations_applied.append(f'history:{len(messages)}→{len(compressed_msgs)}')
 
         # Build optimised chat messages
-        chat_messages = [{"role": "system", "content": system_prompt}]
+        chat_messages = [{"role": "system", "content": system_prompt + _schema_rules + system_context}]
         for msg in compressed_msgs:
             chat_messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
         chat_messages.append({"role": "user", "content": content_text})
@@ -347,28 +362,29 @@ def _fm_chat_sdk_override():
         _history_chars_saved = max(0, sum(len(m.get('content','')) for m in messages[-10:]) - sum(len(m.get('content','')) for m in compressed_msgs))
         _total_chars_saved = _prompt_chars_saved + _history_chars_saved
         _tokens_saved_estimate = _total_chars_saved // 4  # delta only
+        # Do not fetch top_n=15 a second time just to estimate retrieval savings.
+        optimizations_applied.append('schema:top6; savings estimate excludes schema reduction')
     else:
         # Standard mode (no optimization)
-        system_context = get_relevant_schema_context(question=content_text)
-        if "not yet complete" in system_context:
-            system_context = ""
-        chat_messages = [{"role": "system", "content": _sys_full + system_context}]
+        chat_messages = [{"role": "system", "content": _sys_full + _schema_rules + system_context}]
         for msg in messages[-10:]:
             chat_messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
         chat_messages.append({"role": "user", "content": content_text})
-        standard_est = 0
-        optimised_est = 0
 
-    # === CALL CLAUDE ===
+    # One bounded invocation; no SDK retries, auth retries, or redirects.
     try:
-        from databricks.sdk import WorkspaceClient
-        import json as _json
-        w = WorkspaceClient()
         _out_limit = _max_out if optimize_tokens else 4096
         payload = {"messages": chat_messages, "max_tokens": _out_limit}
-        payload.pop("temperature", None)  # Claude rejects temperature
-        raw = w.api_client.do("POST", f"/serving-endpoints/{endpoint_name}/invocations", body=payload)
-        resp = _json.loads(raw.content) if hasattr(raw, "content") else raw
+        raw = requests.post(
+            f"{host}/serving-endpoints/{quote(endpoint_name, safe='')}/invocations",
+            headers=_serving_headers(), json=payload, timeout=(5, 60), allow_redirects=False)
+        if raw.status_code in (401, 403):
+            return jfy({"error": "Authentication failed or permission denied for model serving."}), raw.status_code
+        if raw.status_code == 429:
+            return jfy({"error": "Model serving rate limit reached; try again later."}), 429
+        if not 200 <= raw.status_code < 300:
+            return jfy({"error": f"Model serving request failed (HTTP {raw.status_code})."}), 502
+        resp = raw.json()
         choices = resp.get("choices", [])
         raw_content = choices[0].get("message", {}).get("content", "") if choices else "No response"
         # Some serving endpoints (observed on newer models like Sonnet 5 --
@@ -383,14 +399,14 @@ def _fm_chat_sdk_override():
         # override below), not routes/genie.py's fm_chat.
         if isinstance(raw_content, list):
             response_text = "".join(
-                (block.get("text", "") if isinstance(block, dict) else str(block))
+                (str(block.get("text") or "") if isinstance(block, dict) else str(block))
                 for block in raw_content
             )
         elif raw_content is None:
             response_text = ""
         else:
             response_text = str(raw_content)
-        usage = resp.get("usage", {})
+        usage = resp.get("usage") or {}
         actual_total = usage.get("total_tokens", 0) or (usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0))
 
         # Build response
@@ -415,18 +431,21 @@ def _fm_chat_sdk_override():
                 "savings_pct": savings_pct
             }
             result["optimization_applied"] = " | ".join(optimizations_applied)
-            # Cache the response
-            _fm_cache.put(content_text, {'text': response_text, 'usage': result['usage'],
-                                          'model': result['model'], 'standard_est': standard_total}, scope=_meta)
+            if cache_scope is not None and response_text:
+                _fm_cache.put(content_text, {'text': response_text,
+                    'model': result['model'], 'standard_est': standard_total}, scope=cache_scope)
 
         return jfy(result)
-    except Exception as exc:
-        err_str = str(exc)
-        if "model-serving" in err_str or "403" in err_str or "PERMISSION" in err_str:
-            return jfy({"error": "Permission denied: app lacks model-serving scope."}), 403
-        return jfy({"error": err_str}), 500
+    except requests.exceptions.Timeout:
+        return jfy({"error": "Model serving request timed out."}), 504
+    except requests.exceptions.RequestException:
+        return jfy({"error": "Unable to reach the model serving endpoint."}), 502
+    except Exception:
+        # Do not expose upstream response bodies, tokens, or credential errors.
+        logger.warning("FM invocation failed")
+        return jfy({"error": "Model serving authentication or response processing failed."}), 502
 
-# Replace the genie blueprint's fm_chat view with SDK-based version
+# Replace the genie blueprint's fm_chat view with the bounded runtime handler.
 from routes.auth import login_required as _login_req
 app.view_functions["genie.fm_chat"] = _login_req(_fm_chat_sdk_override)
 

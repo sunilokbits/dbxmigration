@@ -117,6 +117,25 @@ def _build_configured_catalog_context() -> str:
                 "Other catalogs discovered below may also be relevant depending on the question.\n")
     return "\n".join(out) + "\n"
 
+
+def _render_faq(answer: str) -> str:
+    """Substitute catalog/schema placeholders in FAQ answers with this
+    deployment's actually-configured names (from Settings), so the assistant
+    never quotes a stale/static catalog (e.g. a literal `admin_source`) that
+    doesn't match what's configured. Falls back to a neutral phrase when a
+    layer isn't configured yet, rather than inventing a default name.
+    """
+    resolved = resolve_configured_catalogs()
+
+    def _fq(name, fallback):
+        cat, sch = resolved.get(name, ("", ""))
+        return f"{cat}.{sch}" if cat and sch else fallback
+
+    return (answer
+            .replace("{META}", _fq("metadata", "your configured metadata catalog/schema (see Settings)"))
+            .replace("{BRONZE}", _fq("bronze", "your configured Bronze catalog/schema"))
+            .replace("{SILVER}", _fq("silver", "your configured Silver catalog/schema")))
+
 # ══════════════════════════════════════════════════════════════════════════════
 # FAQ KNOWLEDGE BASE — Rich detailed answers for app-level questions
 # ══════════════════════════════════════════════════════════════════════════════
@@ -195,7 +214,7 @@ Bronze Layer  ──→  Silver Layer  ──→  Gold Layer
   (raw ingest)    (cleaned data)    (business models)
       │
       ▼
-Unity Catalog (admin_source.configtables)
+Unity Catalog ({META})
       │
       ▼
 Migration Studio App  ←→  Genie AI (this panel)
@@ -216,20 +235,19 @@ Migration Studio App  ←→  Genie AI (this panel)
     (
         ["what catalogs", "which catalog", "what data", "what tables",
          "list catalog", "available data", "connected tables", "what schemas"],
-        """**Connected Catalogs & Data (26 tables)**
+        """**Connected Catalogs & Data**
 
-| Catalog | Schema | Purpose |
-|---|---|---|
-| `admin_source` | `configtables` | Migration pipeline config: job metadata, run history, schedules, watermarks |
-| `admin_source` | `migration_app` | App runtime: migration jobs, audit log, user roles, schedules |
-| `bronze` | `hr` | Raw SQL Server ingestion: customers, products, sales orders, employees, invoices |
-| `silver` | `hr` | Cleaned/enriched HR data after medallion processing |
-| `admin_source` | `configtables` | Also holds `reconcilationdetails` — source vs target row-count reconciliation results |
-| `samples` | various | NYC taxi trips, TPC-H benchmark orders |
+This deployment reads from the catalogs configured in **Settings** — there is no fixed/static catalog:
 
-Pipeline execution logs (rows processed, duration, errors) live in `admin_source.configtables.wf_run_history`, not a separate catalog.
+| Location | Purpose |
+|---|---|
+| `{META}` | Migration metadata: job/pipeline metadata, run history, schedules, watermarks, source tables and reconciliation results — plus app runtime (migration jobs, audit log, user roles, config) |
+| `{BRONZE}` | Raw ingested source data (medallion Bronze layer) |
+| `{SILVER}` | Cleaned/enriched data (medallion Silver layer) |
 
-You can ask data questions about any of these — for example: *"Show total sales by product"* or *"Which migration jobs failed?"*"""
+Pipeline execution logs (rows processed, duration, errors) live in `{META}.wf_run_history`.
+
+The available tables are discovered live from your workspace, so answers always reflect the currently configured catalogs. Ask a data question about any of these — for example: *"Show total sales by product"* or *"Which migration jobs failed?"*"""
     ),
 
     # ── Migration status ─────────────────────────────────────────────────────
@@ -243,7 +261,7 @@ You can ask data questions about any of these — for example: *"Show total sale
 - *"Which source tables are still pending?"*
 - *"Show latest run history with status"*
 
-These query `admin_source.configtables.wf_job_metadata` and `admin_source.migration_app.migration_jobs` in real-time."""
+These query `{META}.wf_job_metadata` and `{META}.migration_jobs` in real-time."""
     ),
 
     # ── Genie / AI ───────────────────────────────────────────────────────────
@@ -309,7 +327,7 @@ Pipeline Studio creates Lakeflow Spark Declarative Pipelines that automatically 
     "discovery": """**Discovery** — Scan and analyse your SQL Server database.
 
 Discovers tables, stored procedures, views, and UDFs with complexity scoring (1-5).
-Results stored in `admin_source.configtables.wf_source_tables`.
+Results stored in `{META}.wf_source_tables`.
 
 **How to use:** Discovery tab → Start Discovery → Review objects → Select for migration""",
 
@@ -327,24 +345,24 @@ Uses the Databricks Workspace API to upload each notebook to the configured targ
 
     "metadataflow": """**MetadataFlow** — Provision Unity Catalog and Delta metadata tables.
 
-Creates `admin_source` catalog, schemas, and all 6 config tables (wf_job_metadata, wf_pipeline_metadata, wf_run_history, wf_scheduler_config, wf_source_tables, wf_watermark_metadata).
+Creates your configured metadata catalog (`{META}`), schemas, and all 6 config tables (wf_job_metadata, wf_pipeline_metadata, wf_run_history, wf_scheduler_config, wf_source_tables, wf_watermark_metadata).
 
 **Must complete before Pipeline Studio or Job Manager.**""",
 
     "job_manager": """**Job Manager** — Create and monitor Lakeflow Jobs.
 
 Creates Databricks Jobs that run migration pipelines/notebooks. Shows status, duration, rows processed.
-Runs tracked in `admin_source.configtables.wf_run_history`.""",
+Runs tracked in `{META}.wf_run_history`.""",
 
     "scheduler": """**Job Scheduler** — Cron, interval, or one-time job scheduling.
 
 **Types:** Cron expression (e.g. `0 2 * * *`), Interval (every N hours), One-time (specific datetime).
-Config stored in `admin_source.configtables.wf_scheduler_config`.""",
+Config stored in `{META}.wf_scheduler_config`.""",
 
     "reconciliation": """**Reconciliation** — Compare source vs target after migration.
 
 Checks row counts, numeric aggregate sums, NULL differences, and variance %.
-Results in `admin_source.configtables.reconcilationdetails` (same catalog.schema
+Results in `{META}.reconcilationdetails` (same catalog.schema
 as wf_run_history and this deployment's other metadata tables).""",
 
     "data_quality": """**Data Quality** — Validate completeness, accuracy, consistency, freshness.
@@ -358,7 +376,7 @@ Side-by-side diff of source SQL Server schema vs target Databricks schema. Expor
     "audit": """**Audit & Compliance** — Full action history.
 
 Tracks every action: login, settings change, pipeline create/run, deployment. Filter by date/user/action.
-Stored in `admin_source.migration_app.audit_log`.""",
+Stored in `{META}.audit_log`.""",
 
     "user_management": """**User Management** — RBAC (Admin only).
 
@@ -368,7 +386,7 @@ Stored in `admin_source.migration_app.audit_log`.""",
 | Operator | Run pipelines and jobs; cannot change settings |
 | Viewer | Read-only: view dashboards and reports |
 
-Stored in `admin_source.migration_app.user_roles`.""",
+Stored in `{META}.user_roles`.""",
 
     "health_check": """**System Health Check** — Failure detection + auto-recovery.
 
@@ -401,12 +419,13 @@ def _check_faq(question):
     for triggers, answer in APP_FAQ:
         for trigger in triggers:
             if trigger in q:
-                return answer
+                return _render_faq(answer)
     # Phase 2: feature-keyword + question verb
     if QUESTION_VERBS.search(q):
         for kw, key in FEATURE_MAP.items():
             if kw in q:
-                return APP_FEATURE_FAQ.get(key)
+                answer = APP_FEATURE_FAQ.get(key)
+                return _render_faq(answer) if answer else None
     return None
 
 

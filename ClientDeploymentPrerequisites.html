@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Migration Studio — Client / Other-Workspace Deployment Checklist</title>
+<style>
+  :root{
+    --bg:#F6F8FB; --surface:#FFFFFF; --surface-2:#F1F5F9;
+    --ink:#0F172A; --t2:#334155; --t3:#64748B; --t4:#94A3B8;
+    --line:#E2E8F0; --brand:#4F46E5; --brand-2:#6366F1; --brand-soft:#EEF2FF;
+    --green:#059669; --green-soft:#ECFDF5; --amber:#D97706; --amber-soft:#FFFBEB;
+    --red:#DC2626; --red-soft:#FEF2F2; --blue:#2563EB; --blue-soft:#EFF6FF;
+    --purple-soft:#F5F3FF; --radius:14px;
+    --shadow:0 1px 3px rgba(15,23,42,.06),0 8px 24px rgba(15,23,42,.06);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Segoe UI',system-ui,-apple-system,Arial,sans-serif;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.55}
+
+  /* ── Header ── */
+  .hdr{background:linear-gradient(120deg,#111B33 0%,#1E2A52 55%,#312E81 100%);color:#fff;padding:34px 40px 88px;position:relative;overflow:hidden}
+  .hdr::after{content:"";position:absolute;right:-120px;top:-120px;width:420px;height:420px;border-radius:50%;background:radial-gradient(circle,rgba(99,102,241,.35),transparent 70%)}
+  .hdr::before{content:"";position:absolute;right:120px;bottom:-160px;width:300px;height:300px;border-radius:50%;background:radial-gradient(circle,rgba(16,185,129,.18),transparent 70%)}
+  .hdr-inner{max-width:1180px;margin:0 auto;position:relative;z-index:1}
+  .hdr .kicker{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);padding:5px 14px;border-radius:99px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+  .hdr .kicker .dot{width:7px;height:7px;border-radius:50%;background:#34D399;box-shadow:0 0 8px #34D399}
+  .hdr h1{font-size:28px;font-weight:800;margin:16px 0 6px;letter-spacing:-.02em}
+  .hdr p{color:#C7D2FE;font-size:14.5px;max-width:780px}
+  .hdr-meta{display:flex;gap:26px;margin-top:18px;flex-wrap:wrap}
+  .hdr-meta .m{font-size:12px;color:#A5B4FC}
+  .hdr-meta .m b{display:block;color:#fff;font-size:13px;font-weight:700}
+
+  /* ── Readiness bar ── */
+  .ready{max-width:1180px;margin:-56px auto 0;padding:0 40px;position:relative;z-index:2}
+  .ready-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px 26px;display:flex;align-items:center;gap:26px;flex-wrap:wrap}
+  .ring{position:relative;width:92px;height:92px;flex-shrink:0}
+  .ring svg{transform:rotate(-90deg)}
+  .ring .pct{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;font-weight:800;font-size:19px;color:var(--brand)}
+  .ring .pct small{font-size:9px;color:var(--t4);font-weight:600;letter-spacing:.06em}
+  .ready-info{flex:1;min-width:240px}
+  .ready-info h3{font-size:15px;font-weight:800}
+  .ready-info p{font-size:12px;color:var(--t3);margin-top:2px}
+  .ready-bars{display:flex;gap:18px;flex-wrap:wrap}
+  .rbar{min-width:170px}
+  .rbar .lbl{display:flex;justify-content:space-between;font-size:11px;font-weight:700;color:var(--t2);margin-bottom:5px}
+  .rbar .track{height:7px;border-radius:99px;background:var(--surface-2);overflow:hidden}
+  .rbar .fill{height:100%;border-radius:99px;transition:width .5s ease}
+  .btn{border:none;cursor:pointer;font-family:inherit;font-weight:700;font-size:12.5px;border-radius:10px;padding:10px 18px;transition:.18s;display:inline-flex;align-items:center;gap:7px}
+  .btn-primary{background:var(--brand);color:#fff}
+  .btn-primary:hover{background:#4338CA;transform:translateY(-1px)}
+  .btn-ghost{background:var(--surface);color:var(--t2);border:1px solid var(--line)}
+  .btn-ghost:hover{border-color:var(--brand);color:var(--brand)}
+
+  /* ── Tabs ── */
+  .wrap{max-width:1180px;margin:26px auto 70px;padding:0 40px}
+  .tabs{display:flex;gap:6px;background:var(--surface);border:1px solid var(--line);padding:6px;border-radius:14px;box-shadow:var(--shadow);position:sticky;top:12px;z-index:20}
+  .tab{flex:1;border:none;background:transparent;cursor:pointer;padding:12px 10px;border-radius:10px;font-family:inherit;font-size:13px;font-weight:700;color:var(--t3);display:flex;align-items:center;justify-content:center;gap:9px;transition:.18s;position:relative}
+  .tab:hover{color:var(--brand);background:var(--brand-soft)}
+  .tab.active{background:linear-gradient(135deg,var(--brand),#7C3AED);color:#fff;box-shadow:0 4px 14px rgba(79,70,229,.35)}
+  .tab .ico{width:19px;height:19px}
+  .tab .cnt{background:rgba(255,255,255,.25);font-size:10px;padding:1px 8px;border-radius:99px}
+  .tab:not(.active) .cnt{background:var(--surface-2);color:var(--t3)}
+  .tab-panel{display:none;animation:fade .35s ease}
+  .tab-panel.active{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+  /* ── Toolbar ── */
+  .toolbar{display:flex;gap:10px;align-items:center;margin:22px 0 16px;flex-wrap:wrap}
+  .search{flex:1;min-width:220px;position:relative}
+  .search input{width:100%;padding:10px 14px 10px 38px;border:1px solid var(--line);border-radius:10px;font-family:inherit;font-size:13px;background:var(--surface);outline:none;transition:.18s}
+  .search input:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(79,70,229,.12)}
+  .search svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);width:15px;height:15px;color:var(--t4)}
+  .chips{display:flex;gap:7px}
+  .chip{border:1px solid var(--line);background:var(--surface);border-radius:99px;padding:7px 15px;font-size:11.5px;font-weight:700;color:var(--t3);cursor:pointer;font-family:inherit;transition:.15s}
+  .chip:hover{border-color:var(--brand);color:var(--brand)}
+  .chip.on{background:var(--brand);border-color:var(--brand);color:#fff}
+
+  /* ── Sections & items ── */
+  .sect{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:18px;overflow:hidden}
+  .sect-hd{display:flex;align-items:center;gap:13px;padding:16px 22px;cursor:pointer;user-select:none}
+  .sect-hd:hover{background:#FAFBFF}
+  .sect-ico{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+  .sect-ico svg{width:19px;height:19px}
+  .sect-hd h2{font-size:14.5px;font-weight:800;flex:1}
+  .sect-hd .sub{font-size:11px;color:var(--t4);font-weight:600;margin-top:1px}
+  .sect-prog{width:110px;flex-shrink:0}
+  .sect-prog .track{height:6px;border-radius:99px;background:var(--surface-2);overflow:hidden}
+  .sect-prog .fill{height:100%;border-radius:99px;transition:width .4s}
+  .sect-prog span{font-size:10px;font-weight:700;color:var(--t3)}
+  .caret{transition:.25s;color:var(--t4);flex-shrink:0}
+  .sect.open .caret{transform:rotate(180deg)}
+  .sect-body{display:none;border-top:1px solid var(--line)}
+  .sect.open .sect-body{display:block}
+  .item{display:flex;gap:13px;padding:13px 22px;border-bottom:1px solid var(--surface-2);align-items:flex-start;transition:.15s}
+  .item:last-child{border-bottom:none}
+  .item:hover{background:#FAFBFF}
+  .item.done{background:#F8FDFB}
+  .item.done .it-title{text-decoration:line-through;color:var(--t4)}
+  .cbox{width:20px;height:20px;border:2px solid #CBD5E1;border-radius:6px;cursor:pointer;flex-shrink:0;margin-top:2px;display:flex;align-items:center;justify-content:center;transition:.15s;background:#fff}
+  .cbox:hover{border-color:var(--brand)}
+  .cbox svg{width:12px;height:12px;color:#fff;opacity:0;transform:scale(.4);transition:.15s}
+  .item.done .cbox{background:var(--green);border-color:var(--green)}
+  .item.done .cbox svg{opacity:1;transform:scale(1)}
+  .it-main{flex:1;min-width:0}
+  .it-title{font-size:13px;font-weight:700;color:var(--t2)}
+  .it-desc{font-size:12px;color:var(--t3);margin-top:3px;line-height:1.5}
+  .it-desc code{background:var(--surface-2);padding:1px 6px;border-radius:5px;font-family:Consolas,monospace;font-size:11px;color:#7C3AED}
+  .tags{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap}
+  .tag{font-size:10px;font-weight:800;padding:2px 9px;border-radius:99px;letter-spacing:.03em}
+  .tag.crit{background:var(--red-soft);color:var(--red)}
+  .tag.high{background:var(--amber-soft);color:var(--amber)}
+  .tag.med{background:var(--blue-soft);color:var(--blue)}
+  .tag.owner{background:var(--purple-soft);color:#6D28D9}
+  .empty-msg{display:none;text-align:center;color:var(--t4);font-size:12.5px;padding:26px}
+
+  /* ── Callouts ── */
+  .callout{display:flex;gap:12px;border-radius:12px;padding:14px 18px;margin:0 0 18px;font-size:12.5px;border:1px solid}
+  .callout svg{width:18px;height:18px;flex-shrink:0;margin-top:1px}
+  .co-info{background:var(--blue-soft);border-color:#BFDBFE;color:#1E40AF}
+  .co-warn{background:var(--amber-soft);border-color:#FDE68A;color:#92400E}
+  .co-ok{background:var(--green-soft);border-color:#A7F3D0;color:#065F46}
+
+  /* ── Footer ── */
+  .ftr{max-width:1180px;margin:0 auto;padding:0 40px 46px;text-align:center;color:var(--t4);font-size:11.5px}
+  .ftr a{color:var(--brand);text-decoration:none;font-weight:600}
+
+  @media print{
+    body{background:#fff}
+    .hdr{padding:20px;color:#000;background:#fff;border-bottom:2px solid #000}
+    .hdr p,.hdr-meta,.hdr .kicker{color:#333}
+    .ready,.toolbar,.caret,.cbox{display:none !important}
+    .tabs{display:none}
+    .tab-panel{display:block !important;page-break-before:always}
+    .tab-panel:first-of-type{page-break-before:avoid}
+    .sect{box-shadow:none;break-inside:avoid}
+    .sect-body{display:block !important}
+    .item{break-inside:avoid}
+    .ftr{color:#666}
+  }
+  @media(max-width:760px){
+    .hdr,.wrap,.ready{padding-left:18px;padding-right:18px}
+    .tabs{flex-direction:column}
+    .ready-bars{gap:10px}
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════ HEADER ═══════════ -->
+<header class="hdr">
+  <div class="hdr-inner">
+    <span class="kicker"><span class="dot"></span>Deployment Runbook</span>
+    <h1>Deploying to a New Client / Other Workspace</h1>
+    <p>Everything that must exist, be granted, or be manually configured in the <b>target Databricks workspace</b> before running <code style="background:rgba(255,255,255,.14);color:#fff;padding:1px 6px;border-radius:5px;">deploy/one_click_deploy.py</code> — plus the checks to run immediately <b>before</b> deployment and immediately <b>after</b>, so a gap surfaces as a checklist item instead of a mid-deploy failure or a silent post-deploy bug.</p>
+    <div class="hdr-meta">
+      <div class="m"><b>Scope</b>Client / non-dev-staging workspace deploys</div>
+      <div class="m"><b>Entry point</b><code style="color:#fff">deploy/one_click_deploy.py</code></div>
+      <div class="m"><b>Companion docs</b>Prerequisites.html · deploy/README.md · deploy/pipeline/README.md</div>
+      <div class="m"><b>Version</b>1.0 · Sep 2026</div>
+    </div>
+  </div>
+</header>
+
+<!-- ═══════════ READINESS ═══════════ -->
+<div class="ready">
+  <div class="ready-card">
+    <div class="ring">
+      <svg width="92" height="92">
+        <circle cx="46" cy="46" r="39" fill="none" stroke="#EEF2F7" stroke-width="9"/>
+        <circle id="ringFill" cx="46" cy="46" r="39" fill="none" stroke="#4F46E5" stroke-width="9" stroke-linecap="round" stroke-dasharray="245" stroke-dashoffset="245"/>
+      </svg>
+      <div class="pct"><span id="globalPct">0%</span><small>READY</small></div>
+    </div>
+    <div class="ready-info">
+      <h3>Overall Checklist Progress</h3>
+      <p>Tick items as they're confirmed — saved automatically in this browser and reflected across every tab.</p>
+    </div>
+    <div class="ready-bars">
+      <div class="rbar"><div class="lbl"><span>Access &amp; Manual Setup</span><span id="pctAccess">0%</span></div><div class="track"><div class="fill" id="barAccess" style="background:#6366F1;width:0%"></div></div></div>
+      <div class="rbar"><div class="lbl"><span>Pre-Validation</span><span id="pctPre">0%</span></div><div class="track"><div class="fill" id="barPre" style="background:#D97706;width:0%"></div></div></div>
+      <div class="rbar"><div class="lbl"><span>Post-Validation</span><span id="pctPost">0%</span></div><div class="track"><div class="fill" id="barPost" style="background:#059669;width:0%"></div></div></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <button class="btn btn-primary" onclick="copySummary()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+        Copy Status Summary
+      </button>
+      <button class="btn btn-ghost" onclick="window.print()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+        Print / PDF
+      </button>
+      <button class="btn btn-ghost" onclick="resetAll()">Reset</button>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <!-- ═══════════ TABS ═══════════ -->
+  <div class="tabs" id="tabBar">
+    <button class="tab active" data-tab="access" onclick="showTab('access')">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+      1 · Access &amp; Manual Setup <span class="cnt" id="cntAccess">0/0</span>
+    </button>
+    <button class="tab" data-tab="pre" onclick="showTab('pre')">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+      2 · Pre-Validation <span class="cnt" id="cntPre">0/0</span>
+    </button>
+    <button class="tab" data-tab="post" onclick="showTab('post')">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+      3 · Post-Validation <span class="cnt" id="cntPost">0/0</span>
+    </button>
+  </div>
+
+  <!-- ═══════════ TAB 1 · ACCESS & MANUAL SETUP ═══════════ -->
+  <section class="tab-panel active" id="panel-access">
+
+    <div class="callout co-info">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+      <div><b>What has to exist in the target workspace before you run the deploy.</b> <code>one_click_deploy.py</code> automates Unity Catalog infra, secrets, the Genie Space, and the app itself from just a PAT — but the PAT, the workspace, and a few things it genuinely can't do for you (client-side network/manual approvals) have to be ready first.</div>
+    </div>
+
+    <div class="toolbar">
+      <div class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input placeholder="Search prerequisites…" oninput="filterItems()">
+      </div>
+      <div class="chips">
+        <button class="chip on" data-f="all" onclick="setFilter(this)">All</button>
+        <button class="chip" data-f="crit" onclick="setFilter(this)">🔴 Critical</button>
+        <button class="chip" data-f="high" onclick="setFilter(this)">🟠 High</button>
+        <button class="chip" data-f="med" onclick="setFilter(this)">🔵 Medium</button>
+      </div>
+    </div>
+
+    <!-- ACCESS · IDENTITY & CREDENTIALS -->
+    <div class="sect open">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--brand-soft);color:var(--brand)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        </div>
+        <div style="flex:1"><h2>1.1 Deployment Identity &amp; Credentials</h2><div class="sub">One PAT per workspace — the only hard requirement to start</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="ac-101" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Databricks PAT for the <b>target</b> workspace</div><div class="it-desc">A Personal Access Token belonging to a user/SP with workspace-admin-level rights (UC creation, secrets, Apps, Jobs). Set as <code>DATABRICKS_TOKEN</code> env var — <b>never</b> written into <code>deploy/clients/&lt;name&gt;.json</code> (that file is git-ignored but still meant to hold non-secret values only).</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="ac-102" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Azure Service Principal (only if <code>with_infra: true</code>)</div><div class="it-desc"><code>AZURE_CLIENT_ID</code> / <code>AZURE_CLIENT_SECRET</code> / <code>AZURE_TENANT_ID</code> with <b>Contributor</b> + <b>User Access Administrator</b> on the target subscription/resource group. Omit all three (or pass <code>--skip-infra</code>) if Azure storage/UC infra already exists — then browser/CLI login is enough.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="ac-103" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Source DB password / DevOps PAT ready as env vars</div><div class="it-desc"><code>DBX_SOURCE_PASSWORD</code> (skip entirely if no source DB is configured for this client) and optional <code>DBX_DEVOPS_PAT</code> for Push-to-DevOps. The script prompts (masked) if missing and you're running interactively — but CI (<code>--yes</code>) fails fast instead.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="ac-104" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Client config JSON completed</div><div class="it-desc"><code>cp deploy/client.template.json deploy/clients/&lt;name&gt;.json</code> and fill every field: <code>client_name</code>, <code>databricks_host</code>, <code>catalog_admin</code>/<code>app_schema</code>, bronze/silver/volumes/recon/logging catalogs, <code>azure</code> block, <code>source</code> block. Remove the <code>_comment</code> key once done as a visual "reviewed" marker.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">JOINT</span></div></div></div>
+      </div>
+    </div>
+
+    <!-- ACCESS · WORKSPACE & UNITY CATALOG -->
+    <div class="sect">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--amber-soft);color:var(--amber)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+        </div>
+        <div style="flex:1"><h2>1.2 Workspace, Unity Catalog &amp; Warehouse</h2><div class="sub">Foundation the automated steps build on top of</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="ac-201" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Premium workspace with Databricks Apps enabled</div><div class="it-desc">Databricks Apps require the <b>Premium</b> plan. Confirm the Apps feature isn't blocked by a workspace allow-list or a not-yet-finalised IP access policy.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="ac-202" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Unity Catalog metastore attached</div><div class="it-desc">Without an assigned metastore, every catalog/schema/table step in <code>init_app_tables.py</code>/<code>one_click_deploy.py</code> fails outright — this is not something the deploy script can create for you.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="ac-203" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">A registered external location (or a metastore with default storage)</div><div class="it-desc">Some metastores reject a bare <code>CREATE CATALOG IF NOT EXISTS</code> with no storage root even when the catalog already exists. The deploy scripts fall back to piggybacking on any existing external location's storage root — having <b>at least one</b> registered avoids a manual "ask a metastore admin to create the catalog" step.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="ac-204" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">SQL Warehouse exists (or infra step will create one)</div><div class="it-desc">Serverless recommended. <code>sql_warehouse_id</code> in the client config, or leave blank to auto-discover a running one at deploy time.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="ac-205" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">App's own Service Principal will be granted UC access — don't skip this</div><div class="it-desc">The deploy identity's PAT creates the catalog/tables, but the running App authenticates as its <b>own</b> Service Principal (or a stored PAT that can go stale). <code>init_app_tables.py</code>/<code>one_click_deploy.py</code> now runs <code>GRANT USE CATALOG</code> / <code>GRANT USE SCHEMA, SELECT, MODIFY, CREATE TABLE</code> to that SP automatically — confirm the deploy PAT itself has enough authority to grant (catalog owner or metastore admin), or this step silently no-ops and every config save fails with <code>TABLE_OR_VIEW_NOT_FOUND</code> post-deploy (see Post-Validation 3.2).</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">OUR SIDE</span></div></div></div>
+      </div>
+    </div>
+
+    <!-- ACCESS · STORAGE & NETWORK -->
+    <div class="sect">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--red-soft);color:var(--red)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7v10c0 2 3.5 4 8 4s8-2 8-4V7"/><ellipse cx="12" cy="5" rx="8" ry="3"/></svg>
+        </div>
+        <div style="flex:1"><h2>1.3 Storage &amp; Network — client-side, cannot be automated</h2><div class="sub">The most common cause of a mid-deploy or post-deploy surprise</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="ac-301" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">ADLS Gen2 storage account + container (if <code>with_infra: true</code>)</div><div class="it-desc">Hierarchical namespace enabled, dedicated container (e.g. <code>datalake</code>). If it already exists, set <code>with_infra: false</code> / pass <code>--skip-infra</code> and just fill in the existing names.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="ac-302" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Source database firewall opened for Databricks egress</div><div class="it-desc">Azure SQL/Synapse: allow the SQL Warehouse's egress (or "Allow Azure services"). On-prem: firewall/VPN path for the Databricks egress range. <b>Test this before deploy day</b> — a connectivity probe from the target workspace, not an assumption.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="ac-303" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">IP access lists / conditional access reviewed for the App URL</div><div class="it-desc">If the workspace enforces IP allow-lists or Entra conditional access, confirm the pilot users' networks can actually reach the deployed App URL before go-live.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+      </div>
+    </div>
+
+    <!-- ACCESS · MANUAL-ONLY STEPS -->
+    <div class="sect">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--purple-soft);color:#7C3AED">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+        </div>
+        <div style="flex:1"><h2>1.4 Steps the script genuinely can't do for you</h2><div class="sub">Manual, one-time, per-workspace</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="ac-401" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Genie Space — manual fallback</div><div class="it-desc">Auto-create via the Genie API is attempted first; if unsupported in this workspace/region, the script prompts for a manually-created Space ID (Databricks UI → Genie → New Space) and stops there when run non-interactively (<code>--yes</code>) with a clear warning instead of failing.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">JOINT</span></div></div></div>
+        <div class="item" data-id="ac-402" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">External location / storage credential with no existing coverage</div><div class="it-desc">If neither an existing external location nor a metastore default storage root covers the target catalog's path, a metastore admin has to create it manually with an explicit managed location (<code>CREATE CATALOG … MANAGED LOCATION '&lt;abfss-path&gt;'</code>) — the automated steps only ever piggyback on what already exists.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="ac-403" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Azure DevOps PAT scopes (if Push-to-DevOps is in scope)</div><div class="it-desc">PAT needs <b>Code (Read &amp; Write)</b> on the target org/project/repo; org/project/repo/branch/reviewers agreed and recorded in Settings before the pilot run.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="ac-404" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Pilot user access (<code>CAN_USE</code> on the App)</div><div class="it-desc">Assign the pilot group/user <code>CAN_USE</code> on the deployed App and confirm SSO login works — the deploy script creates the App but doesn't manage end-user ACLs.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="ac-405" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">CI-based deploy (optional): GitHub Environment + secrets</div><div class="it-desc">If deploying via the <code>deploy-clients</code> GitHub Actions job instead of running the script by hand: create the <code>client-&lt;name&gt;</code> Environment with a required reviewer, add its <code>DATABRICKS_HOST</code>/<code>DATABRICKS_TOKEN</code>/<code>CLIENT_CONFIG_JSON</code>/optional secrets, and add <code>&lt;name&gt;</code> to the repo's <code>CLIENTS_JSON</code> variable.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">JOINT</span></div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ TAB 2 · PRE-VALIDATION ═══════════ -->
+  <section class="tab-panel" id="panel-pre">
+
+    <div class="callout co-warn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+      <div><b>Run these immediately before kicking off the deploy.</b> Every check here is meant to fail fast and cheap — catching a missing grant or a placeholder value now costs two minutes; catching it mid-<code>bundle deploy</code> costs a rollback.</div>
+    </div>
+
+    <div class="toolbar">
+      <div class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input placeholder="Search checks…" oninput="filterItems()">
+      </div>
+      <div class="chips">
+        <button class="chip on" data-f="all" onclick="setFilter(this)">All</button>
+        <button class="chip" data-f="crit" onclick="setFilter(this)">🔴 Critical</button>
+        <button class="chip" data-f="high" onclick="setFilter(this)">🟠 High</button>
+        <button class="chip" data-f="med" onclick="setFilter(this)">🔵 Medium</button>
+      </div>
+    </div>
+
+    <!-- PRE · AUTH & CONFIG -->
+    <div class="sect open">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--brand-soft);color:var(--brand)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+        </div>
+        <div style="flex:1"><h2>2.1 Auth &amp; Config Sanity</h2><div class="sub">Confirm the inputs before the script touches anything</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="pre-101" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">PAT authenticates against the target host</div><div class="it-desc">The pre-flight phase of <code>one_click_deploy.py</code> checks this automatically — but a quick manual <code>curl -H "Authorization: Bearer $DATABRICKS_TOKEN" https://&lt;host&gt;/api/2.0/preview/scim/v2/Me</code> before running catches a copy-pasted wrong host/token instantly.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">JOINT</span></div></div></div>
+        <div class="item" data-id="pre-102" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Client config JSON has no placeholder values left</div><div class="it-desc">No empty <code>""</code> on required fields (<code>databricks_host</code>, catalogs, <code>azure.subscription_id</code>/<code>resource_group</code>/<code>storage_account</code>/<code>access_connector</code> if infra is in scope). A missing infra field silently <b>skips</b> the infra step rather than failing — verify intent, don't assume.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="pre-103" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title"><code>databricks bundle validate</code> passes for the client target</div><div class="it-desc"><code>databricks bundle validate -t client --var="client_name=&lt;name&gt;"</code> — catches bundle/variable errors before any real resource is touched.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="pre-104" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">No stale partial-deploy leftovers</div><div class="it-desc">If this is a re-run after a failed attempt: check for a half-created secret scope, catalog, or App with a mismatched name before re-running — every step is idempotent, but a renamed client or changed catalog name mid-attempt can leave an orphaned resource under the old name.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">OUR SIDE</span></div></div></div>
+      </div>
+    </div>
+
+    <!-- PRE · INFRA READINESS -->
+    <div class="sect">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--amber-soft);color:var(--amber)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+        </div>
+        <div style="flex:1"><h2>2.2 Infra &amp; Connectivity Probes</h2><div class="sub">Verify the target workspace is actually reachable and ready</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="pre-201" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Metastore attached &amp; reachable</div><div class="it-desc"><code>databricks unity-catalog metastores summary</code> (or the workspace UI) confirms a metastore is assigned before any catalog step runs.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">JOINT</span></div></div></div>
+        <div class="item" data-id="pre-202" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">At least one SQL Warehouse exists (or infra will create one)</div><div class="it-desc">If none exists and <code>with_infra</code> doesn't provision one, the warehouse-dependent steps (app tables, Genie, catalog listing) skip with a warning instead of failing loudly — confirm this is expected.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">JOINT</span></div></div></div>
+        <div class="item" data-id="pre-203" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Source system connectivity probe passed</div><div class="it-desc">From a notebook/cluster in the target workspace: raw TCP/JDBC reach to each configured source (SQL Server/Snowflake/Redshift/SharePoint/API) confirmed <i>before</i> deploy day — the classic firewall surprise happens here, not in the app.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="pre-204" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Deploy identity's PAT owner can actually GRANT on the target catalog</div><div class="it-desc">Confirm the PAT belongs to the catalog owner, a metastore admin, or a principal with <code>MANAGE</code> — otherwise the App-SP grant step (Access 1.2) silently no-ops and post-validation 3.2 will fail.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">OUR SIDE</span></div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ TAB 3 · POST-VALIDATION ═══════════ -->
+  <section class="tab-panel" id="panel-post">
+
+    <div class="callout co-ok">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg>
+      <div><b>Run these right after the deploy report shows green.</b> A successful <code>deploy/reports/&lt;client&gt;-&lt;timestamp&gt;.json</code> means every automated step ran — it does not by itself prove the app works end-to-end for a real user. These checks are the regression tests for the exact class of bug that's bitten this app before: durable config saves, live pipeline status, and notebook-deploy state.</div>
+    </div>
+
+    <div class="toolbar">
+      <div class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input placeholder="Search checks…" oninput="filterItems()">
+      </div>
+      <div class="chips">
+        <button class="chip on" data-f="all" onclick="setFilter(this)">All</button>
+        <button class="chip" data-f="crit" onclick="setFilter(this)">🔴 Critical</button>
+        <button class="chip" data-f="high" onclick="setFilter(this)">🟠 High</button>
+        <button class="chip" data-f="med" onclick="setFilter(this)">🔵 Medium</button>
+      </div>
+    </div>
+
+    <!-- POST · APP HEALTH -->
+    <div class="sect open">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--brand-soft);color:var(--brand)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
+        </div>
+        <div style="flex:1"><h2>3.1 App Is Actually Running</h2><div class="sub">The basics — confirm before anything deeper</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="post-101" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">App status = Running, opens and logs in via SSO</div><div class="it-desc">Open the App URL, confirm no startup errors in the app logs, and that a pilot user can authenticate.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">JOINT</span></div></div></div>
+        <div class="item" data-id="post-102" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Secret scope populated</div><div class="it-desc">Settings → Secret Vault (Admin) shows <code>databricks-token</code>, <code>devops-pat</code>, and every configured <code>source-*-password</code> key as present — not stuck on the <code>REPLACE_ME</code> scaffold placeholder for a key you expected to be real.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">OUR SIDE</span></div></div></div>
+      </div>
+    </div>
+
+    <!-- POST · DURABLE CONFIG (regression: TABLE_OR_VIEW_NOT_FOUND) -->
+    <div class="sect open">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--red-soft);color:var(--red)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+        </div>
+        <div style="flex:1"><h2>3.2 Config Actually Persists (durable save)</h2><div class="sub">Regression check — a real incident on this app: config silently discarded on every redeploy</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="post-201" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Settings → Save Config shows no "Saved locally only" popup</div><div class="it-desc">If it appears, the App's own identity can't see <code>app_config</code> yet (<code>TABLE_OR_VIEW_NOT_FOUND</code>) — usually the SP grant from Access 1.2 didn't land. The write also falls back to a local <code>deployconfig.json</code> that <b>Databricks Apps wipes on every SNAPSHOT redeploy</b>, so this must show <code>durable: true</code> before go-live, not "close enough."</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">JOINT</span></div></div></div>
+        <div class="item" data-id="post-202" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">A saved setting survives a redeploy</div><div class="it-desc">Save any Settings field, trigger a no-op redeploy (or just wait for the next scheduled one), refresh — the value must still be there. This is the direct test for "config gets overwritten every deployment."</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="post-203" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Grants confirmed via <code>SHOW GRANTS</code></div><div class="it-desc"><code>SHOW GRANTS ON SCHEMA &lt;catalog&gt;.&lt;schema&gt;</code> in the SQL editor lists <code>USE CATALOG</code>/<code>USE SCHEMA</code>/<code>SELECT</code>/<code>MODIFY</code>/<code>CREATE TABLE</code> for the App's Service Principal client ID, not just the deploy identity.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">OUR SIDE</span></div></div></div>
+      </div>
+    </div>
+
+    <!-- POST · PIPELINE STATUS SYNC -->
+    <div class="sect open">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--green-soft);color:var(--green)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+        </div>
+        <div style="flex:1"><h2>3.3 Pipeline Run &amp; Dashboard Sync</h2><div class="sub">Regression check — a run can succeed on Databricks while the app's own status stays stuck</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="post-301" data-p="crit"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Run one full pilot pipeline (Extract → SDP/Bronze/Silver) end-to-end</div><div class="it-desc">Pipeline Studio's group badge must flip all the way to <b>SUCCESS</b> after the run actually finishes — not stay on <b>CREATED</b>/<b>RUNNING</b> after Databricks itself shows the job/pipeline completed. A stuck badge means the completion write to the app's status table failed silently; re-running the same job after confirming the fix is deployed should resolve it.</div><div class="tags"><span class="tag crit">CRITICAL</span><span class="tag owner">JOINT</span></div></div></div>
+        <div class="item" data-id="post-302" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Dashboard tiles &amp; Audit Log reflect the same run</div><div class="it-desc">Workflow Manager Dashboard's SUCCEEDED/FAILED/TOTAL JOBS counts and the Audit &amp; Compliance event log must show the pilot run's <b>final</b> status, not just its "created" event — all three surfaces read the same underlying table, so a mismatch here points at the same write-path bug as 3.3's first item.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">JOINT</span></div></div></div>
+        <div class="item" data-id="post-303" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Downstream analytics render from the same pilot run</div><div class="it-desc">Reports, Progress Tracker, Data Quality, Schema Comparison, and Reconciliation all pick up the pilot table without errors.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">JOINT</span></div></div></div>
+      </div>
+    </div>
+
+    <!-- POST · NOTEBOOKS & DEVOPS -->
+    <div class="sect">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--purple-soft);color:#7C3AED">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0018 9h-1.26A8 8 0 103 16.3"/></svg>
+        </div>
+        <div style="flex:1"><h2>3.4 Deploy Notebooks &amp; Push to DevOps</h2><div class="sub">Regression check — a page that forgot it was already connected</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="post-401" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Deploy Notebooks shows Connected automatically</div><div class="it-desc">Land on the tab fresh (no manual "Test Connection" click) — it should already show workspace/cluster info using the credentials the app already has, not a static "Not Connected."</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="post-402" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">A conversion survives a tab switch / reload</div><div class="it-desc">Convert an object via Convert to PySpark, switch tabs (or reload), come back to Deploy Notebooks — "Ready to Deploy" and Push to DevOps must still see it, not demand re-conversion.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="post-403" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Push to DevOps lands in the expected repo/branch</div><div class="it-desc">If in scope: confirm the pushed notebooks appear under the agreed org/project/repo/folder and branch, with reviewers added if configured.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">JOINT</span></div></div></div>
+      </div>
+    </div>
+
+    <!-- POST · SIGN-OFF -->
+    <div class="sect">
+      <div class="sect-hd" onclick="toggleSect(this)">
+        <div class="sect-ico" style="background:var(--blue-soft);color:var(--blue)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+        </div>
+        <div style="flex:1"><h2>3.5 Report &amp; Sign-off</h2><div class="sub">Close the loop</div></div>
+        <div class="sect-prog"><div class="track"><div class="fill"></div></div><span>0%</span></div>
+        <svg class="caret" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sect-body">
+        <div class="item" data-id="post-501" data-p="high"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title"><code>deploy/reports/&lt;client&gt;-&lt;timestamp&gt;.json</code> reviewed</div><div class="it-desc">Every required step shows <code>pass</code>; any <code>warn</code>/<code>skip</code> on a required item is understood and accepted, not just ignored because the script exited 0.</div><div class="tags"><span class="tag high">HIGH</span><span class="tag owner">OUR SIDE</span></div></div></div>
+        <div class="item" data-id="post-502" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Deployment identity's elevated access reviewed/downgraded</div><div class="it-desc">Per least-privilege policy, revisit whether the deploy PAT's owner still needs workspace-admin-level rights post-go-live.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">CLIENT SIDE</span></div></div></div>
+        <div class="item" data-id="post-503" data-p="med"><div class="cbox" onclick="toggleItem(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6L9 17l-5-5"/></svg></div><div class="it-main"><div class="it-title">Client sign-off recorded</div><div class="it-desc">Deployment acceptance signed by the client sponsor; support/escalation contacts exchanged for the hypercare period.</div><div class="tags"><span class="tag med">MEDIUM</span><span class="tag owner">JOINT</span></div></div></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<footer class="ftr">
+  SQL → Databricks Migration Studio · Client / Other-Workspace Deployment Checklist v1.0 · Progress is stored locally in your browser — use <b>Copy Status Summary</b> to share current readiness. See also <a href="Prerequisites.html">Prerequisites.html</a> for the full onboarding readiness document and <code>deploy/README.md</code> for the one-click deploy CLI reference.
+</footer>
+
+<script>
+/* ───────── State & persistence ───────── */
+const KEY='migration_studio_client_deploy_checklist_v1';
+let state={};
+try{state=JSON.parse(localStorage.getItem(KEY)||'{}')}catch(e){state={}}
+const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(state))}catch(e){}};
+
+function toggleItem(box){
+  const item=box.closest('.item');
+  const id=item.dataset.id;
+  item.classList.toggle('done');
+  state[id]=item.classList.contains('done');
+  save();refreshProgress();
+}
+function toggleSect(hd){hd.parentElement.classList.toggle('open')}
+
+/* ───────── Tabs ───────── */
+function showTab(name){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===name));
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id==='panel-'+name));
+}
+
+/* ───────── Progress ───────── */
+const PANELS={access:'#panel-access',pre:'#panel-pre',post:'#panel-post'};
+function refreshProgress(){
+  let gDone=0,gTot=0;
+  const map={access:['#cntAccess','#barAccess','#pctAccess'],pre:['#cntPre','#barPre','#pctPre'],post:['#cntPost','#barPost','#pctPost']};
+  for(const[key,[cntSel,barSel,pctSel]]of Object.entries(map)){
+    const items=document.querySelectorAll(PANELS[key]+' .item');
+    const done=document.querySelectorAll(PANELS[key]+' .item.done').length;
+    const tot=items.length,pct=tot?Math.round(done/tot*100):0;
+    gDone+=done;gTot+=tot;
+    const cnt=document.querySelector(cntSel);if(cnt)cnt.textContent=done+'/'+tot;
+    const bar=document.querySelector(barSel);if(bar)bar.style.width=pct+'%';
+    const pv=document.querySelector(pctSel);if(pv)pv.textContent=pct+'%';
+    document.querySelectorAll(PANELS[key]+' .sect').forEach(s=>{
+      const si=s.querySelectorAll('.item'),sd=s.querySelectorAll('.item.done').length;
+      const p=si.length?Math.round(sd/si.length*100):0;
+      const f=s.querySelector('.sect-prog .fill'),t=s.querySelector('.sect-prog span');
+      if(f)f.style.width=p+'%';if(t)t.textContent=sd+'/'+si.length;
+    });
+  }
+  const gp=gTot?Math.round(gDone/gTot*100):0;
+  document.getElementById('globalPct').textContent=gp+'%';
+  document.getElementById('ringFill').style.strokeDashoffset=245-245*gp/100;
+  document.getElementById('ringFill').style.stroke=gp>=80?'#059669':gp>=40?'#6366F1':'#D97706';
+}
+document.querySelectorAll('.item').forEach(it=>{if(state[it.dataset.id])it.classList.add('done')});
+
+/* ───────── Search & filter ───────── */
+let curFilter='all';
+function setFilter(chip){
+  document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
+  chip.classList.add('on');curFilter=chip.dataset.f;filterItems();
+}
+function filterItems(){
+  const panel=document.querySelector('.tab-panel.active');
+  const q=(panel.querySelector('.search input')?.value||'').toLowerCase();
+  panel.querySelectorAll('.item').forEach(it=>{
+    const okP=curFilter==='all'||it.dataset.p===curFilter;
+    const okQ=!q||it.textContent.toLowerCase().includes(q);
+    it.style.display=okP&&okQ?'':'none';
+  });
+  panel.querySelectorAll('.sect').forEach(s=>{
+    const vis=[...s.querySelectorAll('.item')].some(i=>i.style.display!=='none');
+    s.style.display=vis?'':'none';
+    if(vis&&q)s.classList.add('open');
+  });
+}
+
+/* ───────── Copy summary ───────── */
+function copySummary(){
+  const pct=document.getElementById('globalPct').textContent;
+  const rows=[];
+  const names={access:'ACCESS & MANUAL SETUP',pre:'PRE-VALIDATION',post:'POST-VALIDATION'};
+  for(const[k,label]of Object.entries(names)){
+    const items=document.querySelectorAll(PANELS[k]+' .item');
+    const done=document.querySelectorAll(PANELS[k]+' .item.done');
+    rows.push('');
+    rows.push(label+': '+done.length+'/'+items.length);
+    items.forEach(i=>{
+      const title=i.querySelector('.it-title').textContent.trim();
+      rows.push((i.classList.contains('done')?'[x] ':'[ ] ')+title);
+    });
+  }
+  const txt='CLIENT / OTHER-WORKSPACE DEPLOYMENT CHECKLIST — READINESS: '+pct+'\n'+'─'.repeat(42)+rows.join('\n');
+  (navigator.clipboard?navigator.clipboard.writeText(txt):Promise.reject()).then(
+    ()=>toast('Status summary copied — ready to paste into email','ok'),
+    ()=>{window.prompt('Copy the summary below:',txt)}
+  );
+}
+function resetAll(){
+  if(!confirm('Reset all checklist progress?'))return;
+  state={};save();
+  document.querySelectorAll('.item').forEach(i=>i.classList.remove('done'));
+  refreshProgress();toast('Checklist reset','warn');
+}
+
+/* ───────── Toast ───────── */
+let toastTimer=null;
+function toast(msg,kind){
+  let t=document.getElementById('prToast');
+  if(!t){t=document.createElement('div');t.id='prToast';
+    t.style.cssText='position:fixed;bottom:26px;left:50%;transform:translateX(-50%);padding:12px 22px;border-radius:12px;font-size:13px;font-weight:700;color:#fff;box-shadow:0 10px 30px rgba(15,23,42,.25);z-index:99;transition:.3s;opacity:0';
+    document.body.appendChild(t);}
+  t.style.background=kind==='warn'?'#D97706':'#059669';
+  t.textContent=msg;t.style.opacity='1';t.style.transform='translateX(-50%) translateY(0)';
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>{t.style.opacity='0';t.style.transform='translateX(-50%) translateY(8px)'},2600);
+}
+
+refreshProgress();
+</script>
+</body>
+</html>

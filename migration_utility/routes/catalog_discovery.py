@@ -2,7 +2,7 @@
 Catalog Discovery Module — Dynamic multi-catalog auto-discovery for Genie AI.
 
 Features:
-- Discovers all accessible catalogs, schemas, and tables via information_schema
+- Discovers configured catalog/schema pairs via information_schema (metadata only)
 - Caches results with configurable TTL (auto-refresh)
 - Detects new tables/schemas automatically on next refresh
 - Provides schema context injection for Genie/MCP queries
@@ -10,12 +10,14 @@ Features:
 """
 
 import os
-import json
 import re
 import time
 import threading
 import logging
-from datetime import datetime
+import math
+from collections import OrderedDict
+from datetime import datetime, timezone
+from urllib.parse import quote
 from flask import Blueprint, request, jsonify
 from routes.auth import login_required
 
@@ -26,16 +28,12 @@ catalog_discovery_bp = Blueprint("catalog_discovery", __name__)
 # ══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
 # ══════════════════════════════════════════════════════════════════════════════
-# Databricks Apps injects DATABRICKS_HOST at runtime WITHOUT an https://
-# scheme, unlike a PAT-based deploy where a user pastes the full URL --
-# every direct `requests` call built from the bare env var died with
-# "Invalid URL ... No scheme supplied".
-_HOST = os.environ.get("DATABRICKS_HOST", "").rstrip("/")
-if _HOST and not _HOST.startswith("http"):
-    _HOST = "https://" + _HOST
-_WAREHOUSE_ID = os.environ.get("DATABRICKS_SQL_WAREHOUSE_ID", "")
 _CACHE_TTL_SECONDS = int(os.environ.get("CATALOG_CACHE_TTL", "300"))  # 5 min default
 _MAX_TABLES_PER_SCHEMA = int(os.environ.get("MAX_TABLES_PER_SCHEMA", "500"))
+_SQL_HTTP_TIMEOUT = 10.0
+_SQL_MAX_DEADLINE = 120.0
+_MAX_COLUMN_ROWS = 20000
+_runtime_local = threading.local()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # IN-MEMORY CACHE
@@ -47,7 +45,12 @@ _cache = {
     "last_refreshed": None,  # ISO timestamp
     "refresh_in_progress": False,
     "error": None,
-    "stats": {"total_catalogs": 0, "total_schemas": 0, "total_tables": 0}
+    "stats": {"total_catalogs": 0, "total_schemas": 0, "total_tables": 0},
+    "scope": None,
+    "generation": 0,
+    "scan_id": None,
+    "retrieval": {},
+    "columns_truncated": False,
 }
 _cache_lock = threading.Lock()
 
@@ -55,91 +58,175 @@ _cache_lock = threading.Lock()
 # ══════════════════════════════════════════════════════════════════════════════
 # TOKEN HELPER
 # ══════════════════════════════════════════════════════════════════════════════
-def _get_token():
-    """Get auth token from environment or managed identity."""
-    token = os.environ.get("DATABRICKS_TOKEN", "")
-    if not token:
+def _runtime_config():
+    """Read Settings on use, never via this module's SQL transport.
+
+    The guard also handles config hydration calling back into this module.
+    Upstream get_config retains its own cross-worker freshness policy.
+    """
+    cfg = {}
+    if not getattr(_runtime_local, "reading_config", False):
+        _runtime_local.reading_config = True
         try:
-            from databricks.sdk import WorkspaceClient
-            w = WorkspaceClient()
-            token = w.config.authenticate()
+            from config_cache import get_config
+            cfg = dict(get_config() or {})
         except Exception:
-            pass
-    return token
-
-
-def _headers():
+            logger.warning("[CatalogDiscovery] Runtime Settings unavailable")
+        finally:
+            _runtime_local.reading_config = False
+    host = str(cfg.get("databricks_host") or os.environ.get("DATABRICKS_HOST", "")).strip().rstrip("/")
+    if host and not host.startswith(("https://", "http://")):
+        host = "https://" + host
     return {
-        "Authorization": f"Bearer {_get_token()}",
-        "Content-Type": "application/json"
+        "host": host,
+        "warehouse": cfg.get("databricks_sql_warehouse_id") or cfg.get("sql_warehouse_id")
+        or cfg.get("warehouse_id") or os.environ.get("DATABRICKS_SQL_WAREHOUSE_ID", ""),
+        "token": cfg.get("databricks_token") or os.environ.get("DATABRICKS_TOKEN", ""),
     }
+
+
+def _get_token(config=None):
+    """Return a token string, not the SDK's authentication header mapping."""
+    config = config if config is not None else _runtime_config()
+    token = config.get("token")
+    if isinstance(token, str) and token.strip() and token.strip() not in (
+            "********", "***", "••••••••", "REPLACE_ME"):
+        return token.strip()
+    from databricks.sdk import WorkspaceClient
+    auth = WorkspaceClient(host=config["host"], http_timeout_seconds=5,
+                           retry_timeout_seconds=5).config.authenticate()
+    if callable(auth):
+        try:
+            auth = auth()
+        except TypeError:
+            auth = auth(None)
+    if isinstance(auth, dict):
+        header = next((v for k, v in auth.items() if k.lower() == "authorization"), "")
+        if isinstance(header, str) and header.lower().startswith("bearer ") and header[7:].strip():
+            return header[7:].strip()
+    raise RuntimeError("Databricks authentication did not provide a bearer token")
+
+
+def _headers(config=None):
+    return {"Authorization": f"Bearer {_get_token(config)}", "Content-Type": "application/json"}
+
+
+def _configured_pairs():
+    """Fail closed; include every complete resolver pair, including `app`."""
+    try:
+        from routes.genie import resolve_configured_catalogs
+        pairs = set()
+        for value in resolve_configured_catalogs().values():
+            if not isinstance(value, (tuple, list)) or len(value) != 2:
+                continue
+            cat, schema = value
+            if isinstance(cat, str) and isinstance(schema, str) and cat.strip() and schema.strip():
+                pairs.add((cat.strip(), schema.strip()))
+        return tuple(sorted(pairs))
+    except Exception:
+        return ()
+
+
+def _sync_scope():
+    """Invalidate before any read; an old generation may never publish a scan."""
+    config = _runtime_config()
+    scope = (config["host"], config["warehouse"], _configured_pairs())
+    with _cache_lock:
+        if _cache["scope"] != scope:
+            _cache.update(scope=scope, generation=_cache["generation"] + 1,
+                          catalogs=[], schemas=[], tables=[], last_refreshed=None,
+                          refresh_in_progress=False, scan_id=None, error=None,
+                          retrieval={}, columns_truncated=False,
+                          stats={"total_catalogs": 0, "total_schemas": 0, "total_tables": 0})
+            # Keep one lock order: discovery then vectors. Network I/O holds neither.
+            with _embedding_cache_lock:
+                _embedding_cache.clear()
+        return config, scope, _cache["generation"]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SQL EXECUTION ENGINE (Databricks SQL Statement API)
 # ══════════════════════════════════════════════════════════════════════════════
 def _execute_sql(sql, warehouse_id=None, max_rows=1000, timeout=120):
-    """
-    Execute SQL via Databricks Statement Execution API.
-    Returns: {"columns": [...], "data": [[...]], "row_count": int, "error": str|None}
+    """Statement API with async submission and one monotonic polling deadline.
+
+    Only inline result chunks are followed (never external result URLs). The
+    row limit and deadline cover pagination too; truncation is reported.
     """
     import requests
-    wh_id = warehouse_id or _WAREHOUSE_ID
-    if not wh_id:
-        return {"columns": [], "data": [], "row_count": 0, "error": "No SQL warehouse configured. Set DATABRICKS_SQL_WAREHOUSE_ID."}
-
-    url = f"{_HOST}/api/2.0/sql/statements"
-    payload = {
-        "warehouse_id": wh_id,
-        "statement": sql,
-        "wait_timeout": f"{timeout}s",
-        "row_limit": max_rows,
-        "format": "JSON_ARRAY"
-    }
-
+    empty = {"columns": [], "data": [], "row_count": 0}
     try:
-        r = requests.post(url, json=payload, headers=_headers(), timeout=timeout + 10)
-        resp = r.json()
+        budget = float(timeout)
+        if not math.isfinite(budget) or budget <= 0:
+            raise ValueError("SQL deadline must be positive and finite")
+        budget = min(budget, _SQL_MAX_DEADLINE)
+        deadline = time.monotonic() + budget
+        config = getattr(_runtime_local, "scan_config", None) or _runtime_config()
+        wh_id = warehouse_id or config["warehouse"]
+        if not wh_id or not config["host"]:
+            raise ValueError("No Databricks host or SQL warehouse configured in Settings")
+        limit = max(1, min(int(max_rows), 100000))
+        headers = _headers(config)
+        url = f"{config['host']}/api/2.0/sql/statements"
 
+        def send(method, target, **kwargs):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("SQL execution deadline exceeded")
+            response = method(target, headers=headers, timeout=min(_SQL_HTTP_TIMEOUT, remaining),
+                              allow_redirects=False, **kwargs)
+            response.raise_for_status()
+            if not 200 <= response.status_code < 300:
+                raise RuntimeError(f"SQL HTTP status {response.status_code}")
+            if time.monotonic() >= deadline:
+                raise TimeoutError("SQL execution deadline exceeded")
+            return response.json()
+
+        resp = send(requests.post, url, json={
+            "warehouse_id": wh_id, "statement": sql, "wait_timeout": "0s",
+            "on_wait_timeout": "CONTINUE", "row_limit": limit, "format": "JSON_ARRAY",
+        })
+        stmt_id = resp.get("statement_id")
         status = resp.get("status", {}).get("state", "")
+        while status in ("PENDING", "RUNNING"):
+            if not stmt_id:
+                raise RuntimeError("SQL response missing statement_id")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("SQL execution deadline exceeded")
+            time.sleep(min(0.5, remaining))
+            resp = send(requests.get, f"{url}/{quote(str(stmt_id), safe='')}")
+            status = resp.get("status", {}).get("state", "")
+        if status != "SUCCEEDED":
+            message = resp.get("status", {}).get("error", {}).get("message")
+            raise RuntimeError(message or f"SQL execution ended with status: {status or 'UNKNOWN'}")
 
-        # Poll if still running
-        if status in ("PENDING", "RUNNING"):
-            stmt_id = resp.get("statement_id", "")
-            poll_url = f"{url}/{stmt_id}"
-            for _ in range(int(timeout / 2)):
-                time.sleep(2)
-                pr = requests.get(poll_url, headers=_headers(), timeout=30)
-                resp = pr.json()
-                status = resp.get("status", {}).get("state", "")
-                if status not in ("PENDING", "RUNNING"):
-                    break
-
-        if status == "SUCCEEDED":
-            manifest = resp.get("manifest", {})
-            columns = [c.get("name", "") for c in manifest.get("schema", {}).get("columns", [])]
-            col_types = [c.get("type_name", "") for c in manifest.get("schema", {}).get("columns", [])]
-            data_array = resp.get("result", {}).get("data_array", [])
-            return {
-                "columns": columns,
-                "column_types": col_types,
-                "data": data_array,
-                "row_count": len(data_array),
-                "truncated": resp.get("result", {}).get("truncated", False),
-                "error": None
-            }
-        elif status == "FAILED":
-            error_msg = resp.get("status", {}).get("error", {}).get("message", "SQL execution failed")
-            return {"columns": [], "data": [], "row_count": 0, "error": error_msg}
-        else:
-            return {"columns": [], "data": [], "row_count": 0, "error": f"Unexpected status: {status}"}
-
+        manifest = resp.get("manifest", {})
+        columns = manifest.get("schema", {}).get("columns", [])
+        result = resp.get("result") or {}
+        rows = list(result.get("data_array") or [])
+        truncated = bool(manifest.get("truncated") or result.get("truncated"))
+        seen = set()
+        while result.get("next_chunk_index") is not None and len(rows) < limit:
+            index = int(result["next_chunk_index"])
+            if not stmt_id or index in seen or index < 0:
+                raise RuntimeError("Invalid SQL result chunk sequence")
+            seen.add(index)
+            result = send(requests.get, f"{url}/{quote(str(stmt_id), safe='')}/result/chunks/{index}")
+            rows.extend(result.get("data_array") or [])
+            truncated = truncated or bool(result.get("truncated"))
+        truncated = truncated or len(rows) > limit or result.get("next_chunk_index") is not None
+        truncated = truncated or int(manifest.get("total_row_count") or 0) > len(rows)
+        rows = rows[:limit]
+        return {"columns": [c.get("name", "") for c in columns],
+                "column_types": [c.get("type_name", "") for c in columns],
+                "data": rows, "row_count": len(rows), "truncated": truncated, "error": None}
     except Exception as exc:
-        return {"columns": [], "data": [], "row_count": 0, "error": str(exc)}
+        return {**empty, "error": str(exc)}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CATALOG DISCOVERY (Auto-scan all accessible catalogs)
+# CATALOG DISCOVERY (Configured catalog/schema pairs)
 # ══════════════════════════════════════════════════════════════════════════════
 def _discover_catalogs():
     """Discover all accessible catalogs."""
@@ -155,7 +242,7 @@ def _discover_catalogs():
 
 def _discover_schemas(catalog_name):
     """Discover all schemas in a catalog."""
-    sql = f"SHOW SCHEMAS IN `{catalog_name}`"
+    sql = f"SHOW SCHEMAS IN {_identifier(catalog_name)}"
     result = _execute_sql(sql, timeout=30)
     if result["error"]:
         return []
@@ -168,32 +255,27 @@ def _discover_schemas(catalog_name):
     return schemas
 
 
+def _identifier(value):
+    return "`" + value.replace("`", "``") + "`"
+
+
+def _literal(value):
+    return "'" + value.replace("\\", "\\\\").replace("'", "''") + "'"
+
+
 def _discover_tables(catalog_name, schema_name):
     """Discover all tables in a schema with column details."""
     sql = f"""
     SELECT table_name, table_type
-    FROM `{catalog_name}`.information_schema.tables
-    WHERE table_schema = '{schema_name}'
+    FROM {_identifier(catalog_name)}.information_schema.tables
+    WHERE table_schema = {_literal(schema_name)}
     AND table_type IN ('MANAGED', 'EXTERNAL', 'VIEW', 'BASE TABLE')
+    ORDER BY table_name
     LIMIT {_MAX_TABLES_PER_SCHEMA}
     """
-    result = _execute_sql(sql, timeout=60)
+    result = _execute_sql(sql, max_rows=_MAX_TABLES_PER_SCHEMA, timeout=60)
     if result["error"]:
-        # Fallback to SHOW TABLES
-        result = _execute_sql(f"SHOW TABLES IN `{catalog_name}`.`{schema_name}`", timeout=30)
-        if result["error"]:
-            return []
-        tables = []
-        for row in result["data"]:
-            if row and len(row) >= 2:
-                tables.append({
-                    "catalog": catalog_name,
-                    "schema": schema_name,
-                    "table": row[1] if len(row) > 1 else row[0],
-                    "type": "TABLE",
-                    "columns": []
-                })
-        return tables
+        raise RuntimeError(result["error"])
 
     tables = []
     for row in result["data"]:
@@ -212,8 +294,8 @@ def _discover_columns(catalog_name, schema_name, table_name):
     """Get column details for a table."""
     sql = f"""
     SELECT column_name, data_type, comment
-    FROM `{catalog_name}`.information_schema.columns
-    WHERE table_schema = '{schema_name}' AND table_name = '{table_name}'
+    FROM {_identifier(catalog_name)}.information_schema.columns
+    WHERE table_schema = {_literal(schema_name)} AND table_name = {_literal(table_name)}
     ORDER BY ordinal_position
     """
     result = _execute_sql(sql, timeout=30)
@@ -230,82 +312,80 @@ def _discover_columns(catalog_name, schema_name, table_name):
     return columns
 
 
+def _discover_schema_columns(catalog_name, schema_name):
+    """One bounded metadata query per schema, not one request per table."""
+    sql = f"""
+    SELECT table_name, column_name, data_type, comment
+    FROM {_identifier(catalog_name)}.information_schema.columns
+    WHERE table_schema = {_literal(schema_name)}
+    ORDER BY table_name, ordinal_position
+    """
+    result = _execute_sql(sql, max_rows=_MAX_COLUMN_ROWS, timeout=60)
+    if result["error"]:
+        raise RuntimeError(result["error"])
+    columns = {}
+    for row in result["data"]:
+        if len(row) >= 3:
+            columns.setdefault(row[0], []).append({
+                "name": row[1], "type": row[2], "comment": row[3] if len(row) > 3 else ""})
+    return columns, bool(result.get("truncated"))
+
+
 def _full_discovery(include_columns=False, catalogs_filter=None):
-    """
-    Run full catalog/schema/table discovery.
-    Args:
-        include_columns: If True, also fetch column metadata (slower)
-        catalogs_filter: List of catalog names to scan (None = all accessible)
-    """
-    global _cache
+    """Scan configured pairs only; explicit catalog filters can only narrow.
 
+    Capture connection + generation once. A Settings change cancels publication,
+    including A -> B -> A changes observed while the scan is running.
+    """
+    config, scope, generation = _sync_scope()
+    scan_id = object()
     with _cache_lock:
-        if _cache["refresh_in_progress"]:
+        if _cache["generation"] != generation or _cache["refresh_in_progress"]:
             return
-        _cache["refresh_in_progress"] = True
-
+        _cache.update(refresh_in_progress=True, scan_id=scan_id)
+    previous_config = getattr(_runtime_local, "scan_config", None)
+    _runtime_local.scan_config = config
     try:
-        logger.info("[CatalogDiscovery] Starting full discovery...")
-
-        # Step 1: Discover catalogs
-        all_catalogs, err = _discover_catalogs()
-        if err:
-            with _cache_lock:
-                _cache["error"] = f"Failed to list catalogs: {err}"
-                _cache["refresh_in_progress"] = False
-            return
-
-        # Apply filter if specified
-        if catalogs_filter:
-            all_catalogs = [c for c in all_catalogs if c["name"] in catalogs_filter]
-
-        # Skip system catalogs that are typically not useful
-        skip_catalogs = {"system", "__databricks_internal", "hive_metastore"}
-        all_catalogs = [c for c in all_catalogs if c["name"] not in skip_catalogs]
-
-        # Step 2: Discover schemas per catalog
-        all_schemas = []
-        for cat in all_catalogs:
-            schemas = _discover_schemas(cat["name"])
-            all_schemas.extend(schemas)
-
-        # Step 3: Discover tables per schema
-        all_tables = []
-        for schema in all_schemas:
-            tables = _discover_tables(schema["catalog"], schema["schema"])
+        pairs = [p for p in scope[2] if catalogs_filter is None or p[0] in catalogs_filter]
+        all_schemas, all_tables = [], []
+        columns_truncated = False
+        for catalog, schema in pairs:
+            if _sync_scope()[2] != generation:
+                return
+            tables = _discover_tables(catalog, schema)
+            if include_columns and tables:
+                columns, truncated = _discover_schema_columns(catalog, schema)
+                columns_truncated = columns_truncated or truncated
+                for table in tables:
+                    table["columns"] = columns.get(table["table"], [])
+            all_schemas.append({"catalog": catalog, "schema": schema})
             all_tables.extend(tables)
-
-        # Step 4 (optional): Discover columns
-        if include_columns:
-            for tbl in all_tables:
-                cols = _discover_columns(tbl["catalog"], tbl["schema"], tbl["table"])
-                tbl["columns"] = cols
-
-        # Update cache
+        all_catalogs = [{"name": name} for name in sorted({p[0] for p in pairs})]
+        if _sync_scope()[2] != generation:
+            return
         with _cache_lock:
-            _cache["catalogs"] = all_catalogs
-            _cache["schemas"] = all_schemas
-            _cache["tables"] = all_tables
-            _cache["last_refreshed"] = datetime.utcnow().isoformat() + "Z"
-            _cache["error"] = None
-            _cache["refresh_in_progress"] = False
-            _cache["stats"] = {
-                "total_catalogs": len(all_catalogs),
-                "total_schemas": len(all_schemas),
-                "total_tables": len(all_tables)
-            }
-
-        logger.info(f"[CatalogDiscovery] Done: {len(all_catalogs)} catalogs, {len(all_schemas)} schemas, {len(all_tables)} tables")
-
+            if _cache["generation"] == generation and _cache["scan_id"] is scan_id:
+                _cache.update(catalogs=all_catalogs, schemas=all_schemas, tables=all_tables,
+                              last_refreshed=datetime.now(timezone.utc).isoformat(), error=None,
+                              columns_truncated=columns_truncated,
+                              stats={"total_catalogs": len(all_catalogs),
+                                     "total_schemas": len(all_schemas), "total_tables": len(all_tables)})
     except Exception as exc:
+        _sync_scope()
         with _cache_lock:
-            _cache["error"] = str(exc)
-            _cache["refresh_in_progress"] = False
-        logger.error(f"[CatalogDiscovery] Error: {exc}")
+            if _cache["generation"] == generation and _cache["scan_id"] is scan_id:
+                _cache["error"] = str(exc)
+        logger.warning("[CatalogDiscovery] Scan failed: %s", exc)
+    finally:
+        _runtime_local.scan_config = previous_config
+        with _cache_lock:
+            if _cache["scan_id"] is scan_id:
+                _cache.update(refresh_in_progress=False, scan_id=None)
 
 
 def _ensure_cache_fresh():
     """Check if cache needs refresh and trigger background refresh if stale."""
+    _sync_scope()
     with _cache_lock:
         last = _cache["last_refreshed"]
         in_progress = _cache["refresh_in_progress"]
@@ -331,111 +411,99 @@ def _ensure_cache_fresh():
 
 
 def get_schema_context():
-    """
-    Build a dynamic schema context string for Genie/MCP queries.
-    This replaces the hardcoded APP_CONTEXT_PREAMBLE with live data.
-    """
-    _ensure_cache_fresh()
-
-    with _cache_lock:
-        catalogs = _cache["catalogs"]
-        schemas = _cache["schemas"]
-        tables = _cache["tables"]
-        last_refreshed = _cache["last_refreshed"]
-
-    if not catalogs:
-        return "(Schema discovery not yet complete — using default context)\n"
-
-    lines = []
-    lines.append(f"Available data (auto-discovered, last refreshed: {last_refreshed}):\n")
-
-    # Group tables by catalog.schema
-    catalog_map = {}
-    for tbl in tables:
-        key = f"{tbl['catalog']}.{tbl['schema']}"
-        if key not in catalog_map:
-            catalog_map[key] = []
-        catalog_map[key].append(tbl)
-
-    for key in sorted(catalog_map.keys()):
-        tbls = catalog_map[key]
-        lines.append(f"\n[{key}] ({len(tbls)} tables)")
-        for t in tbls[:20]:  # Show max 20 per schema in context
-            col_summary = ""
-            if t.get("columns"):
-                col_names = [c["name"] for c in t["columns"][:8]]
-                col_summary = f" — columns: {', '.join(col_names)}"
-                if len(t["columns"]) > 8:
-                    col_summary += f" (+{len(t['columns'])-8} more)"
-            lines.append(f"  • {t['catalog']}.{t['schema']}.{t['table']} ({t['type']}){col_summary}")
-        if len(tbls) > 20:
-            lines.append(f"  ... +{len(tbls)-20} more tables")
-
-    lines.append(f"\nTotal: {len(catalogs)} catalogs, {len(schemas)} schemas, {len(tables)} tables")
-    lines.append("You can query ANY of these tables using their fully qualified name (catalog.schema.table).\n")
-
-    return "\n".join(lines)
+    """Legacy context entry point shares the same strict scope and chunk bounds."""
+    return get_relevant_schema_context(top_n=_PRESELECT_LIMIT)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SCHEMA RELEVANCE RANKING — chunking + caching + vector similarity
 #
-# get_schema_context() above dumps every table in every discovered catalog
-# in the whole workspace into the prompt on every chat turn -- expensive
-# and mostly irrelevant to any single question. get_relevant_schema_context()
-# instead:
-#   1. Chunks the candidate set down to just the catalogs actually
-#      configured in Settings (dynamic -- reads the same Metadata Catalog/
-#      medallion mapping resolution used everywhere else).
-#   2. Ranks those candidates by embedding similarity to the question and
-#      keeps only the top N, so far fewer table descriptions get sent to
-#      the model per request.
-#   3. Caches each table's embedding (keyed by its blurb text, same TTL as
-#      table discovery) so re-embedding only happens when the schema
-#      actually changes, not on every chat message.
-# Falls back to lexical keyword overlap if the embedding endpoint isn't
-# available in a given workspace, so this degrades gracefully instead of
-# being a hard dependency.
+# Metadata-only chunks and vectors are process-local; doc_qa and business
+# rows are deliberately not read or persisted by this retrieval cache.
 # ══════════════════════════════════════════════════════════════════════════════
 _EMBED_ENDPOINT = "databricks-gte-large-en"
-_embedding_cache: dict = {}   # blurb_key -> {"vector": [...], "text": str, "ts": float}
+_EMBED_TIMEOUT = 5.0
+_EMBED_COOLDOWN = 60.0
+_PRESELECT_LIMIT = 40
+_MAX_CHUNK_CHARS = 1600
+_MAX_QUESTION_CHARS = 2000
+_VECTOR_CACHE_LIMIT = 512
+_CIRCUIT_LIMIT = 32
+_QUESTION_CACHE_TTL_SECONDS = 600
+_embedding_cache = OrderedDict()  # (host, model, scope, kind, exact text) -> (ts, vector)
+_embedding_circuits = OrderedDict()  # endpoint/scope -> {busy, until}
 _embedding_cache_lock = threading.Lock()
 
 
-def _embed_texts(texts: list) -> "list | None":
-    """Call the embedding serving endpoint. Returns None on any failure
-    (endpoint not enabled in this workspace, no token, network error, ...)
-    so callers fall back to keyword matching instead of breaking chat."""
+def _embed_texts(texts: list, config=None, scope=None, stats=None) -> "list | None":
+    """One bounded batch, fail-fast circuit and no lock held during HTTP.
+
+    Concurrent cold requests fall back lexically instead of queueing behind
+    another embedding call. Failed endpoints are not retried during cooldown.
+    """
     if not texts:
         return []
+    stats = stats if stats is not None else {}
+    config = config if config is not None else _runtime_config()
+    key = (config["host"], _EMBED_ENDPOINT, scope)
+    now = time.monotonic()
+    with _embedding_cache_lock:
+        state = _embedding_circuits.get(key)
+        if state and (state["busy"] or state["until"] > now):
+            stats["fallback_reason"] = "embedding_busy" if state["busy"] else "embedding_cooldown"
+            return None
+        if key not in _embedding_circuits and len(_embedding_circuits) >= _CIRCUIT_LIMIT:
+            disposable = next((k for k, v in _embedding_circuits.items() if not v["busy"]), None)
+            if disposable is None:
+                stats["fallback_reason"] = "embedding_busy"
+                return None
+            del _embedding_circuits[disposable]
+        state = {"busy": True, "until": 0.0}
+        _embedding_circuits[key] = state
+        _embedding_circuits.move_to_end(key)
+    succeeded = False
     try:
-        from config_cache import get_config
-        from secrets_helper import get_serving_endpoint_token
-        host = (get_config().get("databricks_host") or os.environ.get("DATABRICKS_HOST", "")).rstrip("/")
-        if host and not host.startswith("http"):
-            host = "https://" + host
-        token = get_serving_endpoint_token()
-        if not host or not token:
-            return None
-        import requests as _rq
-        r = _rq.post(
-            f"{host}/serving-endpoints/{_EMBED_ENDPOINT}/invocations",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json={"input": texts},
-            timeout=30,
-        )
-        if r.status_code != 200:
-            logger.info("[SchemaRelevance] Embedding endpoint returned %s, falling back to keyword match", r.status_code)
-            return None
-        data = r.json().get("data", [])
-        return [d.get("embedding") for d in data]
-    except Exception as exc:
-        logger.info("[SchemaRelevance] Embedding call failed, falling back to keyword match: %s", exc)
+        import requests
+        if not config["host"]:
+            raise ValueError("No embedding host configured")
+        headers = _headers(config)
+        remaining = _EMBED_TIMEOUT - (time.monotonic() - now)
+        if remaining <= 0:
+            raise TimeoutError("Embedding authentication exceeded deadline")
+        stats["embedding_requests"] = stats.get("embedding_requests", 0) + 1
+        response = requests.post(
+            f"{config['host']}/serving-endpoints/{quote(_EMBED_ENDPOINT, safe='')}/invocations",
+            headers=headers, json={"input": texts}, timeout=remaining, allow_redirects=False)
+        response.raise_for_status()
+        if response.status_code != 200 or time.monotonic() - now >= _EMBED_TIMEOUT:
+            raise RuntimeError("Embedding request failed or exceeded deadline")
+        data = response.json().get("data", [])
+        if len(data) != len(texts):
+            raise ValueError("Embedding response length mismatch")
+        if any("index" in item for item in data):
+            if sorted(item.get("index", -1) for item in data) != list(range(len(texts))):
+                raise ValueError("Invalid embedding indices")
+            data = sorted(data, key=lambda item: item["index"])
+        vectors = [item.get("embedding") for item in data]
+        dimension = len(vectors[0]) if vectors and isinstance(vectors[0], list) else 0
+        if not 0 < dimension <= 8192 or any(
+                not isinstance(v, list) or len(v) != dimension
+                or any(not isinstance(x, (int, float)) or not math.isfinite(x) for x in v)
+                or not any(v) for v in vectors):
+            raise ValueError("Invalid embedding vectors")
+        succeeded = True
+        return vectors
+    except Exception:
+        stats["fallback_reason"] = "embedding_failed"
+        logger.info("[SchemaRelevance] Embedding unavailable; using lexical ranking")
         return None
+    finally:
+        with _embedding_cache_lock:
+            state.update(busy=False, until=0.0 if succeeded else time.monotonic() + _EMBED_COOLDOWN)
 
 
 def _cosine_sim(a: list, b: list) -> float:
-    if not a or not b:
+    if not a or not b or len(a) != len(b):
         return 0.0
     dot = sum(x * y for x, y in zip(a, b))
     na = sum(x * x for x in a) ** 0.5
@@ -446,117 +514,109 @@ def _cosine_sim(a: list, b: list) -> float:
 
 
 def _table_blurb(tbl: dict) -> str:
-    cols = ", ".join(c.get("name", "") for c in (tbl.get("columns") or [])[:12])
-    suffix = f" columns: {cols}" if cols else ""
-    return f"{tbl['catalog']}.{tbl['schema']}.{tbl['table']} ({tbl.get('type', '')}){suffix}"
+    """A bounded table chunk containing observed column names AND types."""
+    columns = tbl.get("columns") or []
+    text = f"{tbl['catalog']}.{tbl['schema']}.{tbl['table']} ({tbl.get('type', '')})"
+    added = 0
+    for column in columns[:24]:
+        item = f"{str(column.get('name') or '')[:128]} {str(column.get('type') or 'UNKNOWN')[:128]}"
+        suffix = (" columns: " if not added else ", ") + item
+        if len(text) + len(suffix) > _MAX_CHUNK_CHARS - 40:
+            break
+        text += suffix
+        added += 1
+    if len(columns) > added:
+        text += f" (+{len(columns) - added} columns omitted)"
+    return text[:_MAX_CHUNK_CHARS]
 
 
-def _get_cached_table_embedding(key: str, text: str):
-    """Embedding for one table's blurb, cached with the discovery TTL so
-    it's only recomputed when the schema (or the cache) actually refreshes."""
-    now = time.time()
+def _batch_vectors(question, blurbs, config, scope, generation, stats):
+    """Retrieve all hits, then batch only missing question/table vectors."""
+    items = [("question", question)] + [("table", text) for text in blurbs]
+    keys = [(config["host"], _EMBED_ENDPOINT, scope, kind, text) for kind, text in items]
+    found, missing = {}, []
+    now = time.monotonic()
     with _embedding_cache_lock:
-        entry = _embedding_cache.get(key)
-        if entry and entry["text"] == text and (now - entry["ts"]) < _CACHE_TTL_SECONDS:
-            return entry["vector"]
-    vecs = _embed_texts([text])
-    vec = vecs[0] if vecs and vecs[0] else None
-    if vec:
-        with _embedding_cache_lock:
-            _embedding_cache[key] = {"vector": vec, "text": text, "ts": now}
-    return vec
+        for key in keys:
+            entry = _embedding_cache.get(key)
+            ttl = _QUESTION_CACHE_TTL_SECONDS if key[-2] == "question" else _CACHE_TTL_SECONDS
+            if entry and now - entry[0] < ttl:
+                found[key] = entry[1]
+                _embedding_cache.move_to_end(key)
+            else:
+                _embedding_cache.pop(key, None)
+                if key not in missing:
+                    missing.append(key)
+    stats.update(vector_cache_hits=len(keys) - len(missing), vector_cache_misses=len(missing))
+    if missing:
+        vectors = _embed_texts([key[-1] for key in missing], config, scope, stats)
+        if vectors:
+            found.update(zip(missing, vectors))
+            with _cache_lock:
+                if _cache["generation"] == generation and _cache["scope"] == scope:
+                    with _embedding_cache_lock:
+                        for key, vector in zip(missing, vectors):
+                            _embedding_cache[key] = (time.monotonic(), vector)
+                            _embedding_cache.move_to_end(key)
+                        while len(_embedding_cache) > _VECTOR_CACHE_LIMIT:
+                            _embedding_cache.popitem(last=False)
+    return [found.get(key) for key in keys]
 
 
-_question_embedding_cache: dict = {}   # normalized question -> {"vector": [...], "ts": float}
-_question_embedding_cache_lock = threading.Lock()
-_QUESTION_CACHE_TTL_SECONDS = 600  # a repeated/near-repeated question re-embeds at most every 10 min
-
-
-def _get_cached_question_embedding(question: str):
-    """Embedding for a chat question, cached by exact (normalized) text.
-
-    Table blurb embeddings were already cached (see _get_cached_table_embedding
-    above) since the schema barely changes -- but the question embedding
-    computed here was re-sent to databricks-gte-large-en on every single chat
-    message with no caching at all, even for the exact same or a repeated
-    question within the same conversation (a common pattern -- rephrasing,
-    retrying after an error, or two users asking the same thing). Caching it
-    the same way removes a redundant embedding call in that case at zero
-    correctness cost (the ranking result for an identical question is by
-    definition identical).
-    """
-    key = " ".join(question.strip().lower().split())
-    if not key:
-        return None
-    now = time.time()
-    with _question_embedding_cache_lock:
-        entry = _question_embedding_cache.get(key)
-        if entry and (now - entry["ts"]) < _QUESTION_CACHE_TTL_SECONDS:
-            return entry["vector"]
-    vecs = _embed_texts([question])
-    vec = vecs[0] if vecs and vecs[0] else None
-    if vec:
-        with _question_embedding_cache_lock:
-            _question_embedding_cache[key] = {"vector": vec, "ts": now}
-    return vec
+def _words(text):
+    # Split snake_case too so 'failed jobs' can find failed_jobs.
+    return set(re.findall(r"[a-z0-9]+", text.lower()))
 
 
 def get_relevant_schema_context(question: str = "", top_n: int = 15, configured_only: bool = True) -> str:
-    """Scoped + ranked schema context for a specific question (see module
-    docstring above for the chunking/caching/vector-similarity approach).
+    """Lexical preselection -> one batch -> vector ranking, strictly scoped.
+
+    configured_only is retained for call compatibility, not a workspace-wide
+    escape hatch. Missing configuration or zero matches always fail closed.
     """
+    started = time.monotonic()
     _ensure_cache_fresh()
+    config, scope, generation = _sync_scope()
     with _cache_lock:
         tables = list(_cache["tables"])
         last_refreshed = _cache["last_refreshed"]
-
-    if not tables:
-        return "(Schema discovery not yet complete — using default context)\n"
-
-    total_discovered = len(tables)
-    if configured_only:
-        try:
-            from routes.genie import resolve_configured_catalogs
-            configured = {cat for cat, sch in resolve_configured_catalogs().values() if cat}
-        except Exception:
-            configured = set()
-        if configured:
-            scoped = [t for t in tables if t.get("catalog") in configured]
-            if scoped:
-                tables = scoped
-
-    if not question.strip() or len(tables) <= top_n:
-        ranked = tables[:top_n]
-    else:
-        q_vec = _get_cached_question_embedding(question)
-
-        scored = []
-        if q_vec:
-            for t in tables:
-                key = f"{t.get('catalog')}.{t.get('schema')}.{t.get('table')}"
-                blurb = _table_blurb(t)
-                t_vec = _get_cached_table_embedding(key, blurb)
-                scored.append((_cosine_sim(q_vec, t_vec) if t_vec else 0.0, t))
-
-        if not q_vec or not any(s for s, _ in scored):
-            # Lexical fallback: word-overlap between the question and each
-            # table's catalog.schema.table + column names.
-            q_words = set(re.findall(r"[a-z0-9_]+", question.lower()))
-            scored = []
-            for t in tables:
-                t_words = set(re.findall(r"[a-z0-9_]+", _table_blurb(t).lower()))
-                scored.append((len(q_words & t_words), t))
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-        ranked = [t for _, t in scored[:top_n]]
-
-    lines = [f"Relevant tables for this question (auto-ranked, schema last refreshed: {last_refreshed}):\n"]
-    for t in ranked:
-        lines.append(f"  • {_table_blurb(t)}")
-    lines.append(
-        f"\n({total_discovered} total tables discovered; showing the {len(ranked)} most relevant to your question. "
-        "You can query ANY of these tables using their fully qualified name (catalog.schema.table).)\n"
-    )
+    pairs = set(scope[2])
+    scoped = [t for t in tables if (t.get("catalog"), t.get("schema")) in pairs]
+    limit = max(0, min(int(top_n), _PRESELECT_LIMIT))
+    question = question.strip()[:_MAX_QUESTION_CHARS]
+    words = _words(question)
+    candidates = [(_table_blurb(t), t) for t in scoped]
+    candidates.sort(key=lambda item: (-len(words & _words(item[0])), item[0]))
+    candidates = candidates[:_PRESELECT_LIMIT] if limit else []
+    stats = {"total_discovered": len(tables), "scoped_tables": len(scoped),
+             "preselected_tables": len(candidates), "returned_tables": 0,
+             "embedding_requests": 0, "vector_cache_hits": 0, "vector_cache_misses": 0,
+             "ranking": "lexical", "fallback_reason": None}
+    if question and len(candidates) > limit and limit:
+        vectors = _batch_vectors(question, [b for b, _ in candidates], config, scope, generation, stats)
+        q_vec, table_vectors = vectors[0], vectors[1:]
+        if q_vec and all(v and len(v) == len(q_vec) for v in table_vectors):
+            scored = sorted(zip(candidates, table_vectors),
+                            key=lambda item: _cosine_sim(q_vec, item[1]), reverse=True)
+            candidates = [item[0] for item in scored]
+            stats["ranking"] = "vector"
+        elif not stats["fallback_reason"]:
+            stats["fallback_reason"] = "incomplete_vectors"
+    ranked = candidates[:limit]
+    # Re-resolve after network I/O: don't return an old-scope prompt either.
+    if _sync_scope()[2] != generation:
+        return "(Settings changed during schema retrieval; retry with the current scope.)\n"
+    stats.update(returned_tables=len(ranked), elapsed_ms=round((time.monotonic() - started) * 1000, 2))
+    with _cache_lock:
+        if _cache["generation"] != generation:
+            return "(Settings changed during schema retrieval; retry with the current scope.)\n"
+        _cache["retrieval"] = stats
+    if not scoped:
+        return "(No matching tables discovered in the configured catalog/schema pairs; no workspace fallback.)\n"
+    lines = [f"Relevant tables (schema last refreshed: {last_refreshed}):\n"]
+    lines.extend(f"  • {blurb}" for blurb, _ in ranked)
+    lines.append(f"\n({len(scoped)} tables in configured scope; {len(candidates)} preselected; "
+                 f"{len(ranked)} shown. Only the listed, observed names and types are supplied.)\n")
     return "\n".join(lines)
 
 
@@ -571,6 +631,11 @@ def trigger_discovery():
     data = request.get_json(silent=True) or {}
     catalogs_filter = data.get("catalogs")  # Optional: limit to specific catalogs
     include_columns = data.get("include_columns", True)
+    if catalogs_filter is not None and (
+            not isinstance(catalogs_filter, list) or
+            not all(isinstance(name, str) for name in catalogs_filter)):
+        return jsonify({"error": "catalogs must be a list of catalog names"}), 400
+    _sync_scope()
 
     with _cache_lock:
         if _cache["refresh_in_progress"]:
@@ -591,12 +656,23 @@ def discovery_status():
     """Get current discovery cache status."""
     _ensure_cache_fresh()
     with _cache_lock:
+        with _embedding_cache_lock:
+            vector_entries = len(_embedding_cache)
         return jsonify({
             "last_refreshed": _cache["last_refreshed"],
             "refresh_in_progress": _cache["refresh_in_progress"],
             "stats": _cache["stats"],
             "error": _cache["error"],
-            "cache_ttl_seconds": _CACHE_TTL_SECONDS
+            "cache_ttl_seconds": _CACHE_TTL_SECONDS,
+            "generation": _cache["generation"],
+            "configured_pairs": _cache["scope"][2] if _cache["scope"] else [],
+            "columns_truncated": _cache["columns_truncated"],
+            "max_tables_per_schema": _MAX_TABLES_PER_SCHEMA,
+            "retrieval": dict(_cache["retrieval"]),
+            "vector_cache_entries": vector_entries,
+            "vector_cache_limit": _VECTOR_CACHE_LIMIT,
+            "preselection_limit": _PRESELECT_LIMIT,
+            "embedding_timeout_seconds": _EMBED_TIMEOUT,
         })
 
 
@@ -657,6 +733,9 @@ def table_details():
 
     parts = full_name.split(".", 2)
     catalog, schema, table = parts[0], parts[1], parts[2]
+    _, scope, generation = _sync_scope()
+    if (catalog, schema) not in scope[2]:
+        return jsonify({"error": "Table is outside configured catalog/schema pairs"}), 403
 
     # Check cache first
     with _cache_lock:
@@ -667,6 +746,8 @@ def table_details():
 
     # Fetch live if not in cache
     columns = _discover_columns(catalog, schema, table)
+    if _sync_scope()[2] != generation:
+        return jsonify({"error": "Settings changed during schema retrieval; retry"}), 409
     return jsonify({"table": full_name, "columns": columns})
 
 
@@ -682,7 +763,7 @@ def execute_sql_endpoint():
     sql = (data.get("sql") or data.get("query") or "").strip()
     max_rows = min(int(data.get("max_rows", 200)), 10000)
     allow_writes = data.get("allow_writes", False)
-    warehouse_id = data.get("warehouse_id", "") or _WAREHOUSE_ID
+    warehouse_id = data.get("warehouse_id")
 
     if not sql:
         return jsonify({"error": "sql field is required"}), 400
