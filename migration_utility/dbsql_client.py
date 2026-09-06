@@ -93,27 +93,33 @@ def get_catalog_schema() -> tuple[str, str]:
     """Return (catalog, schema) for this app's own tables (user_roles,
     audit_log, job_schedules, migration_jobs, dm_models, doc_qa_chunks*).
 
-    Prefers the "Metadata Catalog"/"Metadata Schema" a user configures at
-    runtime in Settings (config_cache's metadata_catalog/metadata_schema --
-    the same setting workflow_manager.py's wf_* tables already follow) over
-    the static DATABRICKS_CATALOG/DATABRICKS_SCHEMA env vars baked into
-    app.yml at deploy time. That way choosing a different catalog to test
-    against relocates ALL of this app's tables there, not just the
-    workflow ones, and doesn't require a redeploy to change.
+    Prefers the "Metadata Catalog" a user configures at runtime in Settings
+    (config_cache's metadata_catalog) over the static DATABRICKS_CATALOG env
+    var baked into app.yml at deploy time, so choosing a different catalog to
+    test against relocates this app's own tables there too, without a
+    redeploy.
+
+    The SCHEMA is always the fixed name "migration_app" -- deliberately NOT
+    config_cache's metadata_schema. metadata_schema is workflow_manager.py's
+    own setting for where the wf_*/reconciliation pipeline-metadata tables
+    live (e.g. "configtables", user-renameable via Create MetadataFlow), and
+    is a completely different concern: this app's own admin tables (roles,
+    audit log, job/model persistence) must never collide with whatever the
+    user names that schema, so they get a stable, non-configurable home of
+    their own inside the same catalog.
 
     app_config itself is the one exception: it's what makes the dynamic
-    value discoverable in the first place, so its own location has to stay
-    anchored to the static env vars (see config_cache.py's _fqn()).
+    catalog value discoverable in the first place, so its own location has
+    to stay anchored to the static env vars (see config_cache.py's _fqn()).
     """
     cfg = _get_config()
     try:
         from config_cache import get_config as _get_app_config
         dyn = _get_app_config() or {}
         catalog = dyn.get("metadata_catalog") or cfg["catalog"]
-        schema = dyn.get("metadata_schema") or cfg["schema"]
-        return catalog, schema
+        return catalog, "migration_app"
     except Exception:
-        return cfg["catalog"], cfg["schema"]
+        return cfg["catalog"], "migration_app"
 
 
 def get_connection():
