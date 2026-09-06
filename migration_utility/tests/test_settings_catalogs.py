@@ -15,8 +15,10 @@ APP_CONFIG = {
         "dbx_bronze": {"location": "abfss://c@sa.dfs.core.windows.net/dev/uc-managed/dbx_bronze"},
         "dbx_silver": {"location": "abfss://c@sa.dfs.core.windows.net/dev/uc-managed/dbx_silver"},
     },
-    "reconciliation": {"catalog": "dbx_reconciliation", "schema": "sales"},
-    "logging": {"catalog": "dbx_logging", "schema": "sales"},
+    # Reconciliation lives in a fixed `reconciliation` schema under
+    # metadata_catalog now (see workflow_manager._recon_fqn) -- not its own
+    # catalog, so no separate config key for it. The Logging layer /
+    # ExecutionLog table was removed entirely in favor of wf_run_history.
     "volume_catalog": "dbx_volumes",
 }
 
@@ -55,9 +57,12 @@ class TestListCatalogs(unittest.TestCase):
         data = resp.get_json()
         self.assertTrue(data["success"])
         self.assertNotIn("system", data["catalogs"])
-        for expected in ("dbx_bronze", "dbx_silver", "dbx_admin_source",
-                         "dbx_reconciliation", "dbx_logging", "dbx_volumes"):
+        for expected in ("dbx_bronze", "dbx_silver", "dbx_admin_source", "dbx_volumes"):
             self.assertIn(expected, data["catalogs"])
+        # Reconciliation is a schema under dbx_admin_source, not its own
+        # catalog -- must NOT appear as a separate entry in this listing.
+        self.assertNotIn("dbx_reconciliation", data["catalogs"])
+        self.assertNotIn("dbx_logging", data["catalogs"])
         self.assertIn("main", data["catalogs"])
         self.assertEqual(data["catalogs"], sorted(set(data["catalogs"])))
 
