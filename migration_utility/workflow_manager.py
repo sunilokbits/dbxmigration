@@ -867,6 +867,19 @@ def init_metadata_flow(host: str, token: str, catalog: str = "main",
             else:
                 results.append(state)
 
+    # FIELD_ALREADY_EXISTS is the expected, harmless outcome of re-running
+    # the ADD COLUMNS statement (added for wf_run_history's RCA columns)
+    # against a workspace where a prior "Create MetadataFlow" click already
+    # added them -- ADD COLUMNS has no "IF NOT EXISTS" clause, unlike every
+    # CREATE TABLE/SCHEMA statement here. Treating it as a real failure
+    # blocked the *entire* metadata bootstrap (this function returns
+    # success=False and never sets _metadata_initialized=True if `errors`
+    # is non-empty for ANY reason) even when every table/schema in the list
+    # was created successfully -- the button would show "Failed" and the
+    # app would keep reporting "Not Configured" forever, regardless of how
+    # many times it was clicked.
+    errors = [e for e in errors if "FIELD_ALREADY_EXISTS" not in str(e)]
+
     if errors:
         # Detect storage access failures and give actionable guidance
         joined = "; ".join(errors)

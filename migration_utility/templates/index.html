@@ -1794,23 +1794,20 @@
           <svg class="admin-add-arrow" viewBox="0 0 24 24" style="width:14px;height:14px;stroke:var(--t4);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;margin-left:auto;transition:transform .2s;"><polyline points="6 9 12 15 18 9"/></svg>
         </summary>
         <div style="padding:0 18px 18px;">
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 140px;gap:14px;align-items:end;">
+          <!-- This app authenticates via Databricks Apps SSO -- there is no
+               local password to set. Adding a user here just assigns a role
+               to their email, matching user_roles' actual schema
+               (user_email, role, display_name) -- routes/admin.py's
+               create_user() already only ever reads username(as email)/
+               display_name/role and has never used a password field. -->
+          <div style="display:grid;grid-template-columns:1fr 1fr 140px;gap:14px;align-items:end;">
             <div>
-              <label for="adminNewUser" class="lbl">Username <span style="color:#ef4444;">*</span></label>
-              <input id="adminNewUser" class="inp" placeholder="e.g. john.doe" autocomplete="off" />
+              <label for="adminNewUser" class="lbl">Email <span style="color:#ef4444;">*</span></label>
+              <input id="adminNewUser" class="inp" type="email" placeholder="e.g. john.doe@company.com" autocomplete="off" />
             </div>
             <div>
               <label for="adminNewDisplay" class="lbl">Display Name</label>
               <input id="adminNewDisplay" class="inp" placeholder="e.g. John Doe" autocomplete="off" />
-            </div>
-            <div>
-              <label for="adminNewPass" class="lbl">Password <span style="color:#ef4444;">*</span></label>
-              <div style="position:relative;">
-                <input id="adminNewPass" type="password" class="inp" placeholder="Min 6 chars" autocomplete="new-password" style="padding-right:36px;" />
-                <button type="button" class="cfg-eye-btn" onclick="cfgTogglePw('adminNewPass',this)" title="Show/hide">
-                  <svg viewBox="0 0 24 24" style="width:14px;height:14px;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                </button>
-              </div>
             </div>
             <div>
               <label for="adminNewRole" class="lbl">Role</label>
@@ -1883,15 +1880,6 @@
                 <option value="Developer">Developer</option>
                 <option value="Admin">Admin</option>
               </select>
-            </div>
-            <div>
-              <label for="adminEditPass" class="lbl">New Password <span style="font-weight:400;color:var(--t4);">(leave blank to keep current)</span></label>
-              <div style="position:relative;">
-                <input id="adminEditPass" type="password" class="inp" placeholder="Optional" autocomplete="new-password" style="padding-right:36px;" />
-                <button type="button" class="cfg-eye-btn" onclick="cfgTogglePw('adminEditPass',this)" title="Show/hide">
-                  <svg viewBox="0 0 24 24" style="width:14px;height:14px;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                </button>
-              </div>
             </div>
           </div>
           <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px;">

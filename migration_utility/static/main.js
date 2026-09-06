@@ -7617,17 +7617,21 @@ window.adminFilterTable=function(){
 function _esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 
 window.adminCreateUser=async function(){
+  // This app authenticates via Databricks Apps SSO -- there is no local
+  // password to set here. "username" is sent as the key name for backward
+  // compatibility with the existing /api/v1/admin/users endpoint, but it's
+  // always an email address (routes/admin.py's create_user() validates it
+  // as one and stores it as user_roles.user_email).
   const username=G('adminNewUser').value.trim();
   const display_name=G('adminNewDisplay').value.trim();
-  const password=G('adminNewPass').value;
   const role=G('adminNewRole').value;
-  if(!username||!password){toast('Username and password are required.','terr');return;}
+  if(!username){toast('Email is required.','terr');return;}
   try{
-    const r=await fetch('/api/v1/admin/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password,role,display_name})});
+    const r=await fetch('/api/v1/admin/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,role,display_name})});
     const d=await r.json();
     if(!d.success)throw new Error(d.error||'Create failed');
     toast('User "'+username+'" created.','tok');
-    G('adminNewUser').value='';G('adminNewDisplay').value='';G('adminNewPass').value='';G('adminNewRole').value='Viewer';
+    G('adminNewUser').value='';G('adminNewDisplay').value='';G('adminNewRole').value='Viewer';
     adminRefresh();
   }catch(e){toast(e.message,'terr');}
 };
@@ -7636,7 +7640,6 @@ window.adminOpenEdit=function(username,display_name,role){
   G('adminEditUsername').value=username;
   G('adminEditDisplay').value=display_name;
   G('adminEditRole').value=role;
-  G('adminEditPass').value='';
   G('adminEditModal').style.display='flex';
 };
 window.adminCloseEditModal=function(){G('adminEditModal').style.display='none';};
@@ -7644,8 +7647,6 @@ window.adminCloseEditModal=function(){G('adminEditModal').style.display='none';}
 window.adminSaveEdit=async function(){
   const username=G('adminEditUsername').value;
   const body={display_name:G('adminEditDisplay').value.trim(),role:G('adminEditRole').value};
-  const pw=G('adminEditPass').value;
-  if(pw)body.password=pw;
   try{
     const r=await fetch('/api/v1/admin/users/'+encodeURIComponent(username),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const d=await r.json();

@@ -7,4 +7,4 @@ When users ask about failures, errors, or root cause analysis:
 3. For data mismatches, query {META_CAT}.{META_SCH}.reconcilationdetails where status != 'MATCH' or variance_pct > 0
 4. Check {META_CAT}.{META_SCH}.audit_log for recent user actions that may have triggered issues
 
-A 'failed migration' means last_status = 'FAILED' in wf_job_metadata.
+A 'failed migration' means last_status = 'failed' in wf_job_metadata. status/last_status values are always lowercase (created, running, success, failed) -- never match against uppercase (e.g. 'FAILED'), it will silently return zero rows.
