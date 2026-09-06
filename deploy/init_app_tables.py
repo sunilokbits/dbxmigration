@@ -64,6 +64,29 @@ def _read_app_yml_env(name, default):
 catalog = _read_app_yml_env("DATABRICKS_CATALOG", "admin_source")
 schema = _read_app_yml_env("DATABRICKS_SCHEMA", "migration_app")
 
+
+def _configured_metadata_pair():
+    """The Settings-configured metadata catalog/schema the running app
+    actually queries (e.g. dbx_admin_source.configtables), read from the
+    git-tracked deployconfig.json. This can differ from the app.yml env
+    bootstrap location above -- and Genie's live schema discovery scans the
+    CONFIGURED pair, so if the app SP isn't granted there the scan 403s and
+    the assistant reports "no schema to work from" with no runnable SQL."""
+    import json as _json
+    for path in ("migration_utility/deployconfig.json", "deployconfig.json",
+                 "/home/migration_data/deployconfig.json"):
+        try:
+            with open(path, encoding="utf-8") as f:
+                cfg = _json.load(f)
+        except (OSError, ValueError):
+            continue
+        mc = str(cfg.get("metadata_catalog") or "").strip()
+        ms = str(cfg.get("metadata_schema") or "").strip()
+        if mc and ms:
+            return mc, ms
+    return "", ""
+
+
 sql_path = Path("src/sql/init_app_tables.sql")
 if not sql_path.is_file():
     print(f"WARN: {sql_path} not found — skipping app table bootstrap")
@@ -241,6 +264,32 @@ try:
                                 _report("warning", f"Drift-tolerant grant failed (non-blocking): {grant_sql} -> {err}")
                         except Exception as exc:
                             _report("warning", f"Drift-tolerant grant failed (non-blocking): {grant_sql} -> {exc}")
+
+                # Grant on the Settings-configured metadata catalog/schema the
+                # running app actually queries (e.g. dbx_admin_source.
+                # configtables). The app.yml env bootstrap grant and the
+                # drift-tolerant ".migration_app" grants above both miss the
+                # configured schema name -- that gap is exactly why Genie's
+                # live schema discovery 403s and the assistant reports "no
+                # schema to work from" with no runnable SQL to execute.
+                _meta_cat, _meta_sch = _configured_metadata_pair()
+                if _meta_cat and _meta_sch and (_meta_cat, _meta_sch) != (catalog, schema):
+                    for grant_sql in (
+                        f"GRANT USE CATALOG ON CATALOG `{_meta_cat}` TO `{sp_id}`",
+                        f"GRANT USE SCHEMA, SELECT, MODIFY, CREATE TABLE ON SCHEMA `{_meta_cat}`.`{_meta_sch}` TO `{sp_id}`",
+                    ):
+                        try:
+                            resp = w.statement_execution.execute_statement(
+                                warehouse_id=wh_id, statement=grant_sql, wait_timeout="30s",
+                            )
+                            state = resp.status.state.value if resp.status and resp.status.state else "UNKNOWN"
+                            if state == "SUCCEEDED":
+                                print(f"OK (configured metadata): {grant_sql}")
+                            else:
+                                err = resp.status.error.message if resp.status and resp.status.error else state
+                                _report("warning", f"Configured-metadata grant failed (non-blocking): {grant_sql} -> {err}")
+                        except Exception as exc:
+                            _report("warning", f"Configured-metadata grant failed (non-blocking): {grant_sql} -> {exc}")
     except Exception as exc:
         _report("warning", f"Could not grant app SP catalog/schema access (non-blocking): {exc}")
 
