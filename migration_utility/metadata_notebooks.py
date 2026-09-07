@@ -2061,6 +2061,12 @@ META_CATALOG = spark.conf.get("pipeline.meta_catalog", "{catalog}")
 META_SCHEMA  = spark.conf.get("pipeline.meta_schema", "{schema}")
 LANDING_PATH = spark.conf.get("pipeline.landing_path", "{landing_path}")
 GROUP_ID     = spark.conf.get("pipeline.group_id", "")
+# Direct Publishing Mode (serverless): publish each layer to its OWN catalog
+# with clean, un-prefixed, lowercase table names via fully-qualified names.
+# Bronze -> BRONZE_CATALOG, Silver -> SILVER_CATALOG. No prefix, no relocation.
+BRONZE_CATALOG = spark.conf.get("pipeline.bronze_catalog", "").strip()
+SILVER_CATALOG = spark.conf.get("pipeline.silver_catalog", "").strip() or BRONZE_CATALOG
+TARGET_SCHEMA  = spark.conf.get("pipeline.target_schema", "").strip() or META_SCHEMA
 try:
     _NB_PATH = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
 except Exception:
@@ -2122,15 +2128,10 @@ def _make_bronze(job):
     # here because the extract may write to an ABFSS path or a different
     # volume schema (e.g. hr vs dbo).
     src   = f"{{LANDING_PATH}}/{{tbl}}"
-    # Use simple names — Spark Declarative Pipeline's catalog/schema controls where tables
-    # are published.  3-part names cause "Failed to analyze flow" errors.
-    # A single Lakeflow/DLT pipeline publishes EVERY table it defines to ONE
-    # target catalog.schema (set on the pipeline itself, not per-table) --
-    # Bronze and Silver are defined in this same pipeline, so without some
-    # prefix they'd collide on the exact same table name in that one schema.
-    # This is the one spot the bronze_/silver_ prefix stays for a real
-    # technical reason, not cosmetics; table name itself is still lowercased.
-    bronze_full = f"bronze_{{tbl.lower()}}"
+    # Clean, un-prefixed, lowercase name published DIRECTLY to the bronze catalog
+    # via a fully-qualified name (Direct Publishing Mode). No bronze_/silver_
+    # prefix and no post-run relocation.
+    bronze_full = f"{{BRONZE_CATALOG}}.{{TARGET_SCHEMA}}.{{tbl.lower()}}"
 
     @dlt.table(
         name=bronze_full,
@@ -2213,11 +2214,14 @@ def _make_silver(job):
     b_cat       = tcfg.get("bronze_catalog", "")
     s_cat       = tcfg.get("silver_catalog", "")
     t_sch       = tcfg.get("target_schema", "")
-    # Use simple names — must match the bronze name used in _make_bronze.
-    # Spark Declarative Pipeline's catalog/schema controls where tables are published.
-    # Same one-pipeline-one-schema reasoning as _make_bronze above.
-    bronze_name = f"bronze_{{tbl.lower()}}"
-    silver_full = f"silver_{{tbl.lower()}}"
+    # Clean, un-prefixed lowercase names. Silver publishes to its OWN catalog
+    # (SILVER_CATALOG); when silver and bronze share a catalog we keep a
+    # silver_ prefix to avoid a same-name collision, otherwise the name is exact.
+    bronze_name = f"{{BRONZE_CATALOG}}.{{TARGET_SCHEMA}}.{{tbl.lower()}}"
+    if SILVER_CATALOG and SILVER_CATALOG != BRONZE_CATALOG:
+        silver_full = f"{{SILVER_CATALOG}}.{{TARGET_SCHEMA}}.{{tbl.lower()}}"
+    else:
+        silver_full = f"{{BRONZE_CATALOG}}.{{TARGET_SCHEMA}}.silver_{{tbl.lower()}}"
 
     @dlt.table(
         name=silver_full,
@@ -2233,9 +2237,8 @@ def _make_silver(job):
     @dlt.expect("dq03_bronze_freshness",            "__bronze_ts >= current_timestamp() - INTERVAL 7 DAYS")
     @dlt.expect("dq04_no_empty_source",             "length(trim(coalesce(__source_table, ''))) > 0")
     def _inner():
-        # Always use dlt.read() for within-pipeline dependency resolution.
-        # spark.read.table() fails because bronze isn't committed yet
-        # during the same pipeline update.
+        # Within-pipeline dependency: dlt.read resolves the bronze table this
+        # same pipeline just built (fully-qualified in Direct Publishing Mode).
         df = dlt.read(bronze_name)
 
         # Filter quarantined rows before dropping the flag column
@@ -2558,6 +2561,15 @@ try:
 except Exception as schema_err:
     print(f"⚠️ Could not create schema {{DLT_CATALOG}}.{{DLT_SCHEMA}}: {{schema_err}}")
 
+# Direct Publishing Mode also writes silver directly to the silver catalog —
+# make sure that schema exists too.
+if _SILVER_CAT and _SILVER_CAT != DLT_CATALOG:
+    try:
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS `{{_SILVER_CAT}}`.`{{DLT_SCHEMA}}`")
+        print(f"✅ Ensured silver schema exists: {{_SILVER_CAT}}.{{DLT_SCHEMA}}")
+    except Exception as _ssch_err:
+        print(f"⚠️ Could not create silver schema {{_SILVER_CAT}}.{{DLT_SCHEMA}}: {{_ssch_err}}")
+
 print(f"📦 DLT output target: {{DLT_CATALOG}}.{{DLT_SCHEMA}}")
 print(f"📋 Metadata source:   {{CATALOG}}.{{SCHEMA}}")
 
@@ -2566,6 +2578,11 @@ pipeline_cfg = {{
     "pipeline.meta_schema":   SCHEMA,
     "pipeline.landing_path":  LANDING_PATH,
     "pipeline.group_id":      GROUP_ID,
+    # Direct Publishing Mode targets — the SDP notebook publishes bronze/silver
+    # directly to these catalogs with clean, un-prefixed lowercase names.
+    "pipeline.bronze_catalog": DLT_CATALOG,
+    "pipeline.silver_catalog": _SILVER_CAT or DLT_CATALOG,
+    "pipeline.target_schema":  DLT_SCHEMA,
     # Allow this pipeline to (re)claim tables previously written by another DLT
     # pipeline. Required when switching from single-catalog to multi-catalog
     # (bronze.hr.* + silver.hr.*) publishing layout.
@@ -2787,16 +2804,22 @@ try:
 except Exception:
     pass
 
+_SILVER_CATALOG_ORCH = _SILVER_CAT or DLT_CATALOG
 _dlt_tables = []
 for _tname in _dlt_job_names:
-    _dlt_tables.append(f"bronze_{{_tname}}")
-    _dlt_tables.append(f"silver_{{_tname}}")
+    _tl = _tname.lower()
+    # Clean, un-prefixed names the SDP notebook now publishes: bronze in the
+    # bronze catalog, silver in the silver catalog.
+    _dlt_tables.append(f"`{{DLT_CATALOG}}`.`{{DLT_SCHEMA}}`.`{{_tl}}`")
+    if _SILVER_CATALOG_ORCH != DLT_CATALOG:
+        _dlt_tables.append(f"`{{_SILVER_CATALOG_ORCH}}`.`{{DLT_SCHEMA}}`.`{{_tl}}`")
+    else:
+        _dlt_tables.append(f"`{{DLT_CATALOG}}`.`{{DLT_SCHEMA}}`.`silver_{{_tl}}`")
 
-print(f"🔍 Collision check: {{len(_dlt_job_names)}} table names → {{len(_dlt_tables)}} DLT targets to verify in `{{DLT_CATALOG}}`.`{{DLT_SCHEMA}}`")
+print(f"🔍 Collision check: {{len(_dlt_job_names)}} table names → {{len(_dlt_tables)}} DLT targets")
 
 _dropped_pre = 0
-for _dt in _dlt_tables:
-    _fqn = f"`{{DLT_CATALOG}}`.`{{DLT_SCHEMA}}`.`{{_dt}}`"
+for _fqn in _dlt_tables:
     try:
         _info = spark.sql(f"DESCRIBE EXTENDED {{_fqn}}")
         _type_row = [r for r in _info.collect() if r[0].strip().lower() == "type"]
@@ -3010,7 +3033,7 @@ if dlt_status == "FAILED":
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 🔄 Phase 3 — Relocate Silver Tables to Silver Catalog
+# MAGIC ## 🔄 Phase 3 — Silver Published Directly (relocation now a safe no-op)
 
 # COMMAND ----------
 
