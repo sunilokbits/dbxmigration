@@ -1578,7 +1578,7 @@ def scheduler_upsert_config(entry: dict):
         {_esc(entry.get('next_run'))}
     )
     """
-    _exec_sql(sql)
+    _exec_sql_checked(sql, f"scheduler config upsert {sid}")
 
 
 def scheduler_delete_config(schedule_id: str):
@@ -1602,7 +1602,10 @@ def scheduler_insert_history(entry: dict):
         {_esc(entry.get('trigger'))}, {_esc(entry.get('result'))},
         {_esc(entry.get('details'))}, {_esc(entry.get('timestamp'))}
     )"""
-    _exec_sql(sql)
+    # Verify + retry (transient Delta write conflicts) and LOG on failure.
+    # A plain _exec_sql() swallowed errors, leaving wf_scheduler_history
+    # silently empty even though the schedule actually executed.
+    _exec_sql_checked(sql, f"scheduler history insert {hid}")
 
 
 def scheduler_update_history_result(schedule_id: str, timestamp: str, new_result: str):
@@ -1791,7 +1794,10 @@ def _archive_existing_jobs(table_name: str, reason: str = "load_type_change", ma
         _extra_filter += f" AND source_config LIKE '%{source_tag}%'"
 
     try:
-        # 1. Copy matching rows from wf_job_metadata → wf_job_metadatahis
+        # 1. Copy matching rows from wf_job_metadata -> wf_job_metadatahis.
+        # Verify this INSERT actually succeeded BEFORE deleting the live rows:
+        # a plain _exec_sql() swallowed failures, so a transient write error
+        # could both lose the jobs AND leave wf_job_metadatahis empty.
         archive_sql = f"""
         INSERT INTO {_fqn(TBL_JOBS_HISTORY)}
         SELECT
@@ -1806,7 +1812,9 @@ def _archive_existing_jobs(table_name: str, reason: str = "load_type_change", ma
         WHERE table_name = {_esc(table_name)}
         {_extra_filter}
         """
-        _exec_sql(archive_sql)
+        if not _exec_sql_checked(archive_sql, f"archive jobs for {table_name}"):
+            logger.warning("Archive of jobs for %s failed — keeping live rows (not deleting)", table_name)
+            return archived
 
         # 2. Get the job_ids + group_ids being removed (for in-memory cleanup)
         fetch_sql = f"""

@@ -675,6 +675,10 @@ def _scheduler_tick_inner():
                 "details": f"No pipeline group found for table '{table_name}'",
             }
             data.setdefault("history", []).insert(0, hist)
+            try:
+                wfm.scheduler_insert_history(hist)
+            except Exception:
+                pass
             sch["last_run"] = run_ts
             sch["next_run"] = _compute_next_run(
                 sch.get("type", "cron"), sch.get("cron", ""),
@@ -733,6 +737,10 @@ def _scheduler_tick_inner():
                 "result": "failed", "details": str(exc)[:500],
             }
             data.setdefault("history", []).insert(0, hist)
+            try:
+                wfm.scheduler_insert_history(hist)
+            except Exception:
+                pass
 
         # next_run and last_run already updated in the pre-save above
         changed = True

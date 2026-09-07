@@ -272,11 +272,8 @@ def get_dq_metrics():
         # Also derive target catalogs from deployed pipeline jobs — the
         # __dq_metrics tables are written to the bronze/silver target
         # catalogs, which may not be present in the settings config.
-        meta_cat, meta_sch = "admin_source", "Configtables"
-        for cat_name, cat_cfg in cfg.get("catalogs", {}).items():
-            if "Configtables" in (cat_cfg.get("schemas") or []):
-                meta_cat, meta_sch = cat_name, "Configtables"
-                break
+        meta_cat = cfg.get("metadata_catalog", "admin_source") or "admin_source"
+        meta_sch = cfg.get("metadata_schema", "configtables") or "configtables"
         try:
             tgt_sql = (f"SELECT target_config FROM `{meta_cat}`.`{meta_sch}`.wf_job_metadata "
                        f"WHERE target_config IS NOT NULL LIMIT 2000")
@@ -360,15 +357,12 @@ def get_reports_jobs():
     dbx_token = get_databricks_token()
     if not dbx_host or not dbx_token:
         return jsonify({"success": False, "jobs": [], "error": "Databricks not configured."})
-    catalogs = cfg.get("catalogs", {})
-    meta_cat = "admin_source"
-    meta_sch = "Configtables"
-    for cat_name, cat_cfg in catalogs.items():
-        schemas = cat_cfg.get("schemas", [])
-        if "Configtables" in schemas:
-            meta_cat = cat_name
-            meta_sch = "Configtables"
-            break
+    # Use the Settings-configured metadata catalog/schema (same resolution as
+    # get_audit_execution_logs). The old code guessed `admin_source`.`Configtables`
+    # from the usually-empty `catalogs` dict, so Reports queried the wrong
+    # catalog and showed no/stale data that did not match the database.
+    meta_cat = cfg.get("metadata_catalog", "admin_source") or "admin_source"
+    meta_sch = cfg.get("metadata_schema", "configtables") or "configtables"
     uc = UnityCatalogExecutor(dbx_host, dbx_token, meta_cat, meta_sch)
     wh_resp = uc.list_warehouses()
     warehouses = wh_resp.get("warehouses", [])
