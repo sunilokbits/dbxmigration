@@ -204,6 +204,11 @@ LANDING_PATH = dbutils.widgets.get("landing_path").strip()
 print(f"🔧 Job ID  : {{JOB_ID}}")
 print(f"🔧 Run ID  : {{RUN_ID}}")
 print(f"🔧 Catalog : {{CATALOG}}.{{SCHEMA}}")
+try:
+    _NB_PATH = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+except Exception:
+    _NB_PATH = "<path unavailable>"
+print(f"📓 Extract notebook: {{_NB_PATH}}")
 
 # COMMAND ----------
 
@@ -575,6 +580,11 @@ RUN_ID       = dbutils.widgets.get("run_id").strip()
 CATALOG      = dbutils.widgets.get("catalog").strip()
 SCHEMA       = dbutils.widgets.get("schema").strip()
 LANDING_PATH = dbutils.widgets.get("landing_path").strip()
+try:
+    _NB_PATH = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+except Exception:
+    _NB_PATH = "<path unavailable>"
+print(f"📓 Bronze notebook: {{_NB_PATH}}")
 
 # COMMAND ----------
 
@@ -954,6 +964,11 @@ JOB_ID  = dbutils.widgets.get("job_id").strip()
 RUN_ID  = dbutils.widgets.get("run_id").strip()
 CATALOG = dbutils.widgets.get("catalog").strip()
 SCHEMA  = dbutils.widgets.get("schema").strip()
+try:
+    _NB_PATH = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+except Exception:
+    _NB_PATH = "<path unavailable>"
+print(f"📓 Silver notebook: {{_NB_PATH}}")
 
 # COMMAND ----------
 
@@ -1371,6 +1386,12 @@ CATALOG        = dbutils.widgets.get("catalog").strip()
 SCHEMA         = dbutils.widgets.get("schema").strip()
 LANDING_PATH   = dbutils.widgets.get("landing_path").strip()
 WORKSPACE_PATH = dbutils.widgets.get("workspace_path").strip()
+try:
+    _NB_PATH = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+except Exception:
+    _NB_PATH = "<path unavailable>"
+print(f"📓 Orchestrator notebook: {{_NB_PATH}}")
+print(f"📁 Workspace path (sub-notebooks resolve from here): {{WORKSPACE_PATH}}")
 
 # COMMAND ----------
 
@@ -1663,6 +1684,11 @@ RECON_SCHEMA = "reconciliation"
 RECON_TABLE  = "reconcilationdetails"
 
 RECON_RUN_ID = uuid.uuid4().hex[:12]
+try:
+    _NB_PATH = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+except Exception:
+    _NB_PATH = "<path unavailable>"
+print(f"📓 Reconciliation notebook: {{_NB_PATH}}")
 
 print(f"🔍 Reconciliation for Job: {{JOB_ID}}, Run: {{RUN_ID}}")
 print(f"📦 Results → {{RECON_CATALOG}}.{{RECON_SCHEMA}}.{{RECON_TABLE}}")
@@ -2035,6 +2061,11 @@ META_CATALOG = spark.conf.get("pipeline.meta_catalog", "{catalog}")
 META_SCHEMA  = spark.conf.get("pipeline.meta_schema", "{schema}")
 LANDING_PATH = spark.conf.get("pipeline.landing_path", "{landing_path}")
 GROUP_ID     = spark.conf.get("pipeline.group_id", "")
+try:
+    _NB_PATH = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+except Exception:
+    _NB_PATH = "<path unavailable>"
+print(f"📓 SDP pipeline notebook: {{_NB_PATH}}")
 
 # COMMAND ----------
 
@@ -2336,8 +2367,15 @@ _hdrs = {{"Authorization": f"Bearer {{TOKEN}}", "Content-Type": "application/jso
 
 print(f"🔗 Workspace: {{HOST}}")
 
-# COMMAND ----------
-
+# ── Show this orchestrator's own path + the workspace path every sub-notebook
+#    (extract / SDP pipeline / reconciliation) resolves from, so each run makes
+#    the exact notebook path it uses visible in the driver logs. ──
+try:
+    _NB_PATH = ctx.notebookPath().get()
+except Exception:
+    _NB_PATH = "<path unavailable>"
+print(f"📓 Orchestrator notebook: {{_NB_PATH}}")
+print(f"📁 Workspace path (all sub-notebooks resolve from here): {{WORKSPACE_PATH}}")
 # MAGIC %md
 # MAGIC ## 🔍 Discover Extract Jobs
 
@@ -2377,6 +2415,7 @@ print(f"📋 Extract jobs: {{len(extract_jobs)}}")
 # COMMAND ----------
 
 extract_nb = f"{{WORKSPACE_PATH}}/01_Meta_Extract"
+print(f"🐥 Extract notebook: {{extract_nb}}")
 extract_results = [None] * len(extract_jobs)
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -2467,6 +2506,7 @@ if extract_fail:
 
 DLT_NAME = f"MetadataPipeline_{{GROUP_ID}}" if GROUP_ID else "MetadataPipeline_All"
 DLT_NB   = f"{{WORKSPACE_PATH}}/02_Meta_SDP_Pipeline"
+print(f"⚡ SDP pipeline notebook: {{DLT_NB}}")
 
 # ── Determine DLT output catalog/schema ──────────────────────────
 # Use explicit widget parameters first (most reliable), then fall back
@@ -3015,17 +3055,35 @@ if dlt_status == "COMPLETED":
         except Exception as se:
             print(f"⚠️ Could not create schema {{SILVER_CATALOG}}.{{SILVER_SCHEMA}}: {{se}}")
 
-        # Discover silver tables in the DLT catalog
+        # Discover silver tables in the DLT catalog, but ONLY those that belong
+        # to THIS run's group. Otherwise a single-table run relocates every
+        # silver_* table accumulated in the shared bronze schema — coupling
+        # unrelated tables and causing the cross-run collisions we saw.
+        _grp_table_names = set()
+        try:
+            _gf3 = f"AND group_id = '{{GROUP_ID}}'" if GROUP_ID else ""
+            _grp_rows = spark.sql(f"""
+                SELECT DISTINCT table_name FROM `{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata
+                WHERE stage IN ('landing_to_bronze','bronze_to_silver','dlt_bronze_silver')
+                  AND (enabled = true OR enabled IS NULL) {{_gf3}}
+            """).collect()
+            _grp_table_names = {{r[0].lower() for r in _grp_rows if r[0]}}
+        except Exception:
+            pass
+
         silver_tables = []
         try:
             _all_tables = [r[1] for r in spark.sql(f"""
                 SHOW TABLES IN `{{DLT_CATALOG}}`.`{{DLT_SCHEMA}}`
             """).collect()]
             silver_tables = [t for t in _all_tables if t.startswith("silver_")]
+            # Scope to this group's tables (GROUP_ID blank = run-all = keep all).
+            if _grp_table_names:
+                silver_tables = [t for t in silver_tables if t[7:].lower() in _grp_table_names]
         except Exception:
             pass
 
-        print(f"📋 Found {{len(silver_tables)}} silver tables to relocate")
+        print(f"📋 Found {{len(silver_tables)}} silver tables to relocate (scoped to this run's group)")
 
         # ── Copy silver tables to silver catalog via CTAS ──
         # The Spark Declarative Pipeline creates silver tables as materialized views in DLT_CATALOG.
@@ -3083,6 +3141,7 @@ recon_status = "SKIPPED"
 if dlt_status == "COMPLETED" and extract_results:
     try:
         recon_nb = f"{{WORKSPACE_PATH}}/04_Meta_Reconciliation"
+        print(f"📊 Reconciliation notebook: {{recon_nb}}")
         recon_ok_count = 0
         recon_fail_count = 0
 

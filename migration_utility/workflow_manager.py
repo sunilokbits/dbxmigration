@@ -3454,6 +3454,15 @@ def deploy_metadata_notebooks(
     if ok > 0:
         _notebooks_deployed = True
         _notebooks_workspace_path = workspace_path
+        # Persist durably so EVERY worker/run uses the client's configured path.
+        # The module global above is per-process; a run handled by a different
+        # gunicorn worker (or after a restart) would otherwise fall back to a
+        # default path and fail to find the notebooks.
+        try:
+            from config_cache import save_config
+            save_config({"notebooks_workspace_path": workspace_path})
+        except Exception as _cfg_err:
+            logger.warning("Could not persist notebooks_workspace_path to config: %s", _cfg_err)
 
     return {
         "success":        ok > 0,
@@ -3696,7 +3705,18 @@ def run_pipeline_on_databricks(
     dcfg = _load_deploy_config() if (not host or not token or not catalog or not schema) else {}
     host  = host or _dbr_host or dcfg.get("databricks_host", "")
     token = token or _resolve_databricks_token(dcfg) or _dbr_token
-    ws    = workspace_path or _notebooks_workspace_path or "/Shared/MetadataPipeline"
+    # Always prefer the client's configured/deployed workspace path. The module
+    # global is per-process, so also read the durable config — a run handled by
+    # a worker that didn't deploy (or after a restart) must still use the right
+    # path so the pipeline library + sub-notebooks resolve correctly.
+    ws = workspace_path or _notebooks_workspace_path
+    if not ws:
+        try:
+            from config_cache import get_config as _gc_ws
+            ws = ((_gc_ws() or {}).get("notebooks_workspace_path") or "").strip()
+        except Exception:
+            ws = ""
+    ws = ws or dcfg.get("notebooks_workspace_path") or "/Shared/MetadataPipeline"
     cat   = catalog or _dbr_catalog or dcfg.get("metadata_catalog", "") or "main"
     sch   = schema or _dbr_schema or dcfg.get("metadata_schema", "") or "default"
     if not password:
