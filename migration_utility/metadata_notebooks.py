@@ -100,6 +100,12 @@ def generate_metadata_notebooks(
                 "description": "Aggregate reconciliation — Source vs Bronze numeric column validation",
                 "layer":       "reconciliation",
             },
+            {
+                "name":        "05_Meta_ExecutionLog",
+                "code":        _gen_execution_log(catalog, schema, ts),
+                "description": "Marks the dlt_bronze_silver stage complete in wf_job_metadata / wf_pipeline_metadata / wf_run_history",
+                "layer":       "logging",
+            },
         ]
     else:
         notebooks = [
@@ -2022,6 +2028,154 @@ dbutils.notebook.exit(exit_payload)
 #  5. DLT PIPELINE NOTEBOOK  (Bronze + Silver combined)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+def _gen_execution_log(catalog, schema, ts):
+    return f'''# Databricks notebook source
+# MAGIC %md
+# MAGIC # 📝 Metadata Execution Logging — Mark SDP Stage Complete
+# MAGIC **Generated:** {ts}
+# MAGIC
+# MAGIC Called by the orchestrator AFTER the Spark Declarative Pipeline finishes.
+# MAGIC The SDP itself never updates these metadata tables, so this marks the
+# MAGIC `dlt_bronze_silver` stage complete:
+# MAGIC - `wf_job_metadata`      — dlt_bronze_silver rows: status / last_status / updated_at
+# MAGIC - `wf_pipeline_metadata` — group status / updated_at
+# MAGIC - `wf_run_history`       — one dlt_bronze_silver run record per group
+# MAGIC ---
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 📋 Widget Configuration
+
+# COMMAND ----------
+
+dbutils.widgets.text("catalog", "{catalog}", "Metadata Catalog")
+dbutils.widgets.text("schema", "{schema}", "Metadata Schema")
+dbutils.widgets.text("results_json", "[]", "Extract results JSON")
+dbutils.widgets.text("groups_json", "[]", "Group IDs JSON")
+dbutils.widgets.text("orchestrator_status", "COMPLETED", "Orchestrator status")
+dbutils.widgets.text("pipeline_id", "", "SDP pipeline_id")
+dbutils.widgets.text("dlt_status", "", "SDP dlt_status")
+
+import json, uuid
+
+CATALOG     = dbutils.widgets.get("catalog").strip()
+SCHEMA      = dbutils.widgets.get("schema").strip()
+ORCH_STATUS = dbutils.widgets.get("orchestrator_status").strip()
+PIPELINE_ID = dbutils.widgets.get("pipeline_id").strip()
+DLT_STATUS  = dbutils.widgets.get("dlt_status").strip()
+try:
+    _NB_PATH = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+except Exception:
+    _NB_PATH = "<path unavailable>"
+print(f"📝 Execution-log notebook: {{_NB_PATH}}")
+
+try:
+    RESULTS = json.loads(dbutils.widgets.get("results_json") or "[]")
+except Exception:
+    RESULTS = []
+try:
+    GROUPS = [g for g in json.loads(dbutils.widgets.get("groups_json") or "[]") if g]
+except Exception:
+    GROUPS = []
+
+# SDP stage outcome derived from the pipeline status the orchestrator observed.
+_st = "success" if DLT_STATUS == "COMPLETED" else "failed"
+_total_rows = sum(int(r.get("rows", 0) or 0) for r in RESULTS if isinstance(r, dict))
+print(f"📝 Logging SDP stage: status={{_st}} groups={{len(GROUPS)}} rows={{_total_rows}} pipeline={{PIPELINE_ID}}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 🗄️ Update Metadata Tables
+
+# COMMAND ----------
+
+def _esc(v):
+    if v is None:
+        return "NULL"
+    return "'" + str(v).replace("'", "''") + "'"
+
+job_tbl  = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
+pipe_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_pipeline_metadata"
+run_tbl  = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history"
+
+updated_jobs = 0
+updated_pipes = 0
+inserted_runs = 0
+
+if not GROUPS:
+    print("⚠️ No group_ids provided — nothing to log")
+else:
+    _in = ", ".join(_esc(g) for g in GROUPS)
+
+    # 1. wf_job_metadata — mark the dlt_bronze_silver jobs for these groups
+    try:
+        spark.sql(f"""
+            UPDATE {{job_tbl}}
+            SET status = {{_esc(_st)}}, last_status = {{_esc(_st)}},
+                last_run_at = current_timestamp(), updated_at = current_timestamp()
+            WHERE stage = 'dlt_bronze_silver' AND group_id IN ({{_in}})
+        """)
+        updated_jobs = spark.sql(f"""
+            SELECT COUNT(*) FROM {{job_tbl}}
+            WHERE stage = 'dlt_bronze_silver' AND group_id IN ({{_in}})
+        """).collect()[0][0]
+        print(f"  ✅ wf_job_metadata: {{updated_jobs}} dlt_bronze_silver row(s) -> {{_st}}")
+    except Exception as e:
+        print(f"  ⚠️ wf_job_metadata update failed: {{e}}")
+
+    # 2. wf_pipeline_metadata — mark the pipeline groups
+    try:
+        spark.sql(f"""
+            UPDATE {{pipe_tbl}}
+            SET status = {{_esc(_st)}}, updated_at = current_timestamp()
+            WHERE group_id IN ({{_in}})
+        """)
+        updated_pipes = spark.sql(f"SELECT COUNT(*) FROM {{pipe_tbl}} WHERE group_id IN ({{_in}})").collect()[0][0]
+        print(f"  ✅ wf_pipeline_metadata: {{updated_pipes}} group(s) -> {{_st}}")
+    except Exception as e:
+        print(f"  ⚠️ wf_pipeline_metadata update failed: {{e}}")
+
+    # 3. wf_run_history — one dlt_bronze_silver run record per group's job
+    try:
+        _err = None if _st == "success" else f"SDP pipeline {{DLT_STATUS}}"
+        _jobs = spark.sql(f"""
+            SELECT job_id, job_name, full_table, load_type, watermark_column
+            FROM {{job_tbl}}
+            WHERE stage = 'dlt_bronze_silver' AND group_id IN ({{_in}})
+        """).collect()
+        for _j in _jobs:
+            _rid = uuid.uuid4().hex[:12]
+            spark.sql(f"""
+                INSERT INTO {{run_tbl}}
+                (run_id, job_id, job_name, stage, full_table, load_type, watermark_column,
+                 status, started_at, completed_at, rows_processed, error_message,
+                 dlt_status, dlt_pipeline_id)
+                VALUES (
+                    {{_esc(_rid)}}, {{_esc(_j['job_id'])}}, {{_esc(_j['job_name'])}}, 'dlt_bronze_silver',
+                    {{_esc(_j['full_table'])}}, {{_esc(_j['load_type'])}}, {{_esc(_j['watermark_column'])}},
+                    {{_esc(_st)}}, current_timestamp(), current_timestamp(), {{_total_rows}},
+                    {{_esc(_err)}}, {{_esc(DLT_STATUS)}}, {{_esc(PIPELINE_ID)}}
+                )
+            """)
+            inserted_runs += 1
+        print(f"  ✅ wf_run_history: inserted {{inserted_runs}} dlt_bronze_silver run record(s)")
+    except Exception as e:
+        print(f"  ⚠️ wf_run_history insert failed: {{e}}")
+
+# COMMAND ----------
+
+dbutils.notebook.exit(json.dumps({{
+    "status":            "COMPLETED",
+    "final_status":      _st,
+    "updated_jobs":      updated_jobs,
+    "updated_pipelines": updated_pipes,
+    "inserted_runs":     inserted_runs,
+}}))
+'''
+
+
 def _gen_dlt_pipeline(catalog, schema, landing_path, ts):
     return f'''# Databricks notebook source
 # MAGIC %md
@@ -3197,7 +3351,34 @@ else:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## �📊 Orchestration Summary
+# MAGIC ## 📝 Phase 5 — Run Execution Logging
+
+# COMMAND ----------
+
+log_status = "SKIPPED"
+if dlt_status == "COMPLETED":
+    try:
+        log_nb = f"{{WORKSPACE_PATH}}/05_Meta_ExecutionLog"
+        print(f"📝 Execution-log notebook: {{log_nb}}")
+        dbutils.notebook.run(log_nb, 1800, {{
+            "catalog": CATALOG, "schema": SCHEMA,
+            "results_json": json.dumps(extract_results),
+            "groups_json": json.dumps([g.get("group_id", "") for g in groups]),
+            "orchestrator_status": "COMPLETED" if not extract_fail else "PARTIAL",
+            "pipeline_id": pipeline_id,
+            "dlt_status": dlt_status,
+        }})
+        log_status = "COMPLETED"
+    except Exception as e:
+        log_status = f"FAILED: {{e}}"
+        print(f"  ⚠️ Execution logging failed: {{e}}")
+else:
+    print("⏭️ Skipping execution logging — Spark Declarative Pipeline did not complete successfully")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 📊 Orchestration Summary
 
 # COMMAND ----------
 
@@ -3210,6 +3391,7 @@ print(f"  📥 Extracts        : {{extract_ok}} ok / {{extract_fail}} failed")
 print(f"  ⚡ Spark Declarative Pipeline    : {{dlt_status}}")
 print(f"  🔄 Silver Relocated: {{silver_relocated}} ok / {{silver_failed}} failed")
 print(f"  📊 Reconciliation  : {{recon_status}}")
+print(f"  📝 Execution Log   : {{log_status}}")
 print(f"  📊 Rows (JDBC)     : {{total_rows:,}}")
 print(f"  🔗 Pipeline ID     : {{pipeline_id}}")
 
@@ -3228,6 +3410,7 @@ exit_payload = json.dumps({{
     "silver_failed":   silver_failed,
     "silver_errors":   silver_errors[:20],
     "recon_status":    recon_status,
+    "log_status":      log_status,
     "pipeline_id":     pipeline_id,
     "total_rows":      total_rows,
 }})
