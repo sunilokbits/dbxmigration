@@ -1395,10 +1395,6 @@ print(f"📁 Workspace path (sub-notebooks resolve from here): {{WORKSPACE_PATH}
 
 # COMMAND ----------
 
-# MAGIC %md
-
-# COMMAND ----------
-
 import json, uuid
 from datetime import datetime
 
@@ -2379,6 +2375,9 @@ except Exception:
     _NB_PATH = "<path unavailable>"
 print(f"📓 Orchestrator notebook: {{_NB_PATH}}")
 print(f"📁 Workspace path (all sub-notebooks resolve from here): {{WORKSPACE_PATH}}")
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## 🔍 Discover Extract Jobs
 
