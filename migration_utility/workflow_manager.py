@@ -2827,6 +2827,7 @@ def _execute_job_run(run_id: str, job_id: str):
                                     "dlt_status":      _p.get("dlt_status", ""),
                                     "extract_failed":  _p.get("extract_failed", 0),
                                     "silver_failed":   _p.get("silver_failed", 0),
+                                    "silver_errors":   _p.get("silver_errors", []),
                                 }
                                 # PARTIAL was previously not checked at all here --
                                 # some tables failing extraction or silver
@@ -2843,6 +2844,13 @@ def _execute_job_run(run_id: str, job_id: str):
                                         _dlt_err += f" ({_ext_fail} extract(s) failed)"
                                     if _slv_fail:
                                         _dlt_err += f" ({_slv_fail} silver finalize(s) failed)"
+                                    # Capture the exact per-table relocation errors
+                                    # (e.g. permission/source issues) in the run
+                                    # error so wf_run_history.error_message shows
+                                    # clearly WHICH table failed and WHY, not just a count.
+                                    _slv_errs = _p.get("silver_errors") or []
+                                    if _slv_errs:
+                                        _dlt_err += " | silver errors: " + "; ".join(str(e) for e in _slv_errs[:5])
                                     run["logs"].append(f"[{end_ts}] ⚠️ SDP pipeline {_ist} — {_dlt_err}")
                             except Exception as _parse_exc:
                                 # A malformed/unparseable result for this stage

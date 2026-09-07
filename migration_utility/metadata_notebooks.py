@@ -2976,6 +2976,7 @@ if dlt_status == "FAILED":
 
 silver_relocated = 0
 silver_failed    = 0
+silver_errors    = []
 
 if dlt_status == "COMPLETED":
     # Determine the silver catalog AND schema — use explicit widget first
@@ -3047,20 +3048,17 @@ if dlt_status == "COMPLETED":
                 print(f"    ⚠️ Source table unreadable: {{src_err}}")
 
             try:
-                # Drop existing destination to allow fresh copy
-                for _drop_sql in [
-                    f"DROP TABLE IF EXISTS {{dst_full}}",
-                ]:
-                    try:
-                        spark.sql(_drop_sql)
-                    except Exception:
-                        pass
-                _time.sleep(1)
-                spark.sql(f"CREATE TABLE {{dst_full}} AS SELECT * FROM {{src_full}}")
+                # Atomic + idempotent: CREATE OR REPLACE avoids the
+                # DROP→sleep→CREATE race where a concurrent orchestrator run
+                # (or a re-run) creates the destination between our DROP and
+                # our CREATE, raising TABLE_OR_VIEW_ALREADY_EXISTS. It also
+                # cleanly overwrites a stale copy left by an earlier partial run.
+                spark.sql(f"CREATE OR REPLACE TABLE {{dst_full}} AS SELECT * FROM {{src_full}}")
                 silver_relocated += 1
                 print(f"    ✅ Relocated {{stbl}}")
             except Exception as rel_err:
                 silver_failed += 1
+                silver_errors.append(f"{{clean_name}}: {{str(rel_err)[:300]}}")
                 print(f"    ❌ Failed to relocate {{stbl}}: {{rel_err}}")
 
         print(f"\\n📦 Silver relocation: {{silver_relocated}} ok / {{silver_failed}} failed")
@@ -3147,6 +3145,7 @@ exit_payload = json.dumps({{
     "dlt_status":      dlt_status,
     "silver_relocated": silver_relocated,
     "silver_failed":   silver_failed,
+    "silver_errors":   silver_errors[:20],
     "recon_status":    recon_status,
     "pipeline_id":     pipeline_id,
     "total_rows":      total_rows,
