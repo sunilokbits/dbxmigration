@@ -69,6 +69,8 @@ class FMRuntimeTests(unittest.TestCase):
         self.genie.resolve_configured_catalogs = Mock(side_effect=lambda: dict(self.catalogs))
         self.genie._build_configured_catalog_context = Mock(return_value="Settings: custom_meta.control\n")
         self.genie._serving_headers = Mock(return_value={"Content-Type": "application/json"})
+        self.genie._known_metadata_schema_context = Mock(
+            return_value="App metadata tables: `custom_meta`.`control`.`wf_run_history` — run_id, status, rows_processed\n")
         config = ModuleType("config_cache")
         config.get_config = Mock(side_effect=lambda: self.cfg)
         config.normalize_host = lambda host: (
@@ -128,15 +130,18 @@ class FMRuntimeTests(unittest.TestCase):
                     system = self.post.call_args.kwargs["json"]["messages"][0]["content"]
                     self.assertIn("Settings: custom_meta.control", system)
                     self.assertIn("observed_table (observed_col STRING)", system)
-                    self.assertIn("Never invent", system)
-                    for invented in ("admin_source", "bronze.hr", "silver.hr", "wf_job_metadata",
-                                     "bronze_customers", "dimemployee", "rows_processed"):
+                    # This app's own metadata tables (config-driven) are always supplied.
+                    self.assertIn("wf_run_history", system)
+                    self.assertIn("Do NOT invent", system)
+                    for invented in ("admin_source", "bronze.hr", "silver.hr",
+                                     "bronze_customers", "dimemployee"):
                         self.assertNotIn(invented, system)
         self.assertEqual(self.genie._build_configured_catalog_context.call_count, 6)
 
     def test_missing_discovery_has_no_default_schema(self):
         self.catalogs.clear()
         self.genie._build_configured_catalog_context.return_value = ""
+        self.genie._known_metadata_schema_context.return_value = ""
         self.discovery.get_relevant_schema_context.return_value = "Schema discovery not yet complete"
         for optimize in (False, True):
             self.assertEqual(self.chat("Show jobs", optimize_tokens=optimize).status_code, 200)

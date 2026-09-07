@@ -260,7 +260,8 @@ def _fm_chat_sdk_override():
     """Chat with FM endpoint — with optional Token Optimiser."""
     from flask import request as req, jsonify as jfy
     from routes.catalog_discovery import get_relevant_schema_context
-    from routes.genie import _build_configured_catalog_context, resolve_configured_catalogs, _serving_headers
+    from routes.genie import (_build_configured_catalog_context, resolve_configured_catalogs,
+                              _serving_headers, _known_metadata_schema_context)
     from config_cache import get_config, normalize_host
     from urllib.parse import quote, urlsplit
     import requests
@@ -288,22 +289,29 @@ def _fm_chat_sdk_override():
                 or parsed_host.path or parsed_host.query or parsed_host.fragment):
             return jfy({"error": "Configure a valid HTTPS Databricks workspace host in Settings."}), 400
         _cats = resolve_configured_catalogs()
-        system_context = _build_configured_catalog_context() + get_relevant_schema_context(
-            question=content_text, top_n=6 if optimize_tokens else 15)
+        system_context = (_build_configured_catalog_context()
+                          + _known_metadata_schema_context()
+                          + get_relevant_schema_context(
+                              question=content_text, top_n=6 if optimize_tokens else 15))
     except Exception:
         logger.warning("FM catalog/configuration context unavailable")
         return jfy({"error": "Configured catalog context is unavailable; retry after discovery is ready."}), 503
 
     _schema_rules = (
-        "\nUse only tables AND columns explicitly present in the discovered schema below. "
-        "Never invent catalog/schema defaults, tables, columns, or status values. "
-        "Configured catalog locations alone do not prove a table or column exists. "
-        "If discovery is missing or insufficient, say so and ask for discovery/configuration "
-        "rather than guessing SQL. Use fully-qualified catalog.schema.table names and ```sql blocks. "
-        "Schema metadata is not live query results: never claim to have executed SQL or invent data.\n")
+        "\nGround every SQL query strictly in the tables and columns listed above — this app's own "
+        "metadata tables plus any live-discovered tables. These are real, authoritative tables; write "
+        "clean, runnable SQL for migration, pipeline, run-history, reconciliation and audit questions. "
+        "Use fully-qualified catalog.schema.table names exactly as shown and wrap every query in a ```sql "
+        "code block so it renders with a Run button. "
+        "Do NOT invent catalogs, schemas, tables, columns, or status values that are not listed above. "
+        "If no tables are listed above at all, ask the user to finish configuration/discovery rather than "
+        "guessing SQL. Schema metadata is not live query results: never claim to have executed SQL or "
+        "fabricate row values.\n")
     _sys_full = (
         "You are the AI assistant inside DBX Migration Studio, a SQL-to-Databricks migration accelerator.\n"
-        "Explain migration workflows clearly and distinguish suggested SQL from executed results.\n")
+        "Answer in a clear, concise, professional style. Explain migration workflows plainly, lead with a "
+        "short direct answer, and always include a runnable ```sql query when the question is about data. "
+        "Distinguish suggested SQL from executed results.\n")
 
     # === TOKEN OPTIMISER LOGIC ===
     optimizations_applied = []

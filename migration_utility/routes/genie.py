@@ -136,6 +136,85 @@ def _render_faq(answer: str) -> str:
             .replace("{BRONZE}", _fq("bronze", "your configured Bronze catalog/schema"))
             .replace("{SILVER}", _fq("silver", "your configured Silver catalog/schema")))
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# KNOWN METADATA SCHEMA — authoritative, config-driven (permission-independent)
+# ══════════════════════════════════════════════════════════════════════════════
+# This app CREATES these tables itself (see workflow_manager._ensure_tables and
+# src/sql/init_app_tables.sql), so their names and columns are known facts, not
+# guesses. Supplying them lets Genie always write correct, runnable SQL for
+# migration/pipeline/run/reconciliation/audit questions even when live
+# information_schema discovery is blocked by Unity Catalog permissions -- and it
+# only ever qualifies them with the CONFIGURED metadata catalog (from config),
+# never a stale/hardcoded catalog name.
+_METADATA_TABLES = {
+    # workflow/pipeline metadata -> metadata_catalog.metadata_schema
+    "meta": [
+        ("wf_run_history",
+         "run_id, job_id, job_name, stage, full_table, load_type, status (created|running|success|failed), "
+         "started_at, completed_at, duration_sec, rows_processed, error_message, source_tag, dlt_status, "
+         "extract_failed_count, silver_failed_count"),
+        ("wf_job_metadata",
+         "job_id, job_name, stage, group_id, table_schema, table_name, full_table, load_type, status, "
+         "last_run_id, last_run_at, last_status, run_count, fail_count, enabled, job_order"),
+        ("wf_pipeline_metadata",
+         "group_id, table_schema, table_name, full_table, load_type, watermark_column, status, created_at, updated_at"),
+        ("wf_source_tables",
+         "source_id, source_type, server, database_name, table_schema, table_name, full_name, col_count, "
+         "row_estimate, discovered_at"),
+        ("wf_watermark_metadata", "table_name, watermark_column, last_value, updated_at"),
+        ("wf_scheduler_config",
+         "schedule_id, table_name, table_schema, group_id, job_names, type, cron, interval_value, interval_unit, "
+         "status, created_at, last_run, next_run"),
+        ("reconcilationdetails",
+         "recon_run_id, pipeline_run_id, job_id, source_table, bronze_table, column_name, data_type, "
+         "source_value, bronze_value, variance, variance_pct, status, recon_timestamp"),
+    ],
+    # app runtime/admin tables -> metadata_catalog.migration_app (fixed schema,
+    # see dbsql_client.get_catalog_schema)
+    "app": [
+        ("migration_jobs", "job_id, payload, updated_by, updated_at"),
+        ("audit_log",
+         "event_id, user_email, user_name, action, resource_type, resource_id, details_json, ip_address, "
+         "response_status, created_at"),
+        ("user_roles", "user_email, role, display_name, assigned_by, updated_at"),
+        ("job_schedules", "schedule_id, schedule_data, is_active, created_by, updated_at"),
+        ("dm_models", "model_id, payload, updated_by, updated_at"),
+    ],
+}
+# App admin tables use a fixed schema name inside the metadata catalog
+# (dbsql_client.get_catalog_schema() returns metadata_catalog + "migration_app").
+_APP_ADMIN_SCHEMA = "migration_app"
+
+
+def _known_metadata_schema_context() -> str:
+    """List THIS app's own metadata tables with their columns, fully qualified
+    with the CONFIGURED metadata catalog (from config) across BOTH of its
+    schemas -- the workflow/pipeline metadata schema and the app-admin schema.
+
+    Authoritative and permission-independent: these tables are created by the
+    app itself, so Genie can always write correct SQL against them even when
+    live information_schema discovery is blocked. Returns "" (no guessing) when
+    no metadata catalog is configured yet.
+    """
+    try:
+        from config_cache import get_config
+        cfg = get_config() or {}
+    except Exception:
+        cfg = {}
+    meta_cat = str(cfg.get("metadata_catalog") or "").strip()
+    meta_sch = str(cfg.get("metadata_schema") or "").strip()
+    if not meta_cat or not meta_sch:
+        return ""
+    lines = ["This app's own migration metadata tables (authoritative — query these directly for "
+             "migration / pipeline / run-history / reconciliation / audit questions):\n"]
+    for tbl, cols in _METADATA_TABLES["meta"]:
+        lines.append(f"  • `{meta_cat}`.`{meta_sch}`.`{tbl}`  —  {cols}")
+    for tbl, cols in _METADATA_TABLES["app"]:
+        lines.append(f"  • `{meta_cat}`.`{_APP_ADMIN_SCHEMA}`.`{tbl}`  —  {cols}")
+    lines.append("")
+    return "\n".join(lines)
+
 # ══════════════════════════════════════════════════════════════════════════════
 # FAQ KNOWLEDGE BASE — Rich detailed answers for app-level questions
 # ══════════════════════════════════════════════════════════════════════════════

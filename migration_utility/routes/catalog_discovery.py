@@ -347,20 +347,38 @@ def _full_discovery(include_columns=False, catalogs_filter=None):
     _runtime_local.scan_config = config
     try:
         pairs = [p for p in scope[2] if catalogs_filter is None or p[0] in catalogs_filter]
-        all_schemas, all_tables = [], []
+        all_schemas, all_tables, failed_pairs = [], [], []
         columns_truncated = False
         for catalog, schema in pairs:
             if _sync_scope()[2] != generation:
                 return
-            tables = _discover_tables(catalog, schema)
-            if include_columns and tables:
-                columns, truncated = _discover_schema_columns(catalog, schema)
-                columns_truncated = columns_truncated or truncated
-                for table in tables:
-                    table["columns"] = columns.get(table["table"], [])
+            # Tolerate a single inaccessible/stale pair (e.g. a bronze/silver
+            # catalog the app's own principal has no grant on -> 403): skip it
+            # and keep the pairs that DID resolve, instead of letting one
+            # failure abort the whole scan and leave Genie with no schema at
+            # all -- previously a permission gap on one configured catalog
+            # wiped even the accessible metadata catalog's tables.
+            try:
+                tables = _discover_tables(catalog, schema)
+                if include_columns and tables:
+                    columns, truncated = _discover_schema_columns(catalog, schema)
+                    columns_truncated = columns_truncated or truncated
+                    for table in tables:
+                        table["columns"] = columns.get(table["table"], [])
+            except Exception as exc:
+                failed_pairs.append(f"{catalog}.{schema}: {exc}")
+                logger.warning("[CatalogDiscovery] Skipped inaccessible %s.%s: %s", catalog, schema, exc)
+                continue
             all_schemas.append({"catalog": catalog, "schema": schema})
             all_tables.extend(tables)
-        all_catalogs = [{"name": name} for name in sorted({p[0] for p in pairs})]
+        # Total failure — every configured pair errored (e.g. an unreachable
+        # warehouse or all catalogs ungranted). Do NOT publish an empty
+        # "successful" scan: surface it as an error and leave last_refreshed
+        # untouched so it retries instead of masking a permission/transport
+        # problem as an authoritative "no tables exist".
+        if pairs and failed_pairs and not all_schemas:
+            raise RuntimeError("; ".join(failed_pairs))
+        all_catalogs = [{"name": name} for name in sorted({s["catalog"] for s in all_schemas})]
         if _sync_scope()[2] != generation:
             return
         with _cache_lock:

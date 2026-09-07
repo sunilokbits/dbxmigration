@@ -553,7 +553,29 @@ class SchemaRetrievalTests(unittest.TestCase):
         self.r["_full_discovery"](include_columns=True)
         self.assertIn("403", self.r["_cache"]["error"])
         self.assertIsNone(self.r["_cache"]["last_refreshed"])
-        self.assertEqual(self.http.post.call_count, 1)
+        # Resilient scan attempts each configured pair (one 403 on a business
+        # catalog must not abort the others), but when EVERY pair fails it is
+        # surfaced as an error and never published as a successful empty scan.
+        self.assertEqual(self.http.post.call_count, len(self.pairs))
+        self.assertFalse(self.r["_cache"]["refresh_in_progress"])
+
+    def test_partial_failure_still_publishes_accessible_pair(self):
+        # One configured catalog is ungranted (403) but the metadata catalog
+        # resolves -- the scan must publish the accessible tables instead of
+        # discarding everything because of the one inaccessible catalog.
+        self.pairs = {"metadata": ("meta", "control"), "app": ("blocked", "denied")}
+
+        def discover(catalog, schema):
+            if catalog == "blocked":
+                raise RuntimeError("HTTP 403 permission denied")
+            return [table(catalog=catalog, schema=schema)]
+
+        self.r["_discover_tables"] = Mock(side_effect=discover)
+        self.r["_discover_schema_columns"] = Mock(return_value=({}, False))
+        self.r["_full_discovery"](include_columns=True)
+        self.assertEqual({t["catalog"] for t in self.r["_cache"]["tables"]}, {"meta"})
+        self.assertIsNotNone(self.r["_cache"]["last_refreshed"])
+        self.assertIsNone(self.r["_cache"]["error"])
         self.assertFalse(self.r["_cache"]["refresh_in_progress"])
 
     def test_metadata_names_are_escaped(self):
