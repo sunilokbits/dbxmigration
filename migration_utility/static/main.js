@@ -1469,7 +1469,7 @@ async function wfCreateMetadataFlow(){
   const btn=G('btnWfMeta');btn.disabled=true;btn.textContent='Provisioning tables…';
   const dot=G('wfMetaDot'),lbl=G('wfMetaLabel'),msg=G('wfMetaMsg');
   dot.style.background='#f59e0b';lbl.textContent='Provisioning…';
-  msg.innerHTML='<span style="color:var(--amber);">Creating 5 Delta tables in '+c.catalog+'.'+c.schema+'…</span>';
+  msg.innerHTML='<span style="color:var(--amber);">Creating metadata, reconciliation &amp; app tables in '+c.catalog+'.'+c.schema+'…</span>';
   try{
     const r=await fetch('/api/v1/workflow/metadata/init',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(c)});
     const d=await r.json();

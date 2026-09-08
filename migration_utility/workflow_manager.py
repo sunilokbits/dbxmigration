@@ -908,6 +908,13 @@ def init_metadata_flow(host: str, token: str, catalog: str = "main",
     # right away instead of only the wf_* tables this function just created.
     _save_deploy_config_field("metadata_catalog", _dbr_catalog)
     _save_deploy_config_field("metadata_schema", _dbr_schema)
+    # One-click parity with the CI/CD init_app_tables.py path: also create
+    # this app's own persistence tables (migration_jobs, dm_models, app_config,
+    # audit_log, job_schedules, user_roles) AND run the app-SP grants here, so
+    # a single "Create MetadataFlow" click provisions everything -- metadata +
+    # reconciliation + app/RBAC tables -- without depending on the deploy
+    # pipeline having run init_app_tables.py first.
+    _app_tables_ok = False
     try:
         from config_cache import get_config as _get_app_cfg, save_config as _save_app_cfg
         _app_cfg = dict(_get_app_cfg() or {})
@@ -917,16 +924,32 @@ def init_metadata_flow(host: str, token: str, catalog: str = "main",
         from dbsql_client import reset_tables_initialised, ensure_tables
         reset_tables_initialised()
         ensure_tables()
+        _app_tables_ok = True
     except Exception as exc:
         logger.warning("Could not persist metadata catalog/schema to app config or replicate app tables: %s", exc)
 
+    _meta_tables = [TBL_PIPELINES, TBL_JOBS, TBL_JOBS_HISTORY, TBL_RUNS,
+                    TBL_WATERMARKS, TBL_SOURCES, TBL_SCH_CONFIG, TBL_SCH_HISTORY,
+                    RECON_TABLE]
+    _app_tables = ["migration_jobs", "dm_models", "app_config", "audit_log",
+                   "job_schedules", "user_roles"]
+    _all_tables = _meta_tables + (_app_tables if _app_tables_ok else [])
+
+    _msg = (
+        f"MetadataFlow created — {len(_all_tables)} Delta tables provisioned in "
+        f"{_dbr_catalog}.{_dbr_schema} "
+        f"({len(_meta_tables) - 1} metadata + reconciliation"
+        + (f" + {len(_app_tables)} app/RBAC" if _app_tables_ok else "")
+        + ")"
+    )
+
     return {
         "success": True,
-        "message": f"MetadataFlow created — 8 Delta tables provisioned in {_dbr_catalog}.{_dbr_schema}",
+        "message": _msg,
         "catalog": _dbr_catalog,
         "schema": _dbr_schema,
         "warehouse_id": _dbr_warehouse_id,
-        "tables": [TBL_PIPELINES, TBL_JOBS, TBL_JOBS_HISTORY, TBL_RUNS, TBL_WATERMARKS, TBL_SOURCES, TBL_SCH_CONFIG, TBL_SCH_HISTORY],
+        "tables": _all_tables,
     }
 
 
