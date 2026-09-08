@@ -319,6 +319,20 @@ def get_dq_metrics():
             except Exception as e:
                 errors.append(f"{fqn}: {str(e)[:150]}")
 
+        # Only surface metrics for tables that were actually migrated (a
+        # successful pipeline job exists) — drops stale/orphan __dq_metrics
+        # rows left behind by tables that were never run through this app.
+        # Empty migrated set = metadata not initialized / query failed → keep
+        # all rows rather than blanking the dashboard.
+        try:
+            import workflow_manager as _wfm
+            _migrated = _wfm.get_migrated_tables()
+            if _migrated:
+                rows = [r for r in rows
+                        if _wfm._normalize_table_name(r.get("table_name")) in _migrated]
+        except Exception as _exc:
+            logger.warning("Could not restrict DQ metrics to migrated tables: %s", _exc)
+
         # Normalise types for the frontend
         for r in rows:
             for k in ("input_rows", "output_rows", "rejected_rows", "null_rows",

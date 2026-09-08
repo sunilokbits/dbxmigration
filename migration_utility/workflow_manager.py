@@ -3242,6 +3242,46 @@ def _rows_from_exec(result: dict) -> list[dict]:
     return [dict(zip(cols, row)) for row in result.get("result", {}).get("data_array", [])]
 
 
+def _normalize_table_name(name) -> str:
+    """Reduce a table identifier to a bare, comparable key: lowercase, strip
+    any catalog/schema qualifier and any bronze_/silver_/gold_ tier prefix.
+    So 'dbo.DimLocation', 'DimLocation', and 'bronze_dimlocation' all map to
+    'dimlocation'."""
+    n = str(name or "").strip().lower()
+    if "." in n:
+        n = n.split(".")[-1]
+    for pfx in ("bronze_", "silver_", "gold_"):
+        if n.startswith(pfx):
+            n = n[len(pfx):]
+            break
+    return n
+
+
+def get_migrated_tables() -> set:
+    """Normalized names of tables actually migrated through the pipeline (a
+    job with status='success' exists for them in wf_job_metadata).
+
+    Used to constrain the analytics screens (Schema Comparison, Data Quality)
+    to only tables that were run through the pipeline — instead of every
+    discovered source table or every stale __dq_metrics row. Returns an empty
+    set when metadata isn't initialized or the query fails; callers MUST treat
+    an empty set as 'don't filter' so a transient error never hides everything.
+    """
+    if not _metadata_initialized:
+        names = {j.get("full_table") for j in JOB_REGISTRY.values()
+                 if j.get("status") == "success" and j.get("full_table")}
+        return {_normalize_table_name(n) for n in names if n}
+    try:
+        rows = _rows_from_exec(_exec_sql(
+            f"SELECT DISTINCT full_table FROM {_fqn(TBL_JOBS)} "
+            f"WHERE status = 'success' AND full_table IS NOT NULL"
+        ))
+        return {_normalize_table_name(r.get("full_table")) for r in rows if r.get("full_table")}
+    except Exception as exc:
+        logger.warning("get_migrated_tables query failed: %s", exc)
+        return set()
+
+
 def get_dashboard_stats() -> dict:
     """Aggregate statistics for the workflow dashboard.
 

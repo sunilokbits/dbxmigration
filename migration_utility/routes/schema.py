@@ -280,6 +280,19 @@ def compare_schemas():
             _seen_lower[low] = stripped
     all_table_names = sorted(_seen_lower.values(), key=str.lower)
 
+    # Only compare tables that were actually migrated (a successful pipeline
+    # job exists for them), not every discovered source/target table. An empty
+    # migrated set means metadata isn't initialized or the query failed — in
+    # that case fall back to the full list rather than hiding everything.
+    try:
+        import workflow_manager as _wfm
+        _migrated = _wfm.get_migrated_tables()
+        if _migrated:
+            all_table_names = [t for t in all_table_names
+                               if _wfm._normalize_table_name(t) in _migrated]
+    except Exception as _exc:
+        logger.warning("Could not restrict comparison to migrated tables: %s", _exc)
+
     tgt_lookup = {}
     for k in tgt_tables:
         stripped = _strip_tier_prefix(k).lower()
