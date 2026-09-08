@@ -3545,7 +3545,105 @@ if dlt_status == "FAILED":
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 🔄 Phase 3 — Silver Published Directly (relocation now a safe no-op)
+# MAGIC ## � Phase 2b — Log SDP Data-Quality Metrics
+# MAGIC SDP enforces quality via `@dlt.expect*` and records results in the
+# MAGIC pipeline event log (NOT a table). Read that event log and write one
+# MAGIC row per table/layer into the central `dataquality.dq_metrics` table so
+# MAGIC the Data Quality dashboard has real numbers for SDP runs.
+
+# COMMAND ----------
+
+if dlt_status == "COMPLETED":
+    try:
+        _dq_tbl = f"`{{CATALOG}}`.`dataquality`.`dq_metrics`"
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS `{{CATALOG}}`.`dataquality`")
+        spark.sql(f"""
+            CREATE TABLE IF NOT EXISTS {{_dq_tbl}} (
+                run_id STRING, job_id STRING, table_name STRING, layer STRING,
+                input_rows BIGINT, output_rows BIGINT, rejected_rows BIGINT,
+                null_rows BIGINT, dupe_rows BIGINT, quarantined_rows BIGINT,
+                schema_drift BOOLEAN, dq_checks_passed INT, dq_checks_total INT,
+                dq_score DOUBLE, checked_at TIMESTAMP
+            ) USING DELTA
+        """)
+
+        # Pull the event log for this pipeline (a few pages, newest first).
+        _all_events = []
+        _pg = None
+        for _ in range(12):
+            _params = {{"max_results": 250, "order_by": "timestamp desc"}}
+            if _pg:
+                _params["page_token"] = _pg
+            _er = requests.get(f"{{HOST}}/api/2.0/pipelines/{{pipeline_id}}/events", params=_params, headers=_hdrs)
+            if not _er.ok:
+                break
+            _ej = _er.json()
+            _all_events.extend(_ej.get("events", []))
+            _pg = _ej.get("next_page_token")
+            if not _pg:
+                break
+
+        # Latest COMPLETED flow_progress event per dataset carries the row
+        # counts + expectation results. Events are newest-first, so the first
+        # time we see a dataset is its latest state.
+        _by_ds = {{}}
+        for _e in _all_events:
+            if _e.get("event_type") != "flow_progress":
+                continue
+            _fp = (_e.get("details", {{}}) or {{}}).get("flow_progress", {{}}) or {{}}
+            if _fp.get("status") != "COMPLETED":
+                continue
+            _org = _e.get("origin", {{}}) or {{}}
+            if update_id and _org.get("update_id") not in (update_id, None, ""):
+                continue
+            _ds = _org.get("flow_name") or _org.get("dataset_name")
+            if _ds and _ds not in _by_ds:
+                _by_ds[_ds] = _fp
+
+        _dq_written = 0
+        for _ds, _fp in _by_ds.items():
+            _metrics = _fp.get("metrics", {{}}) or {{}}
+            _dq = _fp.get("data_quality", {{}}) or {{}}
+            _exps = _dq.get("expectations", []) or []
+            _out = int(_metrics.get("num_output_rows", 0) or 0)
+            _dropped = int(_dq.get("dropped_records", 0) or 0)
+            _passed = sum(int(x.get("passed_records", 0) or 0) for x in _exps)
+            _failed = sum(int(x.get("failed_records", 0) or 0) for x in _exps)
+            _checks_total = len(_exps)
+            _checks_passed = sum(1 for x in _exps if int(x.get("failed_records", 0) or 0) == 0)
+            _score = round(_passed / (_passed + _failed) * 100, 1) if (_passed + _failed) > 0 else 100.0
+            # Dataset name is the fully-qualified DPM name, e.g.
+            # "dbx_bronze.sales.products" / "dbx_silver.sales.products".
+            _parts = str(_ds).split(".")
+            _last = _parts[-1]
+            _cat0 = (_parts[0].lower() if _parts else "")
+            _last_l = _last.lower()
+            _layer = "silver" if ("silver" in _cat0 or _last_l.startswith("silver_")) else "bronze"
+            _tname = _last
+            for _pfx in ("bronze_", "silver_"):
+                if _last_l.startswith(_pfx):
+                    _tname = _last[len(_pfx):]
+                    break
+            _rid = update_id or uuid.uuid4().hex[:12]
+            _q2 = lambda v: str(v).replace("'", "''")
+            spark.sql(f"""
+                INSERT INTO {{_dq_tbl}} VALUES (
+                    '{{_q2(_rid)}}', '{{_q2(GROUP_ID)}}', '{{_q2(_tname)}}', '{{_layer}}',
+                    {{_out + _dropped}}, {{_out}}, {{_dropped}},
+                    0, 0, {{_dropped}},
+                    false, {{_checks_passed}}, {{_checks_total}},
+                    {{_score}}, current_timestamp()
+                )
+            """)
+            _dq_written += 1
+        print(f"📊 Logged {{_dq_written}} SDP data-quality metric row(s) to {{_dq_tbl}}")
+    except Exception as _dqe:
+        print(f"⚠️ Could not log SDP DQ metrics (non-blocking): {{_dqe}}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## �🔄 Phase 3 — Silver Published Directly (relocation now a safe no-op)
 
 # COMMAND ----------
 
