@@ -2410,18 +2410,38 @@ print(f"📓 SDP pipeline notebook: {{_NB_PATH}}")
 
 job_tbl = f"`{{META_CATALOG}}`.`{{META_SCHEMA}}`.wf_job_metadata"
 
-_gf = f"AND group_id = '{{GROUP_ID}}'" if GROUP_ID else ""
-
-# In DLT mode, jobs are stored with stage='dlt_bronze_silver' (single stage).
-# In standard mode, they use 'landing_to_bronze' / 'bronze_to_silver'.
-# Query for ALL matching stages so both modes work.
-all_dlt_jobs = [r.asDict() for r in spark.sql(f"""
-    SELECT DISTINCT table_name, full_table, target_config, load_type
+# Pipeline REUSE per catalog.schema: this single pipeline owns EVERY enabled
+# table that targets its bronze catalog + schema (not just one group), so
+# multiple groups sharing a schema no longer spawn competing pipelines that
+# fight over table ownership. Dedup by table_name across groups.
+_all_rows = [r.asDict() for r in spark.sql(f"""
+    SELECT DISTINCT table_name, full_table, target_config, load_type, group_id
     FROM {{job_tbl}}
     WHERE stage IN ('landing_to_bronze', 'bronze_to_silver', 'dlt_bronze_silver')
       AND (enabled = true OR enabled IS NULL)
-      {{_gf}}
 """).collect()]
+
+def _targets_this_pipeline(_tc_json):
+    try:
+        _tc = json.loads(_tc_json or "{{}}")
+    except Exception:
+        return False
+    _bc = (_tc.get("bronze_catalog") or "").strip()
+    _ts = (_tc.get("target_schema") or "").strip() or META_SCHEMA
+    if BRONZE_CATALOG and _bc and _bc != BRONZE_CATALOG:
+        return False
+    return (not TARGET_SCHEMA) or (_ts == TARGET_SCHEMA)
+
+_seen = set()
+all_dlt_jobs = []
+for _j in _all_rows:
+    if not _targets_this_pipeline(_j.get("target_config")):
+        continue
+    _tn = (_j.get("table_name") or "").lower()
+    if not _tn or _tn in _seen:
+        continue
+    _seen.add(_tn)
+    all_dlt_jobs.append(_j)
 
 # Both bronze and silver use the same job list
 bronze_jobs = all_dlt_jobs
@@ -2498,8 +2518,31 @@ if not bronze_jobs:
 # CF_EMPTY_DIR_FOR_SCHEMA_INFERENCE error that kills the whole pipeline.
 # NOTE: dbutils.fs.ls() is BLOCKED inside Spark Declarative Pipelines (PY4J_BLOCKED_API).
 # Use spark.read.format("parquet") instead — it is DLT-compatible.
+# FIX 4: defensive foreign-ownership guard. Best-effort — if a target table
+# already exists and is owned by a DIFFERENT pipeline, skip it instead of
+# fighting over ownership. Returns False on ANY uncertainty so it never wrongly
+# skips a table that should be built.
+try:
+    _SELF_PID = spark.conf.get("pipelines.id", "")
+except Exception:
+    _SELF_PID = ""
+
+def _foreign_owned(_fqn):
+    try:
+        if not spark.catalog.tableExists(_fqn):
+            return False
+        _props = {{r[0].strip().lower(): (r[1] or "") for r in spark.sql(f"DESCRIBE EXTENDED {{_fqn}}").collect()}}
+        _owner = _props.get("pipelines.pipelineid", "") or _props.get("pipeline id", "")
+        return bool(_owner) and _owner != _SELF_PID
+    except Exception:
+        return False
+
 _bronze_registered = []
 for _j in bronze_jobs:
+    _btbl = f"{{BRONZE_CATALOG}}.{{TARGET_SCHEMA}}.{{_j['table_name'].lower()}}"
+    if _foreign_owned(_btbl):
+        print(f"  ⏭️ Skipping bronze {{_j['table_name']}} — {{_btbl}} is owned by another pipeline")
+        continue
     _landing = f"{{LANDING_PATH}}/{{_j['table_name']}}"
     try:
         _check = spark.read.format("parquet").load(_landing).limit(1).count()
@@ -2600,6 +2643,13 @@ def _make_silver(job):
 # (i.e. tables that had landing data)
 for _j in silver_jobs:
     if _j["table_name"] in _bronze_registered:
+        if SILVER_CATALOG and SILVER_CATALOG != BRONZE_CATALOG:
+            _stbl = f"{{SILVER_CATALOG}}.{{TARGET_SCHEMA}}.{{_j['table_name'].lower()}}"
+        else:
+            _stbl = f"{{BRONZE_CATALOG}}.{{TARGET_SCHEMA}}.silver_{{_j['table_name'].lower()}}"
+        if _foreign_owned(_stbl):
+            print(f"  ⏭️ Skipping silver {{_j['table_name']}} — {{_stbl}} is owned by another pipeline")
+            continue
         _make_silver(_j)
     else:
         print(f"  ⏭️ Skipping silver for {{_j['table_name']}}: no bronze table registered")
@@ -2899,7 +2949,6 @@ if extract_fail:
 
 # COMMAND ----------
 
-DLT_NAME = f"MetadataPipeline_{{GROUP_ID}}" if GROUP_ID else "MetadataPipeline_All"
 DLT_NB   = f"{{WORKSPACE_PATH}}/02_Meta_SDP_Pipeline"
 print(f"⚡ SDP pipeline notebook: {{DLT_NB}}")
 
@@ -2945,6 +2994,14 @@ if not DLT_CATALOG or DLT_CATALOG == CATALOG:
 if not DLT_SCHEMA:
     DLT_SCHEMA = "hr"
     print(f"⚠️ DLT_SCHEMA was empty, defaulting to 'hr'")
+
+# Pipeline REUSE: name by target catalog.schema (NOT per group) so multiple
+# groups sharing a schema reuse ONE pipeline instead of spawning competing
+# pipelines that fight over the same streaming table's ownership.
+import re as _re_name
+_safe_name = lambda s: _re_name.sub(r'[^A-Za-z0-9_]', '_', str(s or ''))
+DLT_NAME = f"MetadataPipeline_{{_safe_name(DLT_CATALOG)}}_{{_safe_name(DLT_SCHEMA)}}"
+print(f"⚡ Shared SDP pipeline (one per catalog.schema): {{DLT_NAME}}")
 
 # Ensure the DLT output schema exists
 try:
@@ -3071,15 +3128,17 @@ for p in _all_pipelines:
         if p_cat != DLT_CATALOG or p_sch != DLT_SCHEMA:
             continue
 
-        # Pipeline belongs to a group_id that is no longer active → stale
-        if p_gid and p_gid not in _active_groups:
-            _stale_ids.append((pid, pname, p_gid))
+        # Pipeline reuse: ANY other pipeline targeting this catalog.schema is a
+        # legacy per-group MetadataPipeline_<gid> now superseded by the single
+        # shared per-schema pipeline (DLT_NAME) — mark it stale so its table
+        # ownership is released and the shared pipeline can (re)claim the tables.
+        _stale_ids.append((pid, pname, p_gid))
     except Exception:
         pass
 
 # Delete stale pipelines so their table ownership is released
 for _s_pid, _s_name, _s_gid in _stale_ids:
-    print(f"🗑️ Deleting stale Spark Declarative Pipeline '{{_s_name}}' ({{_s_pid}}) — group {{_s_gid}} no longer active")
+    print(f"🗑️ Deleting legacy per-group pipeline '{{_s_name}}' ({{_s_pid}}) — superseded by shared {{DLT_NAME}}")
     try:
         requests.delete(f"{{HOST}}/api/2.0/pipelines/{{_s_pid}}", headers=_hdrs)
         print(f"   ✅ Deleted")
@@ -3231,6 +3290,30 @@ if _dropped_pre:
     print(f"🧹 Dropped {{_dropped_pre}} pre-existing non-DLT tables to avoid collisions")
 else:
     print(f"✅ No pre-existing table collisions found")
+
+# FIX 2: drop legacy PREFIXED orphan streaming tables. Under Direct Publishing
+# Mode the pipeline publishes UN-prefixed tables, so any leftover `bronze_<t>` /
+# `silver_<t>` here is an orphan from a now-deleted legacy per-group pipeline
+# (deleted in the stale-cleanup above). Drop them so they don't sit next to the
+# clean un-prefixed tables.
+_orphan_names = []
+for _tname in _dlt_job_names:
+    _tl = _tname.lower()
+    _orphan_names.append(f"{{DLT_CATALOG}}.{{DLT_SCHEMA}}.bronze_{{_tl}}")
+    _orphan_names.append(f"{{DLT_CATALOG}}.{{DLT_SCHEMA}}.silver_{{_tl}}")
+    _orphan_names.append(f"{{_SILVER_CATALOG_ORCH}}.{{DLT_SCHEMA}}.silver_{{_tl}}")
+_dropped_orphan = 0
+for _on in set(_orphan_names):
+    try:
+        if spark.catalog.tableExists(_on):
+            _p = _on.split(".")
+            spark.sql(f"DROP TABLE IF EXISTS `{{_p[0]}}`.`{{_p[1]}}`.`{{_p[2]}}`")
+            print(f"  🧹 Dropped legacy prefixed orphan: {{_on}}")
+            _dropped_orphan += 1
+    except Exception:
+        pass
+if _dropped_orphan:
+    print(f"🧹 Dropped {{_dropped_orphan}} legacy prefixed orphan table(s)")
 
 # COMMAND ----------
 
