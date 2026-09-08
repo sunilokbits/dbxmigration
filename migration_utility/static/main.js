@@ -3140,19 +3140,32 @@ async function _wfFetchPipelineLogs(groupId){
     const r=await fetch('/api/v1/workflow/runs?group_id='+encodeURIComponent(groupId)+'&limit=30');
     const d=await r.json();
     if(!d.success)return;
+    // Ignore a late response for a pipeline the user already switched away from.
+    if(_wfLogGroupId && groupId!==_wfLogGroupId) return;
     const logEl=G('wfPipelineLogs');
     const runs=d.runs||[];
     if(!runs.length){
       logEl.innerHTML='<div style="color:#6c7086;">// No runs recorded yet for this pipeline — click ⚡ Databricks to start</div>';
+      logEl.dataset.sig='empty';
       return;
     }
+    // Efficient refresh: skip the (flickery) full re-render when nothing has
+    // actually changed since the last poll — compare a cheap signature built
+    // from each run's status, log-line count and error.
+    const sig=runs.map(r=>r.run_id+':'+r.status+':'+((r.logs||[]).length)+':'+(r.rows_processed||0)+':'+(r.error?1:0)).join('|');
+    let hasRunning=runs.some(r=>r.status==='running');
+    if(logEl.dataset.sig===sig){
+      logEl.dataset.hasRunning=hasRunning?'1':'0';
+      return;
+    }
+    // Preserve the user's scroll position: only auto-scroll to the newest
+    // line if they were already at (or near) the bottom before this refresh.
+    const nearBottom=(logEl.scrollHeight-logEl.scrollTop-logEl.clientHeight)<40;
     let html='<div style="color:#89dceb;margin-bottom:10px;font-weight:600;">// Pipeline Execution Logs — '+runs.length+' run'+(runs.length>1?'s':'')+'</div>';
     const _SL={extract:'Extract',landing_to_bronze:'Landing→Bronze',bronze_to_silver:'Bronze→Silver',dlt_bronze_silver:'⚡ SDP Bronze+Silver'};
-    let hasRunning=false;
     runs.forEach(run=>{
       const sc={success:'#a6e3a1',failed:'#f38ba8',running:'#89b4fa',created:'#6c7086'};
       const icon={success:'✅',failed:'❌',running:'🔄',created:'⏸'};
-      if(run.status==='running') hasRunning=true;
       const stageLabel=run.stage?(' <span style="font-size:9px;padding:1px 5px;border-radius:4px;background:#45475a;color:#89dceb;margin-left:6px;">'+(_SL[run.stage]||run.stage)+'</span>'):'';
       html+='<div style="margin-bottom:12px;padding:8px 10px;border:1px solid #313244;border-radius:6px;background:#181825;">';
       html+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">';
@@ -3193,7 +3206,8 @@ async function _wfFetchPipelineLogs(groupId){
       html+='</div>';
     });
     logEl.innerHTML=html;
-    logEl.scrollTop=logEl.scrollHeight;
+    logEl.dataset.sig=sig;
+    if(nearBottom) logEl.scrollTop=logEl.scrollHeight;
     // Store running state for poll decision
     logEl.dataset.hasRunning=hasRunning?'1':'0';
   }catch(e){console.error('_wfFetchPipelineLogs',e);}

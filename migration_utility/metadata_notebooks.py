@@ -2816,13 +2816,43 @@ if _dups:
         GROUP BY full_table HAVING COUNT(DISTINCT group_id) > 1
     """).collect()
     if _still:
-        _msg = "; ".join(f"'{{r['full_table']}}' in {{r['n']}} groups" for r in _still)
-        raise ValueError(
-            "DUPLICATE PIPELINE GROUPS DETECTED: " + _msg +
-            ". Only one group per source table is allowed. Please remove duplicates "
-            "from wf_pipeline_metadata before running."
-        )
-    print("✅ Duplicate groups resolved — one active group per source table")
+        # A user's accidental duplicate must NOT hard-fail the whole run. The
+        # per-schema SDP pipeline dedups by table_name downstream (one pipeline
+        # per catalog.schema), so a lingering duplicate group is harmless. Force
+        # a deterministic keep-one resolution, then CONTINUE with a clear notice.
+        _dup_names = []
+        for _r in _still:
+            _ft2 = _r["full_table"]
+            _dup_names.append(f"{{_ft2}} ({{_r['n']}} groups)")
+            try:
+                _keep2 = spark.sql(
+                    f"SELECT group_id FROM {{_pipe_tbl}} WHERE full_table = '{{_q(_ft2)}}' "
+                    f"AND lower(coalesce(status,'')) <> 'superseded' "
+                    f"ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, group_id DESC LIMIT 1"
+                ).first()
+                _kg = _keep2["group_id"] if _keep2 else None
+                if _kg:
+                    spark.sql(f"UPDATE {{_job_tbl}} SET enabled = false, updated_at = current_timestamp() "
+                              f"WHERE full_table = '{{_q(_ft2)}}' AND group_id <> '{{_q(_kg)}}'")
+                    spark.sql(f"UPDATE {{_pipe_tbl}} SET status = 'superseded', updated_at = current_timestamp() "
+                              f"WHERE full_table = '{{_q(_ft2)}}' AND group_id <> '{{_q(_kg)}}'")
+            except Exception as _fe:
+                print(f"    ⚠️ Forced dedup of {{_ft2}} could not fully persist: {{_fe}}")
+        print(f"⚠️ Duplicate pipeline groups auto-resolved (kept most recent per table): {{'; '.join(_dup_names)}}")
+        try:
+            displayHTML(
+                "<div style='padding:12px 14px;border-left:4px solid #f59e0b;"
+                "background:#fff8e1;border-radius:6px;font-size:13px;'>"
+                "&#9888;&#65039; <b>Duplicate pipeline groups were detected and auto-resolved.</b><br>"
+                "The most-recently-updated group per source table was kept; older duplicate "
+                "group(s) were superseded and their jobs disabled. The run is continuing "
+                "normally.<br><span style='color:#8a6d1a;'>Tables: " + ", ".join(_dup_names) + "</span>"
+                "</div>"
+            )
+        except Exception:
+            pass
+    else:
+        print("✅ Duplicate groups resolved — one active group per source table")
 else:
     print("✅ No duplicate pipeline groups")
 
