@@ -231,6 +231,72 @@ def _uc_run_statement(uc, sql, wh_id, wait_timeout="30s"):
     return [dict(zip(columns, row)) for row in data_array]
 
 
+def _compute_dq_from_published_tables(uc, wh_id, meta_cat, meta_sch):
+    """Fallback DQ metrics computed on the fly from already-published bronze/
+    silver tables. Used when the dq_metrics table is still empty (e.g. pipelines
+    ran before DQ logging existed, or the updated notebooks aren't redeployed
+    yet) so the dashboard isn't blank. Row counts are real; expectation-level
+    detail (nulls/dupes) is left at 0 since that's only known at write time."""
+    rows = []
+    try:
+        jsql = (f"SELECT table_name, target_config FROM `{meta_cat}`.`{meta_sch}`.wf_job_metadata "
+                f"WHERE (enabled = true OR enabled IS NULL) AND target_config IS NOT NULL "
+                f"AND lower(coalesce(status,'')) = 'success'")
+        jobs = _uc_run_statement(uc, jsql, wh_id)
+    except Exception as e:
+        logger.debug("DQ compute: could not read wf_job_metadata: %s", str(e)[:150])
+        return rows
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    seen = set()
+    for j in jobs:
+        tname = (j.get("table_name") or "").strip()
+        if not tname:
+            continue
+        try:
+            tc = json.loads(j.get("target_config") or "{}")
+        except (ValueError, TypeError):
+            tc = {}
+        bcat = str(tc.get("bronze_catalog") or tc.get("catalog") or "").strip()
+        scat = str(tc.get("silver_catalog") or bcat).strip()
+        tsch = str(tc.get("target_schema") or tc.get("schema") or "").strip()
+        if not bcat or not tsch:
+            continue
+        tl = tname.lower()
+        key = (bcat, scat, tsch, tl)
+        if key in seen:
+            continue
+        seen.add(key)
+        bfqn = f"`{bcat}`.`{tsch}`.`{tl}`"
+        sfqn = (f"`{scat}`.`{tsch}`.`{tl}`" if scat != bcat
+                else f"`{bcat}`.`{tsch}`.`silver_{tl}`")
+
+        def _count(fqn):
+            try:
+                r = _uc_run_statement(uc, f"SELECT COUNT(*) AS c FROM {fqn}", wh_id)
+                return int(r[0].get("c")) if r else None
+            except Exception:
+                return None
+
+        bcount = _count(bfqn)
+        scount = _count(sfqn)
+        if bcount is not None:
+            rows.append({"run_id": "computed", "job_id": "computed", "table_name": tname, "layer": "bronze",
+                         "input_rows": bcount, "output_rows": bcount, "rejected_rows": 0, "null_rows": 0,
+                         "dupe_rows": 0, "quarantined_rows": 0, "schema_drift": False,
+                         "dq_checks_passed": 0, "dq_checks_total": 0,
+                         "dq_score": 100.0 if bcount > 0 else 0.0,
+                         "checked_at": now, "metrics_location": f"{bcat}.{tsch} (computed)"})
+        if scount is not None:
+            rej = max(0, (bcount or 0) - scount)
+            score = round(scount / bcount * 100, 1) if (bcount and bcount > 0) else (100.0 if scount > 0 else 0.0)
+            rows.append({"run_id": "computed", "job_id": "computed", "table_name": tname, "layer": "silver",
+                         "input_rows": (bcount if bcount is not None else scount), "output_rows": scount,
+                         "rejected_rows": rej, "null_rows": 0, "dupe_rows": 0, "quarantined_rows": 0,
+                         "schema_drift": False, "dq_checks_passed": 0, "dq_checks_total": 0,
+                         "dq_score": score, "checked_at": now, "metrics_location": f"{scat}.{tsch} (computed)"})
+    return rows
+
+
 @reports_bp.route("/dq/metrics", methods=["GET"])
 @login_required
 def get_dq_metrics():
@@ -327,6 +393,14 @@ def get_dq_metrics():
                 # quietly rather than surfacing it as a hard error.
                 errors.append(f"{fqn}: {str(e)[:150]}")
 
+        # Fallback: nothing logged to any dq_metrics table yet — compute live
+        # row-count metrics from the already-published bronze/silver tables so
+        # the dashboard isn't blank for pipelines that ran before DQ logging.
+        _computed = False
+        if not rows:
+            rows = _compute_dq_from_published_tables(uc, wh_id, meta_cat, meta_sch)
+            _computed = bool(rows)
+
         # Only surface metrics for tables that were actually migrated (a
         # successful pipeline job exists) — drops stale/orphan __dq_metrics
         # rows left behind by tables that were never run through this app.
@@ -359,12 +433,14 @@ def get_dq_metrics():
                 r["checked_at"] = str(r["checked_at"])
 
         payload = {"success": True, "rows": rows, "total": len(rows),
-                   "locations": [f"{c}.{s}" for c, s in locations]}
+                   "computed": _computed,
+                   "locations": [f"{c}.{s}.{t}" for c, s, t in locations]}
         if errors and not rows:
             payload["error"] = "; ".join(errors[:3])
         if not rows:
             payload["message"] = ("No data quality metrics found. Deploy and run the Bronze/Silver "
-                                  "metadata pipelines — each run writes scores to __dq_metrics.")
+                                  "metadata pipelines — each run records scores to the "
+                                  "dataquality.dq_metrics table.")
         return jsonify(payload)
     except Exception as e:
         logger.exception("dq/metrics failed")
