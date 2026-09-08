@@ -234,15 +234,17 @@ jobs:
         run: bash deploy/ensure_genie_space.sh
 
   # ---------------------------------------------------------------------------
-  # Runs automatically on every push to main (staging environment + secrets
-  # are now configured), or on-demand via workflow_dispatch with
-  # deploy_staging=true.
+  # PAUSED: staging auto-deploy is disabled — the staging workspace is banned
+  # from Databricks Apps (403 PERMISSION_DENIED on POST /api/2.0/apps), so the
+  # bundle's apps.migration_studio resource can't be created there and the job
+  # always fails. It now runs ONLY on manual opt-in via workflow_dispatch with
+  # deploy_staging=true; it no longer fires on every push to main. Re-enable
+  # auto-run by restoring the push condition once the workspace ban is lifted.
   deploy-staging:
     name: "03 · Deploy to Staging + integration tests"
     needs: deploy-dev
     if: >-
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_dispatch' && inputs.deploy_staging == true)
+      github.event_name == 'workflow_dispatch' && inputs.deploy_staging == true
     runs-on: ubuntu-latest
     environment: staging
     steps:
