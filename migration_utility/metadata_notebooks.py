@@ -844,7 +844,8 @@ try:
 
     # ── Save Bronze DQ metrics (only after a successful write) ─────────
     try:
-        dq_tbl = f"`{{TARGET_CATALOG}}`.`{{TARGET_SCHEMA}}`.__dq_metrics"
+        dq_tbl = f"`{{CATALOG}}`.`dataquality`.`dq_metrics`"
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS `{{CATALOG}}`.`dataquality`")
         spark.sql(f"""
             CREATE TABLE IF NOT EXISTS {{dq_tbl}} (
                 run_id STRING, job_id STRING, table_name STRING, layer STRING,
@@ -877,9 +878,10 @@ except Exception as e:
             print(f"🔄 Restored to v{{restore_version}} after failure")
         except Exception:
             pass
-    # Record the FAILED run in __dq_metrics so the dashboard shows it honestly
+    # Record the FAILED run in dq_metrics so the dashboard shows it honestly
     try:
-        dq_tbl = f"`{{TARGET_CATALOG}}`.`{{TARGET_SCHEMA}}`.__dq_metrics"
+        dq_tbl = f"`{{CATALOG}}`.`dataquality`.`dq_metrics`"
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS `{{CATALOG}}`.`dataquality`")
         spark.sql(f"""
             CREATE TABLE IF NOT EXISTS {{dq_tbl}} (
                 run_id STRING, job_id STRING, table_name STRING, layer STRING,
@@ -1048,8 +1050,11 @@ if MULTI_CATALOG:
     _TABLE_NAME_LC = TABLE_NAME.lower()
     bronze_table = f"`{{BRONZE_CATALOG}}`.`{{TGT_SCHEMA}}`.`{{_TABLE_NAME_LC}}`"
     silver_table = f"`{{SILVER_CATALOG}}`.`{{TGT_SCHEMA}}`.`{{_TABLE_NAME_LC}}`"
-    DQ_CATALOG   = SILVER_CATALOG
-    DQ_SCHEMA    = TGT_SCHEMA
+    # DQ metrics are centralized in the metadata catalog's `dataquality` schema
+    # (same place Create MetadataFlow provisions dq_metrics), NOT the per-table
+    # target catalog -- so the Data Quality page has one durable source.
+    DQ_CATALOG   = CATALOG
+    DQ_SCHEMA    = "dataquality"
     print(f"✅ Multi-catalog medallion: {{BRONZE_CATALOG}}.{{TGT_SCHEMA}} → {{SILVER_CATALOG}}.{{TGT_SCHEMA}} (no prefix)")
 else:
     _fallback_cat = target_config.get("catalog", "")
@@ -1079,8 +1084,9 @@ else:
     _TABLE_NAME_LC = TABLE_NAME.lower()
     bronze_table = f"`{{TARGET_CATALOG}}`.`{{TARGET_SCHEMA}}`.`bronze_{{_TABLE_NAME_LC}}`"
     silver_table = f"`{{TARGET_CATALOG}}`.`{{TARGET_SCHEMA}}`.`silver_{{_TABLE_NAME_LC}}`"
-    DQ_CATALOG   = TARGET_CATALOG
-    DQ_SCHEMA    = TARGET_SCHEMA
+    # DQ metrics centralized in the metadata catalog's `dataquality` schema.
+    DQ_CATALOG   = CATALOG
+    DQ_SCHEMA    = "dataquality"
 
 print(f"📋 Job: {{job['job_name']}}")
 print(f"📋 Bronze: {{bronze_table}}")
@@ -1200,7 +1206,7 @@ else:
 # ── DQ-07: Row count anomaly detection ──────────────────────────────
 row_anomaly = False
 try:
-    prev = spark.sql(f"SELECT MAX(output_rows) AS prev_rows FROM `{{DQ_CATALOG}}`.`{{DQ_SCHEMA}}`.__dq_metrics WHERE table_name = '{{FULL_TABLE}}' AND layer = 'silver'").collect()[0]["prev_rows"]
+    prev = spark.sql(f"SELECT MAX(output_rows) AS prev_rows FROM `{{DQ_CATALOG}}`.`{{DQ_SCHEMA}}`.dq_metrics WHERE table_name = '{{FULL_TABLE}}' AND layer = 'silver'").collect()[0]["prev_rows"]
     if prev and prev > 0:
         pct_change = abs(after_dedup - prev) / prev * 100
         if pct_change > 50:
@@ -1304,7 +1310,8 @@ except Exception as e:
 
 # Save DQ metrics
 try:
-    dq_table = f"`{{DQ_CATALOG}}`.`{{DQ_SCHEMA}}`.__dq_metrics"
+    dq_table = f"`{{DQ_CATALOG}}`.`{{DQ_SCHEMA}}`.dq_metrics"
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS `{{DQ_CATALOG}}`.`{{DQ_SCHEMA}}`")
     spark.sql(f"""
         CREATE TABLE IF NOT EXISTS {{dq_table}} (
             run_id STRING, job_id STRING, table_name STRING, layer STRING,

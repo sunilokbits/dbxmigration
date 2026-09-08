@@ -519,6 +519,12 @@ def _fqn(table: str) -> str:
 
 RECON_TABLE = "reconcilationdetails"
 
+# Centralized data-quality metrics live in a dedicated `dataquality` schema
+# under the SAME metadata catalog as configtables — one durable place the Data
+# Quality page reads from, instead of scattered per-catalog __dq_metrics tables.
+DQ_SCHEMA_NAME = "dataquality"
+DQ_METRICS_TABLE = "dq_metrics"
+
 
 def _recon_fqn() -> str:
     """Fully qualified reconciliation results table.
@@ -844,6 +850,21 @@ def init_metadata_flow(host: str, token: str, catalog: str = "main",
             recon_timestamp TIMESTAMP
         ) USING DELTA
         COMMENT 'Source vs Bronze reconciliation results — one row per compared column'""",
+
+        # 10. Centralized data-quality metrics -- lives in a dedicated
+        # `dataquality` schema under the SAME metadata catalog (alongside
+        # configtables), so the Data Quality page reads from one durable
+        # place instead of scanning every bronze/silver catalog for scattered
+        # __dq_metrics tables. Bronze/Silver notebooks write here per run.
+        f"CREATE SCHEMA IF NOT EXISTS `{_dbr_catalog}`.`{DQ_SCHEMA_NAME}`",
+        f"""CREATE TABLE IF NOT EXISTS `{_dbr_catalog}`.`{DQ_SCHEMA_NAME}`.`{DQ_METRICS_TABLE}` (
+            run_id           STRING, job_id STRING, table_name STRING, layer STRING,
+            input_rows       BIGINT, output_rows BIGINT, rejected_rows BIGINT,
+            null_rows        BIGINT, dupe_rows BIGINT, quarantined_rows BIGINT,
+            schema_drift     BOOLEAN, dq_checks_passed INT, dq_checks_total INT,
+            dq_score         DOUBLE, checked_at TIMESTAMP
+        ) USING DELTA
+        COMMENT 'Centralized data-quality metrics — one row per table per layer per run'""",
     ]
 
     results = []
@@ -929,16 +950,16 @@ def init_metadata_flow(host: str, token: str, catalog: str = "main",
         logger.warning("Could not persist metadata catalog/schema to app config or replicate app tables: %s", exc)
 
     _meta_tables = [TBL_PIPELINES, TBL_JOBS, TBL_JOBS_HISTORY, TBL_RUNS,
-                    TBL_WATERMARKS, TBL_SOURCES, TBL_SCH_CONFIG, TBL_SCH_HISTORY,
-                    RECON_TABLE]
+                    TBL_WATERMARKS, TBL_SOURCES, TBL_SCH_CONFIG, TBL_SCH_HISTORY]
+    _extra_tables = [RECON_TABLE, f"{DQ_SCHEMA_NAME}.{DQ_METRICS_TABLE}"]
     _app_tables = ["migration_jobs", "dm_models", "app_config", "audit_log",
                    "job_schedules", "user_roles"]
-    _all_tables = _meta_tables + (_app_tables if _app_tables_ok else [])
+    _all_tables = _meta_tables + _extra_tables + (_app_tables if _app_tables_ok else [])
 
     _msg = (
         f"MetadataFlow created — {len(_all_tables)} Delta tables provisioned in "
-        f"{_dbr_catalog}.{_dbr_schema} "
-        f"({len(_meta_tables) - 1} metadata + reconciliation"
+        f"{_dbr_catalog} "
+        f"({len(_meta_tables)} metadata + reconciliation + data-quality"
         + (f" + {len(_app_tables)} app/RBAC" if _app_tables_ok else "")
         + ")"
     )

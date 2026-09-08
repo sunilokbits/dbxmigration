@@ -288,7 +288,12 @@ def get_dq_metrics():
         except Exception as e:
             logger.debug("target_config scan skipped: %s", str(e)[:120])
 
-        locations = []
+        # Primary source: the centralized dq_metrics table in the metadata
+        # catalog's `dataquality` schema (provisioned by Create MetadataFlow,
+        # written to by the Bronze/Silver notebooks). Listed first so it takes
+        # precedence; the legacy per-catalog __dq_metrics scan below stays as a
+        # fallback for older deployments that still write there.
+        locations = [(meta_cat, "dataquality", "dq_metrics")]
         for cat in catalogs:
             if not cat or not str(cat).replace("_", "").isalnum():
                 continue
@@ -296,7 +301,7 @@ def get_dq_metrics():
                 sql = (f"SELECT table_catalog, table_schema FROM `{cat}`.information_schema.tables "
                        f"WHERE table_name = '__dq_metrics'")
                 for row in _uc_run_statement(uc, sql, wh_id):
-                    loc = (row.get("table_catalog"), row.get("table_schema"))
+                    loc = (row.get("table_catalog"), row.get("table_schema"), "__dq_metrics")
                     if loc not in locations:
                         locations.append(loc)
             except Exception as e:
@@ -304,8 +309,8 @@ def get_dq_metrics():
 
         rows = []
         errors = []
-        for cat, sch in locations:
-            fqn = f"`{cat}`.`{sch}`.__dq_metrics"
+        for cat, sch, tname in locations:
+            fqn = f"`{cat}`.`{sch}`.{tname}"
             sql = f"""
                 SELECT run_id, job_id, table_name, layer,
                        input_rows, output_rows, rejected_rows,
@@ -317,6 +322,9 @@ def get_dq_metrics():
             try:
                 rows.extend(_uc_run_statement(uc, sql, wh_id))
             except Exception as e:
+                # The central dataquality.dq_metrics may not exist yet on a
+                # brand-new workspace (no pipeline run) — that's expected, log
+                # quietly rather than surfacing it as a hard error.
                 errors.append(f"{fqn}: {str(e)[:150]}")
 
         # Only surface metrics for tables that were actually migrated (a
