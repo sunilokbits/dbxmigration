@@ -3567,76 +3567,92 @@ if dlt_status == "COMPLETED":
             ) USING DELTA
         """)
 
-        # Pull the event log for this pipeline (a few pages, newest first).
-        _all_events = []
-        _pg = None
-        for _ in range(12):
-            _params = {{"max_results": 250, "order_by": "timestamp desc"}}
-            if _pg:
-                _params["page_token"] = _pg
-            _er = requests.get(f"{{HOST}}/api/2.0/pipelines/{{pipeline_id}}/events", params=_params, headers=_hdrs)
-            if not _er.ok:
-                break
-            _ej = _er.json()
-            _all_events.extend(_ej.get("events", []))
-            _pg = _ej.get("next_page_token")
-            if not _pg:
-                break
+        # 1. Tables that ran in THIS group (from the metadata).
+        _gfdq = f"AND group_id = '{{GROUP_ID}}'" if GROUP_ID else ""
+        _dq_tables = [r[0] for r in spark.sql(f"""
+            SELECT DISTINCT table_name FROM `{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata
+            WHERE stage IN ('landing_to_bronze','bronze_to_silver','dlt_bronze_silver')
+              AND (enabled = true OR enabled IS NULL) {{_gfdq}}
+        """).collect() if r[0]]
 
-        # Latest COMPLETED flow_progress event per dataset carries the row
-        # counts + expectation results. Events are newest-first, so the first
-        # time we see a dataset is its latest state.
-        _by_ds = {{}}
-        for _e in _all_events:
-            if _e.get("event_type") != "flow_progress":
-                continue
-            _fp = (_e.get("details", {{}}) or {{}}).get("flow_progress", {{}}) or {{}}
-            if _fp.get("status") != "COMPLETED":
-                continue
-            _org = _e.get("origin", {{}}) or {{}}
-            if update_id and _org.get("update_id") not in (update_id, None, ""):
-                continue
-            _ds = _org.get("flow_name") or _org.get("dataset_name")
-            if _ds and _ds not in _by_ds:
-                _by_ds[_ds] = _fp
-
-        _dq_written = 0
-        for _ds, _fp in _by_ds.items():
-            _metrics = _fp.get("metrics", {{}}) or {{}}
-            _dq = _fp.get("data_quality", {{}}) or {{}}
-            _exps = _dq.get("expectations", []) or []
-            _out = int(_metrics.get("num_output_rows", 0) or 0)
-            _dropped = int(_dq.get("dropped_records", 0) or 0)
-            _passed = sum(int(x.get("passed_records", 0) or 0) for x in _exps)
-            _failed = sum(int(x.get("failed_records", 0) or 0) for x in _exps)
-            _checks_total = len(_exps)
-            _checks_passed = sum(1 for x in _exps if int(x.get("failed_records", 0) or 0) == 0)
-            _score = round(_passed / (_passed + _failed) * 100, 1) if (_passed + _failed) > 0 else 100.0
-            # Dataset name is the fully-qualified DPM name, e.g.
-            # "dbx_bronze.sales.products" / "dbx_silver.sales.products".
-            _parts = str(_ds).split(".")
-            _last = _parts[-1]
-            _cat0 = (_parts[0].lower() if _parts else "")
-            _last_l = _last.lower()
-            _layer = "silver" if ("silver" in _cat0 or _last_l.startswith("silver_")) else "bronze"
-            _tname = _last
-            for _pfx in ("bronze_", "silver_"):
-                if _last_l.startswith(_pfx):
-                    _tname = _last[len(_pfx):]
+        # 2. Best-effort: expectation pass/fail per (table, layer) from the SDP
+        #    event log — enriches the real row-counts below when available.
+        _exp_by = {{}}
+        try:
+            _evs = []
+            _pg = None
+            for _ in range(12):
+                _pm = {{"max_results": 250, "order_by": "timestamp desc"}}
+                if _pg:
+                    _pm["page_token"] = _pg
+                _rr = requests.get(f"{{HOST}}/api/2.0/pipelines/{{pipeline_id}}/events", params=_pm, headers=_hdrs)
+                if not _rr.ok:
                     break
-            _rid = update_id or uuid.uuid4().hex[:12]
-            _q2 = lambda v: str(v).replace("'", "''")
-            spark.sql(f"""
-                INSERT INTO {{_dq_tbl}} VALUES (
-                    '{{_q2(_rid)}}', '{{_q2(GROUP_ID)}}', '{{_q2(_tname)}}', '{{_layer}}',
-                    {{_out + _dropped}}, {{_out}}, {{_dropped}},
-                    0, 0, {{_dropped}},
-                    false, {{_checks_passed}}, {{_checks_total}},
-                    {{_score}}, current_timestamp()
-                )
-            """)
-            _dq_written += 1
-        print(f"📊 Logged {{_dq_written}} SDP data-quality metric row(s) to {{_dq_tbl}}")
+                _jj = _rr.json()
+                _evs.extend(_jj.get("events", []))
+                _pg = _jj.get("next_page_token")
+                if not _pg:
+                    break
+            for _e in _evs:
+                if _e.get("event_type") != "flow_progress":
+                    continue
+                _fp = (_e.get("details", {{}}) or {{}}).get("flow_progress", {{}}) or {{}}
+                if _fp.get("status") != "COMPLETED":
+                    continue
+                _dsn = (_e.get("origin", {{}}) or {{}}).get("flow_name") or (_e.get("origin", {{}}) or {{}}).get("dataset_name") or ""
+                _dsl = str(_dsn).split(".")[-1].lower()
+                _lyr = "silver" if ("silver" in str(_dsn).lower()) else "bronze"
+                for _px in ("bronze_", "silver_"):
+                    if _dsl.startswith(_px):
+                        _dsl = _dsl[len(_px):]
+                        break
+                _key = (_dsl, _lyr)
+                if _key in _exp_by:
+                    continue
+                _dq = _fp.get("data_quality", {{}}) or {{}}
+                _exps = _dq.get("expectations", []) or []
+                _exp_by[_key] = {{
+                    "passed":  sum(int(x.get("passed_records", 0) or 0) for x in _exps),
+                    "failed":  sum(int(x.get("failed_records", 0) or 0) for x in _exps),
+                    "dropped": int(_dq.get("dropped_records", 0) or 0),
+                    "ctot":    len(_exps),
+                    "cpass":   sum(1 for x in _exps if int(x.get("failed_records", 0) or 0) == 0),
+                }}
+        except Exception as _ee:
+            print(f"ℹ️ Event-log enrichment skipped: {{_ee}}")
+
+        # 3. One row per table per layer, counting the actually-published tables.
+        _rid = update_id or uuid.uuid4().hex[:12]
+        _q2 = lambda v: str(v).replace("'", "''")
+        _bcat = DLT_CATALOG
+        _scat = _SILVER_CAT or DLT_CATALOG
+        _dq_written = 0
+        for _t in _dq_tables:
+            _tl = str(_t).lower()
+            _bfqn = f"`{{_bcat}}`.`{{DLT_SCHEMA}}`.`{{_tl}}`"
+            _sfqn = (f"`{{_scat}}`.`{{DLT_SCHEMA}}`.`{{_tl}}`" if _scat != _bcat
+                     else f"`{{_bcat}}`.`{{DLT_SCHEMA}}`.`silver_{{_tl}}`")
+            for _lyr, _fqn in (("bronze", _bfqn), ("silver", _sfqn)):
+                try:
+                    _cnt = int(spark.sql(f"SELECT COUNT(*) AS c FROM {{_fqn}}").first()["c"])
+                except Exception:
+                    continue  # table not published (e.g. a failed table) — skip
+                _ex = _exp_by.get((_tl, _lyr), {{}})
+                _passed = _ex.get("passed", 0); _failed = _ex.get("failed", 0)
+                _dropped = _ex.get("dropped", 0)
+                _ctot = _ex.get("ctot", 0); _cpass = _ex.get("cpass", 0)
+                _score = round(_passed / (_passed + _failed) * 100, 1) if (_passed + _failed) > 0 else 100.0
+                spark.sql(f"""
+                    INSERT INTO {{_dq_tbl}} VALUES (
+                        '{{_q2(_rid)}}', '{{_q2(GROUP_ID)}}', '{{_q2(_t)}}', '{{_lyr}}',
+                        {{_cnt + _dropped}}, {{_cnt}}, {{_dropped}},
+                        0, 0, {{_dropped}},
+                        false, {{_cpass}}, {{_ctot}},
+                        {{_score}}, current_timestamp()
+                    )
+                """)
+                _dq_written += 1
+        print(f"📊 Logged {{_dq_written}} data-quality metric row(s) to {{_dq_tbl}}")
     except Exception as _dqe:
         print(f"⚠️ Could not log SDP DQ metrics (non-blocking): {{_dqe}}")
 
