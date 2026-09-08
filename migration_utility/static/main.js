@@ -694,7 +694,7 @@ async function nbPushToDevOps(mode){
       const gr=await fetch('/api/v1/workflow/notebooks/generate',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({
           catalog:c.catalog||'main',schema:c.schema||'default',
-          workspace_path:G('wfNbWsPath').value.trim()||'/Shared/MetadataPipeline',
+          workspace_path:G('wfNbWsPath').value.trim()||'/Shared/DBX/MetadataPipeline',
           landing_path:G('wfNbLandingPath').value.trim()||'/mnt/landing',
           pipeline_mode:pipelineMode,
           cdc_mode:(G('cfgCdcMode')||{}).value||'watermark',
@@ -1445,7 +1445,7 @@ function _wfTargetConfig(){
     metadata_schema:  c.schema,
     catalog:          bc || c.catalog,
     schema:           ts || c.schema,
-    workspace_path:   G('wfNbWsPath')?.value?.trim()||'/Shared/MetadataPipeline',
+    workspace_path:   G('wfNbWsPath')?.value?.trim()||'/Shared/DBX/MetadataPipeline',
     landing_path:     G('wfNbLandingPath')?.value?.trim()||'/mnt/landing',
   };
   // Always include multi-catalog keys so notebooks know the real targets
@@ -1647,7 +1647,7 @@ async function wfDeployNotebooks(){
     const r=await fetch('/api/v1/workflow/notebooks/deploy',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
         host:c.host,token:c.token,catalog:c.catalog,schema:c.schema,
-        workspace_path:G('wfNbWsPath').value.trim()||'/Shared/MetadataPipeline',
+        workspace_path:G('wfNbWsPath').value.trim()||'/Shared/DBX/MetadataPipeline',
         landing_path:G('wfNbLandingPath').value.trim()||'/mnt/landing',
         pipeline_mode:pipelineMode,
         cdc_mode:(G('cfgCdcMode')||{}).value||'watermark',
@@ -1756,7 +1756,7 @@ async function wfRunOnDatabricks(groupId, pwd){
         host:c.host,token:c.token,catalog:c.catalog,schema:c.schema,
         cluster_id:clusterId,
         password:pwd,
-        workspace_path:G('wfNbWsPath')?.value?.trim()||'/Shared/MetadataPipeline',
+        workspace_path:G('wfNbWsPath')?.value?.trim()||'/Shared/DBX/MetadataPipeline',
         landing_path:G('wfNbLandingPath')?.value?.trim()||'/mnt/landing',
       })
     });
