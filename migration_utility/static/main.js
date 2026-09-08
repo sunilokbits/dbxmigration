@@ -2359,6 +2359,7 @@ async function wfCreatePipeline(){
   const loadType=G('wfLoadType').value;
   const wmCol=loadType==='incremental'?G('wfWatermarkCol').value.trim():'';
   if(loadType==='incremental'&&!wmCol){toast('Enter watermark column for incremental load','terr');return;}
+  if(!_wfMappingReady()){toast('Please build the Layer → Catalog Schema Mapping (Bronze & Silver) first, then Save Mapping','terr');return;}
   const btn=G('btnWfCreate');btn.disabled=true;btn.textContent='Creating…';
   try{
     const r=await fetch('/api/v1/workflow/create-pipeline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({table_schema:schema,table_name:table,load_type:loadType,watermark_column:wmCol,source_config:_wfSourceConfig(),target_config:_wfTargetConfig(),pipeline_mode:(G('wfNbPipelineMode')||{}).value||'standard',cdc_mode:(G('cfgCdcMode')||{}).value||'watermark',primary_keys:(G('cfgPrimaryKeys')||{}).value?G('cfgPrimaryKeys').value.split(',').map(s=>s.trim()).filter(Boolean):[]})});
@@ -2400,6 +2401,7 @@ async function wfQuickCreate(){
       toast('Enter watermark column for '+t.full_name+' (incremental)','terr');return;
     }
   }
+  if(!_wfMappingReady()){toast('Please build the Layer → Catalog Schema Mapping (Bronze & Silver) first, then Save Mapping','terr');return;}
   const btn=G('btnWfQuick');btn.disabled=true;btn.textContent='Creating '+checkedTables.length+' pipeline(s)…';
   try{
     const tables=checkedTables.map(t=>{
@@ -3684,6 +3686,15 @@ function _wfLayerPopulateMapping(mapping){
     if(schEl&&lm.schema){ schEl.setAttribute('data-saved',lm.schema); schEl.value=lm.schema; }
   });
 }
+
+/* True when the Layer → Catalog Schema Mapping has Bronze + Silver targets set. */
+function _wfMappingReady(){
+  const m=_wfLayerCollectMapping()||{};
+  const b=((m.bronze&&m.bronze.catalog)||'').trim();
+  const s=((m.silver&&m.silver.catalog)||'').trim();
+  return !!(b&&s);
+}
+window._wfMappingReady=_wfMappingReady;
 
 /* Save layer mapping to config (persist for migration) */
 async function wfLayerSaveMapping(){

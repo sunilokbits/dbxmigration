@@ -101,6 +101,12 @@ def generate_metadata_notebooks(
                 "layer":       "reconciliation",
             },
             {
+                "name":        "03_Meta_Validate",
+                "code":        _gen_validate(catalog, schema, ts),
+                "description": "Standalone metadata validation — duplicate groups/jobs, stale SDP pipelines",
+                "layer":       "validation",
+            },
+            {
                 "name":        "05_Meta_ExecutionLog",
                 "code":        _gen_execution_log(catalog, schema, ts),
                 "description": "Marks the dlt_bronze_silver stage complete in wf_job_metadata / wf_pipeline_metadata / wf_run_history",
@@ -2028,6 +2034,153 @@ dbutils.notebook.exit(exit_payload)
 #  5. DLT PIPELINE NOTEBOOK  (Bronze + Silver combined)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+def _gen_validate(catalog, schema, ts):
+    return f'''# Databricks notebook source
+# MAGIC %md
+# MAGIC # ✅ Metadata Validation — Duplicate & Ownership Checks
+# MAGIC **Generated:** {ts}
+# MAGIC
+# MAGIC Run standalone (from the UI) or before an orchestrator run. Validates
+# MAGIC duplicate pipeline groups, duplicate jobs, and stale SDP pipelines, then
+# MAGIC exits with `{{"status": "PASSED"|"FAILED", "issues": [...]}}`.
+# MAGIC ---
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 📋 Widget Configuration
+
+# COMMAND ----------
+
+dbutils.widgets.text("catalog", "{catalog}", "Metadata Catalog")
+dbutils.widgets.text("schema", "{schema}", "Metadata Schema")
+
+import json
+CATALOG = dbutils.widgets.get("catalog").strip()
+SCHEMA  = dbutils.widgets.get("schema").strip()
+try:
+    _NB_PATH = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+except Exception:
+    _NB_PATH = "<path unavailable>"
+print(f"✅ Validation notebook: {{_NB_PATH}}")
+
+job_tbl  = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
+pipe_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_pipeline_metadata"
+issues = []
+findings = []
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 1️⃣ Duplicate Pipeline Groups (wf_pipeline_metadata)
+
+# COMMAND ----------
+
+try:
+    _rows = spark.sql(f"""
+        SELECT full_table, COUNT(DISTINCT group_id) AS n, concat_ws(', ', collect_set(group_id)) AS gids
+        FROM {{pipe_tbl}}
+        WHERE full_table IS NOT NULL AND lower(coalesce(status,'')) <> 'superseded'
+        GROUP BY full_table HAVING COUNT(DISTINCT group_id) > 1
+        ORDER BY full_table
+    """).collect()
+    for _r in _rows:
+        findings.append(("wf_pipeline_metadata", _r["full_table"], _r["gids"], "Keep newest group; disable others"))
+        issues.append(f"Duplicate groups for {{_r['full_table']}}: {{_r['gids']}}")
+    print(f"{{'❌' if _rows else '✅'}} Duplicate pipeline groups: {{len(_rows)}}")
+except Exception as e:
+    print(f"⚠️ pipeline-group check failed: {{e}}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 2️⃣ Duplicate Jobs (wf_job_metadata by full_table + stage)
+
+# COMMAND ----------
+
+try:
+    _rows = spark.sql(f"""
+        SELECT full_table, stage, COUNT(DISTINCT group_id) AS n, concat_ws(', ', collect_set(group_id)) AS gids
+        FROM {{job_tbl}}
+        WHERE full_table IS NOT NULL AND (enabled = true OR enabled IS NULL)
+        GROUP BY full_table, stage HAVING COUNT(DISTINCT group_id) > 1
+        ORDER BY full_table, stage
+    """).collect()
+    for _r in _rows:
+        findings.append(("wf_job_metadata", f"{{_r['full_table']}} [{{_r['stage']}}]", _r["gids"], "Disable duplicate-group jobs"))
+        issues.append(f"Duplicate {{_r['stage']}} jobs for {{_r['full_table']}}: {{_r['gids']}}")
+    print(f"{{'❌' if _rows else '✅'}} Duplicate jobs: {{len(_rows)}}")
+except Exception as e:
+    print(f"⚠️ job check failed: {{e}}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 3️⃣ Stale SDP Pipelines (group no longer active)
+
+# COMMAND ----------
+
+try:
+    import requests
+    ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+    try:
+        HOST = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
+    except Exception:
+        HOST = "https://" + ctx.browserHostName().get()
+    TOKEN = ctx.apiToken().get()
+    _hdrs = {{"Authorization": f"Bearer {{TOKEN}}", "Content-Type": "application/json"}}
+    _active = set(r[0] for r in spark.sql(f"SELECT DISTINCT group_id FROM {{pipe_tbl}} WHERE group_id IS NOT NULL AND lower(coalesce(status,'')) <> 'superseded'").collect() if r[0])
+    _pl = requests.get(f"{{HOST}}/api/2.0/pipelines", params={{"max_results": 100, "filter": "name LIKE 'MetadataPipeline_%'"}}, headers=_hdrs)
+    _pipes = _pl.json().get("statuses", []) if _pl.ok else []
+    _stale = []
+    for _p in _pipes:
+        _pid = _p.get("pipeline_id", "")
+        try:
+            _pd = requests.get(f"{{HOST}}/api/2.0/pipelines/{{_pid}}", headers=_hdrs).json()
+            _gid = _pd.get("spec", {{}}).get("configuration", {{}}).get("pipeline.group_id", "")
+            if _gid and _gid not in _active:
+                _stale.append((_p.get("name", ""), _pid, _gid))
+        except Exception:
+            continue
+    for _n, _pid, _gid in _stale:
+        findings.append(("SDP pipeline", _n, _gid, "Stale (group gone) — safe to delete"))
+        issues.append(f"Stale pipeline {{_n}} (group {{_gid}} no longer active)")
+    print(f"{{'⚠️' if _stale else '✅'}} Stale SDP pipelines: {{len(_stale)}} of {{len(_pipes)}} MetadataPipeline_*")
+except Exception as e:
+    print(f"⚠️ pipeline ownership check skipped: {{e}}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 📊 Summary Report
+
+# COMMAND ----------
+
+_status = "FAILED" if issues else "PASSED"
+_rows_html = "".join(f"<tr><td>{{_a}}</td><td>{{_b}}</td><td>{{_c}}</td><td>{{_d}}</td></tr>" for _a, _b, _c, _d in findings) or "<tr><td colspan='4'>No issues found ✅</td></tr>"
+_color = "#dc2626" if issues else "#059669"
+try:
+    displayHTML(f"""
+      <div style="font-family:sans-serif;">
+        <h2 style="color:{{_color}};">Metadata Validation: {{_status}}</h2>
+        <p>{{len(issues)}} issue(s) found.</p>
+        <table border="1" cellpadding="6" style="border-collapse:collapse;">
+          <tr style="background:#f1f5f9;"><th>Source</th><th>Object</th><th>Group IDs</th><th>Action Needed</th></tr>
+          {{_rows_html}}
+        </table>
+      </div>
+    """)
+except Exception:
+    pass
+print(f"\\n{{'='*50}}")
+print(f"VALIDATION {{_status}} — {{len(issues)}} issue(s)")
+for _i in issues:
+    print(f"  ❌ {{_i}}")
+
+dbutils.notebook.exit(json.dumps({{"status": _status, "issues": issues}}))
+'''
+
+
 def _gen_execution_log(catalog, schema, ts):
     return f'''# Databricks notebook source
 # MAGIC %md
@@ -2166,12 +2319,37 @@ else:
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ## 🔎 Post-Run Duplicate-Group Check
+
+# COMMAND ----------
+
+_dup_warn = []
+try:
+    _dups = spark.sql(f"""
+        SELECT full_table, COUNT(DISTINCT group_id) AS n
+        FROM {{pipe_tbl}}
+        WHERE full_table IS NOT NULL AND lower(coalesce(status,'')) <> 'superseded'
+        GROUP BY full_table HAVING COUNT(DISTINCT group_id) > 1
+    """).collect()
+    _dup_warn = [f"{{_d['full_table']}} ({{_d['n']}} groups)" for _d in _dups]
+    if _dup_warn:
+        print(f"⚠️ Duplicate pipeline groups still present: {{', '.join(_dup_warn)}}")
+        print("   Re-run the orchestrator (pre-flight dedup) or 03_Meta_Validate to resolve.")
+    else:
+        print("✅ No duplicate pipeline groups")
+except Exception as e:
+    print(f"⚠️ Duplicate check skipped: {{e}}")
+
+# COMMAND ----------
+
 dbutils.notebook.exit(json.dumps({{
     "status":            "COMPLETED",
     "final_status":      _st,
     "updated_jobs":      updated_jobs,
     "updated_pipelines": updated_pipes,
     "inserted_runs":     inserted_runs,
+    "duplicate_warnings": _dup_warn,
 }}))
 '''
 
@@ -2529,6 +2707,67 @@ except Exception:
     _NB_PATH = "<path unavailable>"
 print(f"📓 Orchestrator notebook: {{_NB_PATH}}")
 print(f"📁 Workspace path (all sub-notebooks resolve from here): {{WORKSPACE_PATH}}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 🧹 Pre-Flight — Deduplicate Pipeline Groups
+
+# COMMAND ----------
+
+# The same source table can be created in more than one pipeline group, which
+# then spawns multiple SDP pipelines that all try to own the same streaming
+# table -> "Table X is already managed by pipeline Y". Auto-resolve by keeping
+# only the most-recently-updated group per table and disabling the older ones.
+_job_tbl  = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
+_pipe_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_pipeline_metadata"
+_q = lambda v: str(v).replace("'", "''")
+
+_dups = spark.sql(f"""
+    SELECT full_table, COUNT(DISTINCT group_id) AS n_groups, collect_set(group_id) AS group_ids
+    FROM {{_pipe_tbl}}
+    WHERE full_table IS NOT NULL AND lower(coalesce(status,'')) <> 'superseded'
+    GROUP BY full_table
+    HAVING COUNT(DISTINCT group_id) > 1
+""").collect()
+
+if _dups:
+    print(f"⚠️ {{len(_dups)}} source table(s) exist in multiple pipeline groups — auto-resolving (keep most recent):")
+    for _d in _dups:
+        _ft = _d["full_table"]
+        print(f"  • {{_ft}}: groups {{list(_d['group_ids'])}}")
+        _keep = spark.sql(
+            f"SELECT group_id FROM {{_pipe_tbl}} WHERE full_table = '{{_q(_ft)}}' "
+            f"ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST LIMIT 1"
+        ).first()
+        _keep_gid = _keep["group_id"] if _keep else None
+        if not _keep_gid:
+            continue
+        try:
+            spark.sql(f"UPDATE {{_job_tbl}} SET enabled = false, updated_at = current_timestamp() "
+                      f"WHERE full_table = '{{_q(_ft)}}' AND group_id <> '{{_q(_keep_gid)}}'")
+            spark.sql(f"UPDATE {{_pipe_tbl}} SET status = 'superseded', updated_at = current_timestamp() "
+                      f"WHERE full_table = '{{_q(_ft)}}' AND group_id <> '{{_q(_keep_gid)}}'")
+            print(f"    ✅ Kept group {{_keep_gid}}; disabled older duplicate group(s)")
+        except Exception as _de:
+            print(f"    ⚠️ Could not auto-resolve {{_ft}}: {{_de}}")
+
+    _still = spark.sql(f"""
+        SELECT full_table, COUNT(DISTINCT group_id) AS n
+        FROM {{_pipe_tbl}}
+        WHERE full_table IS NOT NULL AND lower(coalesce(status,'')) <> 'superseded'
+        GROUP BY full_table HAVING COUNT(DISTINCT group_id) > 1
+    """).collect()
+    if _still:
+        _msg = "; ".join(f"'{{r['full_table']}}' in {{r['n']}} groups" for r in _still)
+        raise ValueError(
+            "DUPLICATE PIPELINE GROUPS DETECTED: " + _msg +
+            ". Only one group per source table is allowed. Please remove duplicates "
+            "from wf_pipeline_metadata before running."
+        )
+    print("✅ Duplicate groups resolved — one active group per source table")
+else:
+    print("✅ No duplicate pipeline groups")
 
 # COMMAND ----------
 
