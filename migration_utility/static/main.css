@@ -7,13 +7,13 @@
   --sb-border: #E2E8F0;
   --sb-text: #475569;
   --sb-text-hover: #1E293B;
-  --sb-text-active: #4F46E5;
-  /* ── Accent — Indigo/purple ── */
-  --accent-primary: #6366F1;
-  --accent-primary-hover: #4F46E5;
-  --accent-glow: rgba(99,102,241,.15);
-  --accent-glow-strong: rgba(99,102,241,.28);
-  --accent-gradient: linear-gradient(135deg, #6366F1 0%, #818CF8 45%, #A78BFA 100%);
+  --sb-text-active: #AF1C86;
+  /* ── Accent — Insight magenta/red (sampled from insight.com's logo mark) ── */
+  --accent-primary: #D30E8B;
+  --accent-primary-hover: #AF1C86;
+  --accent-glow: rgba(211,14,139,.15);
+  --accent-glow-strong: rgba(211,14,139,.28);
+  --accent-gradient: linear-gradient(135deg, #AF1C86 0%, #D30E8B 50%, #ED1844 100%);
   /* ── Blues ── */
   --blue: #2563EB;
   --blue-light: #EFF6FF;
@@ -156,20 +156,13 @@ body {
   display:flex; align-items:center; flex-shrink:0;
   border-bottom:1px solid var(--sb-border);
   position:relative; z-index:1;
-  background:rgba(0,0,0,.15);
+  background:#FFFFFF;
 }
-.brand { display:flex; align-items:center; gap:12px; }
-.brand-ico {
-  width:36px; height:36px; flex-shrink:0; display:flex; align-items:center; justify-content:center;
-  position:relative; border-radius:10px;
-  background:var(--accent-gradient);
-  box-shadow:0 4px 16px rgba(99,102,241,.4), 0 0 0 1px rgba(255,255,255,.15) inset;
-  transition:all .3s ease;
-}
-.brand-ico:hover { transform:scale(1.08) rotate(-2deg); box-shadow:0 6px 24px rgba(99,102,241,.5); }
-.brand-ico svg { width:17px; height:17px; fill:#fff; stroke:none; position:relative; z-index:1; }
-.brand-name { font-size:14.5px; font-weight:800; color:#ffffff; letter-spacing:-.03em; line-height:1.2; }
-.brand-sub { font-size:9.5px; color:rgba(255,255,255,.4); margin-top:3px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; }
+.brand { display:flex; align-items:center; gap:9px; }
+.brand-logo-img { height:20px; width:auto; flex-shrink:0; display:block; }
+.brand-divider { width:1px; align-self:stretch; background:var(--sb-border); }
+.brand-name { font-size:14.5px; font-weight:800; color:var(--sb-text-hover); letter-spacing:-.03em; line-height:1.2; }
+.brand-sub { font-size:9.5px; color:var(--sb-text); opacity:.7; margin-top:3px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; }
 /* Stats bar */
 .sb-stats {
   display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px;

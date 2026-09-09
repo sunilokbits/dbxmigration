@@ -10,15 +10,17 @@
 <link rel="stylesheet" href="/static/supplementary.css?v=49">
 <style>
   /* Force light sidebar - overrides all cached CSS */
+  /* Insight brand palette (sampled from insight.com's own logo mark):
+     magenta #D30E8B / purple-magenta #AF1C86 / red-pink #ED1844. */
   :root {
     --sb-bg: #FFFFFF !important;
     --sb-border: #E2E8F0 !important;
     --sb-text: #475569 !important;
     --sb-text-hover: #1E293B !important;
-    --sb-text-active: #4F46E5 !important;
-    --accent-primary: #6366F1 !important;
-    --accent-primary-hover: #4F46E5 !important;
-    --accent-gradient: linear-gradient(135deg, #6366F1 0%, #818CF8 45%, #A78BFA 100%) !important;
+    --sb-text-active: #AF1C86 !important;
+    --accent-primary: #D30E8B !important;
+    --accent-primary-hover: #AF1C86 !important;
+    --accent-gradient: linear-gradient(135deg, #AF1C86 0%, #D30E8B 50%, #ED1844 100%) !important;
   }
   #sidebar {
     background: #FFFFFF !important;
@@ -28,23 +30,28 @@
   #sidebar::before { background: none !important; content: none !important; }
   #sidebar::after { content: none !important; }
   .sb-logo {
-    background: linear-gradient(135deg, #1E293B 0%, #334155 100%) !important;
+    background: #FFFFFF !important;
     border-bottom: 1px solid #E2E8F0 !important;
   }
+  .brand-logo-img { height: 20px; width: auto; display: block; }
+  .brand { gap: 9px !important; }
+  .brand-divider { width: 1px; align-self: stretch; background: #E2E8F0; }
+  .brand-name { color: #1E293B !important; }
+  .brand-sub { color: #94A3B8 !important; }
   .nav-btn { color: #475569 !important; }
-  .nav-btn:hover { color: #1E293B !important; background: rgba(99,102,241,.06) !important; }
-  .nav-btn.active { color: #4F46E5 !important; background: rgba(99,102,241,.08) !important; }
-  .nav-btn.active::before { background: linear-gradient(135deg, #6366F1, #818CF8) !important; }
+  .nav-btn:hover { color: #1E293B !important; background: rgba(211,14,139,.06) !important; }
+  .nav-btn.active { color: #AF1C86 !important; background: rgba(211,14,139,.08) !important; }
+  .nav-btn.active::before { background: linear-gradient(135deg, #AF1C86, #ED1844) !important; }
   .sb-sec { color: #94A3B8 !important; }
   .sb-sec::after { background: linear-gradient(90deg, #E2E8F0, transparent) !important; }
   .stat-pill { background: #F3F4F6 !important; border-color: #E2E8F0 !important; }
   .stat-pill .n { color: #1A1F36 !important; }
   .stat-pill .l { color: #6B7385 !important; }
   .nav-badge { background: #F3F4F6 !important; color: #6B7385 !important; border-color: #E2E8F0 !important; }
-  .nav-btn.active .nav-badge { background: rgba(99,102,241,.12) !important; color: #4F46E5 !important; border-color: rgba(99,102,241,.25) !important; }
+  .nav-btn.active .nav-badge { background: rgba(211,14,139,.12) !important; color: #AF1C86 !important; border-color: rgba(211,14,139,.25) !important; }
   .sb-footer { background: #F3F4F6 !important; border-top-color: #E2E8F0 !important; }
   .wf-step.done { background: linear-gradient(90deg, #10B981, #34D399) !important; }
-  .wf-step.active { background: linear-gradient(135deg, #6366F1, #818CF8) !important; }
+  .wf-step.active { background: linear-gradient(135deg, #AF1C86, #ED1844) !important; }
   .sb-divider { background: linear-gradient(90deg, transparent, #E2E8F0, transparent) !important; }
 </style>
 <style id="genie-scroll-fix">
@@ -124,9 +131,8 @@
 <nav id="sidebar" role="navigation" aria-label="Main navigation">
   <div class="sb-logo">
     <div class="brand">
-      <div class="brand-ico">
-        <svg viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-      </div>
+      <img src="/static/img/insight-logo.png" alt="Insight" class="brand-logo-img">
+      <div class="brand-divider"></div>
       <div>
         <div class="brand-name">Migration Studio</div>
         <div class="brand-sub">SQL → Databricks</div>
