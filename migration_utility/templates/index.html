@@ -6,8 +6,8 @@
 <title>SQL → Databricks Migration Studio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/main.css?v=51">
-<link rel="stylesheet" href="/static/supplementary.css?v=49">
+<link rel="stylesheet" href="/static/main.css?v=52">
+<link rel="stylesheet" href="/static/supplementary.css?v=50">
 <style>
   /* Force light sidebar - overrides all cached CSS */
   /* Insight brand palette (sampled from insight.com's own logo mark):
@@ -30,8 +30,15 @@
   #sidebar::before { background: none !important; content: none !important; }
   #sidebar::after { content: none !important; }
   .sb-logo {
-    background: #FFFFFF !important;
-    border-bottom: 1px solid #E2E8F0 !important;
+    background: linear-gradient(135deg, #FDF2FA 0%, #FFFFFF 55%) !important;
+    border-bottom: none !important;
+    position: relative !important;
+  }
+  .sb-logo::after {
+    content: '' !important;
+    position: absolute !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
+    height: 3px !important;
+    background: linear-gradient(90deg, #AF1C86 0%, #D30E8B 50%, #ED1844 100%) !important;
   }
   .brand-logo-img { height: 20px; width: auto; display: block; }
   .brand { gap: 9px !important; }
@@ -392,7 +399,7 @@
                 <option value="databricks-claude-sonnet-5">Claude Sonnet 5</option>
                 <option value="databricks-claude-haiku-4-5">Claude Haiku 4.5</option>
               </select>
-              <button type="button" class="btn btn-full" id="btnAiConvert" onclick="aiConvertSelected()" style="border-radius:10px;padding:11px 16px;font-size:13px;background:linear-gradient(135deg,#7C3AED,#6366F1);color:#fff;border:none;cursor:pointer;font-weight:600;">
+              <button type="button" class="btn btn-full" id="btnAiConvert" onclick="aiConvertSelected()" style="border-radius:10px;padding:11px 16px;font-size:13px;background:linear-gradient(135deg,#AF1C86,#D30E8B);color:#fff;border:none;cursor:pointer;font-weight:600;">
                 <svg viewBox="0 0 24 24" style="width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
                 AI SQL → PySpark
                 <div class="btn-prog" id="aiProgBar" style="width:0%"></div>
@@ -1355,7 +1362,7 @@
               Use <strong>Test</strong> below to validate the credential can reach your storage account.
             </div>
             <div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-              <button class="btn btn-xs" id="btnTestStorageCred" onclick="cfgTestStorageCredential()" style="background:#7C3AED;color:#fff;padding:5px 14px;font-weight:600;font-size:11px;">
+              <button class="btn btn-xs" id="btnTestStorageCred" onclick="cfgTestStorageCredential()" style="background:#AF1C86;color:#fff;padding:5px 14px;font-weight:600;font-size:11px;">
                 <svg viewBox="0 0 24 24" style="width:12px;height:12px;margin-right:4px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
                 Test Storage Credential
               </button>
@@ -4127,8 +4134,8 @@
         .disc-kpi-card .disc-k-l{font-size:9px;text-transform:uppercase;letter-spacing:.1em;font-weight:700;opacity:.85;}
         .disc-kpi-card .disc-k-ico{position:absolute;top:8px;right:8px;width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;opacity:.25;}
         /* Color themes */
-        .dkc-blue{background:linear-gradient(135deg,#EFF6FF,#DBEAFE);border-color:rgba(59,130,246,.2);} .dkc-blue .disc-k-n{color:#1D4ED8;} .dkc-blue .disc-k-l{color:#3B82F6;}
-        .dkc-indigo{background:linear-gradient(135deg,#EEF2FF,#E0E7FF);border-color:rgba(99,102,241,.2);} .dkc-indigo .disc-k-n{color:#4338CA;} .dkc-indigo .disc-k-l{color:#6366F1;}
+        .dkc-blue{background:linear-gradient(135deg,#FDF2FA,#FCE7F3);border-color:rgba(211,14,139,.2);} .dkc-blue .disc-k-n{color:#8B1569;} .dkc-blue .disc-k-l{color:#D30E8B;}
+        .dkc-indigo{background:linear-gradient(135deg,#FBEAF5,#F5D0E8);border-color:rgba(175,28,134,.2);} .dkc-indigo .disc-k-n{color:#7C1568;} .dkc-indigo .disc-k-l{color:#AF1C86;}
         .dkc-green{background:linear-gradient(135deg,#ECFDF5,#D1FAE5);border-color:rgba(16,185,129,.2);} .dkc-green .disc-k-n{color:#065F46;} .dkc-green .disc-k-l{color:#10B981;}
         .dkc-yellow{background:linear-gradient(135deg,#FFFBEB,#FEF3C7);border-color:rgba(245,158,11,.2);} .dkc-yellow .disc-k-n{color:#92400E;} .dkc-yellow .disc-k-l{color:#D97706;}
         .dkc-orange{background:linear-gradient(135deg,#FFF7ED,#FFEDD5);border-color:rgba(234,88,12,.2);} .dkc-orange .disc-k-n{color:#9A3412;} .dkc-orange .disc-k-l{color:#EA580C;}
@@ -4290,8 +4297,8 @@
 
         <!-- 4. BOM Table -->
         <div class="disc-sec-hdr">
-          <div class="disc-sec-dot" style="background:#3B82F6;"></div>
-          <div class="disc-sec-title" style="color:#3B82F6;">Bill of Materials</div>
+          <div class="disc-sec-dot" style="background:#D30E8B;"></div>
+          <div class="disc-sec-title" style="color:#D30E8B;">Bill of Materials</div>
           <div class="disc-sec-line"></div>
           <span id="discBomCount" style="font-size:11px;color:var(--t3);font-weight:600;">0 objects</span>
         </div>
@@ -4398,7 +4405,7 @@
 <!-- ════════════════════════════════════════════════════════════════════════════
      JAVASCRIPT — all logic unchanged, just the file
      ════════════════════════════════════════════════════════════════════════════ -->
-<script src="/static/main.js?v=27072026m"></script>
+<script src="/static/main.js?v=27072026n"></script>
 <script src="/static/discovery.js?v=33"></script>
 
 <!-- Post-diagnostic: runs AFTER the main script to verify & add fallback listeners -->
@@ -4445,9 +4452,9 @@
     </div>
   </div>
 </div>
-<script src="/static/supplementary.js?v=37"></script>
+<script src="/static/supplementary.js?v=38"></script>
 <script src="/static/preflight.js?v=1"></script>
-<script src="/static/genie-mcp.js?v=1"></script>
+<script src="/static/genie-mcp.js?v=2"></script>
 
 <!-- ═══════════ GENIE SETTINGS TOGGLE ═══════════ -->
 <script>
@@ -4634,15 +4641,15 @@ window.genieToggleSettings = function(){
 .genie-fab {
   position:fixed; bottom:28px; right:28px; z-index:99990;
   width:60px; height:60px; border-radius:50%;
-  background:linear-gradient(135deg, #6366F1 0%, #818CF8 50%, #A78BFA 100%);
-  box-shadow:0 4px 20px rgba(99,102,241,.4), 0 2px 8px rgba(0,0,0,.15);
+  background:linear-gradient(135deg, #AF1C86 0%, #D30E8B 50%, #ED1844 100%);
+  box-shadow:0 4px 20px rgba(211,14,139,.4), 0 2px 8px rgba(0,0,0,.15);
   cursor:pointer; display:flex; align-items:center; justify-content:center;
   transition:all .3s cubic-bezier(.4,0,.2,1);
   overflow:hidden;
 }
 .genie-fab:hover {
   transform:scale(1.1);
-  box-shadow:0 6px 28px rgba(99,102,241,.5), 0 3px 12px rgba(0,0,0,.2);
+  box-shadow:0 6px 28px rgba(211,14,139,.5), 0 3px 12px rgba(0,0,0,.2);
 }
 .genie-fab:active { transform:scale(.95); }
 

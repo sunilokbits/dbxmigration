@@ -5979,8 +5979,8 @@ function dmERSetFK(tableName, colName, currentFK){
   const opts=allTables.map(t=>'<option value="'+t+'"'+(t===currentFK?' selected':'')+'>'+t+'</option>').join('');
   const div=document.createElement('div');
   div.id='dmFKSetterDlg';
-  div.style.cssText='position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:var(--bg1,#fff);border:2px solid #6366F1;border-radius:12px;padding:16px;width:320px;box-shadow:0 20px 60px rgba(0,0,0,.3);';
-  div.innerHTML='<div style="font-weight:700;font-size:13px;margin-bottom:10px;color:#6366F1;">\ud83d\udd17 Set Foreign Key Reference</div>'+
+  div.style.cssText='position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:var(--bg1,#fff);border:2px solid #AF1C86;border-radius:12px;padding:16px;width:320px;box-shadow:0 20px 60px rgba(0,0,0,.3);';
+  div.innerHTML='<div style="font-weight:700;font-size:13px;margin-bottom:10px;color:#AF1C86;">\ud83d\udd17 Set Foreign Key Reference</div>'+
     '<div style="font-size:11px;margin-bottom:8px;color:var(--t2);">Column: <b>'+tableName+'.'+colName+'</b></div>'+
     '<div style="margin-bottom:8px;"><label style="font-size:10px;font-weight:600;">References Table:</label>'+
     '<select class="inp" id="dmFKTarget" style="width:100%;font-size:11px;"><option value="">\u2014 None (remove FK) \u2014</option>'+opts+'</select></div>'+
@@ -6342,7 +6342,7 @@ function _dmEditMetaScope(er, g){
     '<textarea id="dmScopeTextarea" style="width:100%;height:180px;border:1px solid #CBD5E1;border-radius:6px;padding:10px;font-size:12px;font-family:Segoe UI,system-ui,sans-serif;resize:vertical;outline:none;" placeholder="Enter scope description...\n- Hardware & SW\n- Services SKUs\n- Pricing Conditions">'+_escHtml(current)+'</textarea>'+
     '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">'+
     '<button onclick="document.getElementById(\'dmScopeEditOverlay\').remove()" style="padding:6px 16px;border:1px solid #CBD5E1;border-radius:6px;background:#fff;cursor:pointer;font-size:12px;">Cancel</button>'+
-    '<button id="dmScopeSaveBtn" style="padding:6px 16px;border:none;border-radius:6px;background:#2563EB;color:#fff;cursor:pointer;font-size:12px;font-weight:600;">Save</button>'+
+    '<button id="dmScopeSaveBtn" style="padding:6px 16px;border:none;border-radius:6px;background:#AF1C86;color:#fff;cursor:pointer;font-size:12px;font-weight:600;">Save</button>'+
     '</div>';
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
@@ -6646,13 +6646,13 @@ function _dmShowEdgeEditor(edge, edgeIdx, x, y){
             }).join(''):'<tr><td style="padding:4px 8px;border:1px solid #E2E8F0;color:#94A3B8;" colspan="3">No FK columns mapped yet. Use "+ Add Mapping" below.</td></tr>'}
           </tbody>
         </table>
-        <button id="dmFKAddMappingBtn" style="margin-top:6px;font-size:10px;padding:3px 10px;border:1px solid #3B82F6;border-radius:4px;background:#EFF6FF;color:#2563EB;cursor:pointer;">+ Add Mapping</button>
+        <button id="dmFKAddMappingBtn" style="margin-top:6px;font-size:10px;padding:3px 10px;border:1px solid #D30E8B;border-radius:4px;background:#FDF2FA;color:#AF1C86;cursor:pointer;">+ Add Mapping</button>
       </div>
     </div>
     <!-- Bottom buttons -->
     <div style="border-top:1px solid #B0B0B0;padding:10px 16px;display:flex;justify-content:flex-end;gap:8px;background:#F0F0F0;">
-      <button id="dmFKOKBtn" style="padding:5px 24px;font-size:11px;border:1px solid #3B82F6;border-radius:4px;background:#2563EB;color:#fff;cursor:pointer;font-weight:600;">OK</button>
-      <button id="dmFKApplyBtn" style="padding:5px 24px;font-size:11px;border:1px solid #3B82F6;border-radius:4px;background:#EFF6FF;color:#2563EB;cursor:pointer;font-weight:600;">Apply</button>
+      <button id="dmFKOKBtn" style="padding:5px 24px;font-size:11px;border:1px solid #D30E8B;border-radius:4px;background:#AF1C86;color:#fff;cursor:pointer;font-weight:600;">OK</button>
+      <button id="dmFKApplyBtn" style="padding:5px 24px;font-size:11px;border:1px solid #D30E8B;border-radius:4px;background:#FDF2FA;color:#AF1C86;cursor:pointer;font-weight:600;">Apply</button>
       <button id="dmFKCancelBtn" style="padding:5px 24px;font-size:11px;border:1px solid #CBD5E1;border-radius:4px;background:#fff;color:#475569;cursor:pointer;">Cancel</button>
     </div>
   `;

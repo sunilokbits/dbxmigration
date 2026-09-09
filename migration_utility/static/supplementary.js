@@ -613,7 +613,7 @@ window.genieSendMessage=function(){
           if(d.token_comparison&&d.token_comparison.savings_pct>0)tokenHtml+=' <span style="color:#059669;font-weight:700;">\u2714 Saved '+d.token_comparison.savings_pct+'%</span>';
           tokenHtml+='</div>';
         }
-        if(d.optimization_applied)tokenHtml+='<div style="font-size:8px;color:#6366F1;margin-top:2px;">\u2699\ufe0f '+d.optimization_applied+'</div>';
+        if(d.optimization_applied)tokenHtml+='<div style="font-size:8px;color:#AF1C86;margin-top:2px;">\u2699\ufe0f '+d.optimization_applied+'</div>';
         _renderBotText(botId,d.text,tokenHtml);
         _setDone(turn);
       }).catch(function(e){if(_guardTurn(turn))_failTurn(turn,'FM request failed: '+_errorMessage(e));});
@@ -705,7 +705,7 @@ function _appendUserMsg(t){
 }
 
 function _appendBotPlaceholder(id){
-  var dot='<span style="width:5px;height:5px;border-radius:50%;background:#2557D6;display:inline-block;animation:genieThink .8s ease-in-out infinite ';
+  var dot='<span style="width:5px;height:5px;border-radius:50%;background:#AF1C86;display:inline-block;animation:genieThink .8s ease-in-out infinite ';
   _appendToChat('<div class="genie-msg bot" id="'+id+'">'+
     '<div class="genie-avatar"><svg viewBox="0 0 24 24" fill="white"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></div>'+
     '<div class="genie-msg-content"><div class="genie-msg-text" id="'+id+'_t" style="display:flex;align-items:center;gap:8px;color:#9CA3AF;font-size:12.5px;">'+
@@ -718,9 +718,9 @@ function _updateBotPlaceholder(id,st){
   var el=$g(id+'_t');if(!el)return;
   var lbl={EXECUTING_QUERY:'Running query against your data…',FETCHING_DATA:'Fetching results…',FILTERING_CONTEXT:'Analyzing context…',PREPARING_RESPONSE:'Preparing response…'}[st]||'Processing…';
   el.innerHTML='<span style="display:flex;gap:3px;">'+
-    '<span style="width:6px;height:6px;border-radius:50%;background:#2557D6;display:inline-block;animation:genieThink .8s ease-in-out infinite 0s;"></span>'+
-    '<span style="width:6px;height:6px;border-radius:50%;background:#2557D6;display:inline-block;animation:genieThink .8s ease-in-out infinite .15s;"></span>'+
-    '<span style="width:6px;height:6px;border-radius:50%;background:#2557D6;display:inline-block;animation:genieThink .8s ease-in-out infinite .3s;"></span>'+
+    '<span style="width:6px;height:6px;border-radius:50%;background:#AF1C86;display:inline-block;animation:genieThink .8s ease-in-out infinite 0s;"></span>'+
+    '<span style="width:6px;height:6px;border-radius:50%;background:#AF1C86;display:inline-block;animation:genieThink .8s ease-in-out infinite .15s;"></span>'+
+    '<span style="width:6px;height:6px;border-radius:50%;background:#AF1C86;display:inline-block;animation:genieThink .8s ease-in-out infinite .3s;"></span>'+
     '</span>'+lbl;
 }
 
@@ -771,7 +771,7 @@ function _renderBotText(id,text,tokenHtml){
         '<div style="display:flex;align-items:center;justify-content:space-between;background:#EFF6FF;padding:6px 10px;border-bottom:1px solid #DBEAFE;">'+
         '<span style="color:#1E40AF;font-size:10px;font-weight:700;">SQL</span>'+
         '<div><button onclick="genieFmCopySql(\''+bid+'\')" style="background:#fff;border:1px solid #CBD5E1;color:#475569;border-radius:5px;padding:3px 10px;font-size:10px;cursor:pointer;margin-right:5px;font-weight:500;">Copy</button>'+
-        '<button onclick="genieFmRunSql(\''+bid+'\')" style="background:linear-gradient(135deg,#2563EB,#3B82F6);border:none;color:#fff;border-radius:5px;padding:4px 12px;font-size:10px;cursor:pointer;font-weight:700;">\u25B6 Run</button></div></div>'+
+        '<button onclick="genieFmRunSql(\''+bid+'\')" style="background:linear-gradient(135deg,#AF1C86,#D30E8B);border:none;color:#fff;border-radius:5px;padding:4px 12px;font-size:10px;cursor:pointer;font-weight:700;">\u25B6 Run</button></div></div>'+
         '<pre id="'+bid+'_code" style="background:#FFFFFF;color:#1E3A5F;padding:12px;font-size:11.5px;overflow-x:auto;margin:0;white-space:pre-wrap;line-height:1.6;">'+escaped+'</pre>'+
         '<textarea id="'+bid+'_raw" style="display:none;">'+rawB64+'</textarea>'+
         '<div id="'+bid+'_result" style="display:none;"></div></div>';
@@ -785,7 +785,7 @@ function _renderBotText(id,text,tokenHtml){
         '<div style="display:flex;align-items:center;justify-content:space-between;background:#EFF6FF;padding:6px 10px;border-bottom:1px solid #DBEAFE;">'+
         '<span style="color:#1E40AF;font-size:10px;font-weight:700;">SQL</span>'+
         '<div><button onclick="genieFmCopySql(\''+bid+'\')" style="background:#fff;border:1px solid #CBD5E1;color:#475569;border-radius:5px;padding:3px 10px;font-size:10px;cursor:pointer;margin-right:5px;font-weight:500;">Copy</button>'+
-        '<button onclick="genieFmRunSql(\''+bid+'\')" style="background:linear-gradient(135deg,#2563EB,#3B82F6);border:none;color:#fff;border-radius:5px;padding:4px 12px;font-size:10px;cursor:pointer;font-weight:700;">\u25B6 Run</button></div></div>'+
+        '<button onclick="genieFmRunSql(\''+bid+'\')" style="background:linear-gradient(135deg,#AF1C86,#D30E8B);border:none;color:#fff;border-radius:5px;padding:4px 12px;font-size:10px;cursor:pointer;font-weight:700;">\u25B6 Run</button></div></div>'+
         '<pre id="'+bid+'_code" style="background:#FFFFFF;color:#1E3A5F;padding:12px;font-size:11.5px;overflow-x:auto;margin:0;white-space:pre-wrap;line-height:1.6;">'+escaped+'</pre>'+
         '<textarea id="'+bid+'_raw" style="display:none;">'+rawB64+'</textarea>'+
         '<div id="'+bid+'_result" style="display:none;"></div></div>';
@@ -839,9 +839,9 @@ function _renderSqlBlock(id,sql){
   var sid=id+'_sql';
   var rawB64=btoa(unescape(encodeURIComponent(sql)));
   return '<div class="genie-sql-block">'+
-    '<div class="genie-sql-hd"><div class="genie-sql-hd-left"><svg viewBox="0 0 24 24" style="width:13px;height:13px;stroke:#2563EB;fill:none;stroke-width:2;"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>Generated SQL</div>'+
+    '<div class="genie-sql-hd"><div class="genie-sql-hd-left"><svg viewBox="0 0 24 24" style="width:13px;height:13px;stroke:#AF1C86;fill:none;stroke-width:2;"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>Generated SQL</div>'+
     '<button class="genie-sql-copy" onclick="genieCopySql(\'' +sid+ '\')">Copy</button>'+
-    '<button class="genie-sql-copy" style="background:linear-gradient(135deg,#2563EB,#3B82F6);color:#fff;border:none;font-weight:700;" onclick="genieFmRunSql(\'' +sid+ '\')">\u25B6 Run</button>'+
+    '<button class="genie-sql-copy" style="background:linear-gradient(135deg,#AF1C86,#D30E8B);color:#fff;border:none;font-weight:700;" onclick="genieFmRunSql(\'' +sid+ '\')">\u25B6 Run</button>'+
     '<button class="genie-sql-toggle" onclick="genieToggleSql(\'' +sid+ '_body\')">&#9660;</button></div>'+
     '<div id="'+sid+'_body" class="genie-sql-body"><pre id="'+sid+'">'+_hlSql(sql)+'</pre></div>'+
     '<textarea id="'+sid+'_raw" style="display:none;">'+rawB64+'</textarea>'+
@@ -868,7 +868,7 @@ function _renderResultsTable(data){
   var html='<div class="genie-results-block">'+
     '<div class="genie-results-hd"><svg viewBox="0 0 24 24" style="width:13px;height:13px;stroke:#059669;fill:none;stroke-width:2;"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>'+
     '<span style="font-weight:700;">'+total+' row'+(total!==1?'s':'')+'</span>'+
-    '<div class="genie-results-hd-right"><button class="genie-sql-copy" style="background:rgba(16,185,129,.15);color:#059669;" onclick="genieExportTable(this)">Export CSV</button></div></div>'+
+    '<div class="genie-results-hd-right"><button class="genie-sql-copy" style="background:rgba(211,14,139,.15);color:#AF1C86;" onclick="genieExportTable(this)">Export CSV</button></div></div>'+
     '<div class="genie-results-wrap"><table class="genie-table"><thead><tr>';
   cols.forEach(function(c){html+='<th>'+_esc(String(c))+'</th>';});
   html+='</tr></thead><tbody>';

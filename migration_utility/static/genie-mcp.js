@@ -188,10 +188,10 @@ function _appendUserMsg(t){
 function _appendBotPlaceholder(id){
   var list = $g('genieMsgList');
   if(!list) return;
-  var dot = '<span style="width:5px;height:5px;border-radius:50%;background:#8B5CF6;display:inline-block;animation:genieThink .8s ease-in-out infinite ';
+  var dot = '<span style="width:5px;height:5px;border-radius:50%;background:#AF1C86;display:inline-block;animation:genieThink .8s ease-in-out infinite ';
   var d = document.createElement('div');
   d.innerHTML = '<div class="genie-msg bot" id="' + id + '">' +
-    '<div class="genie-avatar" style="background:linear-gradient(135deg,#6366F1,#8B5CF6);"><svg viewBox="0 0 24 24" fill="white"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></div>' +
+    '<div class="genie-avatar" style="background:linear-gradient(135deg,#AF1C86,#D30E8B);"><svg viewBox="0 0 24 24" fill="white"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></div>' +
     '<div class="genie-msg-content"><div class="genie-msg-text" id="' + id + '_t" style="display:flex;align-items:center;gap:8px;color:#9CA3AF;font-size:12.5px;">' +
     '<span style="display:flex;gap:4px;align-items:center;">' +
     dot + '0s;"></span>' + dot + '.15s;"></span>' + dot + '.3s;"></span>' +
@@ -288,7 +288,7 @@ function _injectAddPanelMcpTab(){
   var existingContent = panel.innerHTML;
   panel.innerHTML = '<div data-mcp-injected="1">' +
     '<div class="genie-add-tabs" style="display:flex;gap:0;margin-bottom:12px;border-bottom:1px solid #E2E8F0;">' +
-      '<button id="genieAddTabSpace" class="genie-add-tab active" onclick="genieToggleAddMode(\'space\')" style="flex:1;padding:8px 12px;font-size:11px;font-weight:600;border:none;background:none;cursor:pointer;border-bottom:2px solid #6366F1;color:#6366F1;">Genie Space</button>' +
+      '<button id="genieAddTabSpace" class="genie-add-tab active" onclick="genieToggleAddMode(\'space\')" style="flex:1;padding:8px 12px;font-size:11px;font-weight:600;border:none;background:none;cursor:pointer;border-bottom:2px solid #AF1C86;color:#AF1C86;">Genie Space</button>' +
       '<button id="genieAddTabMcp" class="genie-add-tab" onclick="genieToggleAddMode(\'mcp\')" style="flex:1;padding:8px 12px;font-size:11px;font-weight:600;border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;color:#64748B;">\u26A1 MCP Genie One</button>' +
     '</div>' +
     '<div id="genieAddSpaceFields">' + existingContent + '</div>' +
@@ -297,7 +297,7 @@ function _injectAddPanelMcpTab(){
       '<input type="text" id="genieMcpUrl" placeholder="https://adb-xxx.azuredatabricks.net/api/2.0/mcp/genie" style="width:100%;padding:8px 10px;border:1px solid #D1D5DB;border-radius:6px;font-size:12px;box-sizing:border-box;" /></div>' +
       '<div style="margin-bottom:10px;"><label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Display Name (optional)</label>' +
       '<input type="text" id="genieMcpName" placeholder="Genie One" style="width:100%;padding:8px 10px;border:1px solid #D1D5DB;border-radius:6px;font-size:12px;box-sizing:border-box;" /></div>' +
-      '<button onclick="genieSaveMcpEndpoint()" style="width:100%;padding:9px;background:linear-gradient(135deg,#6366F1,#8B5CF6);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">\u26A1 Add MCP Endpoint</button>' +
+      '<button onclick="genieSaveMcpEndpoint()" style="width:100%;padding:9px;background:linear-gradient(135deg,#AF1C86,#D30E8B);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">\u26A1 Add MCP Endpoint</button>' +
       '<p style="margin:8px 0 0;font-size:10px;color:#6B7280;line-height:1.4;">Connects to Databricks Genie One via Model Context Protocol. Queries across all workspace data with Unity Catalog permissions enforced.</p>' +
     '</div>' +
   '</div>';
@@ -419,7 +419,7 @@ function _injectSqlPanel(){
     '<textarea id="genieSqlInput" rows="3" placeholder="SELECT * FROM catalog.schema.table LIMIT 10" style="width:100%;padding:8px;border:1px solid #D1D5DB;border-radius:6px;font-family:monospace;font-size:11px;resize:vertical;box-sizing:border-box;background:#fff;"></textarea>' +
     '<div style="display:flex;gap:6px;margin-top:6px;">' +
       '<button onclick="genieRunSql()" style="flex:1;padding:7px;background:#10B981;color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">\u25B6 Run SQL</button>' +
-      '<button onclick="genieToggleCatalogBrowser()" style="padding:7px 12px;background:#6366F1;color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">\ud83d\uddc2 Catalogs</button>' +
+      '<button onclick="genieToggleCatalogBrowser()" style="padding:7px 12px;background:#AF1C86;color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">\ud83d\uddc2 Catalogs</button>' +
       '<button id="genieCatalogRefreshBtn" onclick="genieRefreshCatalogs()" style="padding:7px 12px;background:#F59E0B;color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">\u21BB Refresh</button>' +
     '</div>' +
     '<div id="genieCatalogBrowser" style="display:none;margin-top:8px;max-height:200px;overflow-y:auto;border:1px solid #E2E8F0;border-radius:6px;padding:8px;background:#fff;"></div>';
