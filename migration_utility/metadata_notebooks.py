@@ -77,6 +77,12 @@ def generate_metadata_notebooks(
     if pipeline_mode == "dlt":
         notebooks = [
             {
+                "name":        "_Meta_CommonFunctions",
+                "code":        _gen_common_functions(ts),
+                "description": "Shared SQL-escaping helpers, %run'd by Extract and ExecutionLog",
+                "layer":       "common",
+            },
+            {
                 "name":        "01_Meta_Extract",
                 "code":        _gen_extract(catalog, schema, landing_path, ts),
                 "description": "Metadata-driven JDBC extraction → Landing Zone",
@@ -115,6 +121,12 @@ def generate_metadata_notebooks(
         ]
     else:
         notebooks = [
+            {
+                "name":        "_Meta_CommonFunctions",
+                "code":        _gen_common_functions(ts),
+                "description": "Shared SQL-escaping helpers, %run'd by Extract/Bronze/Silver",
+                "layer":       "common",
+            },
             {
                 "name":        "01_Meta_Extract",
                 "code":        _gen_extract(catalog, schema, landing_path, ts),
@@ -164,6 +176,49 @@ def generate_metadata_notebooks(
             "generated_at":     ts,
         },
     }
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  0. SHARED HELPER FUNCTIONS — %run'd by every other notebook below
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def _gen_common_functions(ts):
+    """SQL-escaping helpers shared by Extract/Bronze/Silver/ExecutionLog.
+
+    These were previously copy-pasted identically into each of those
+    notebooks -- a fix to the escaping logic in one place silently never
+    reached the others. Every notebook that needs them does
+    `%run ./_Meta_CommonFunctions` instead of redefining them locally.
+    Deliberately has no widgets/catalog-schema dependency: these are pure
+    functions, so %run'ing this notebook works regardless of where in the
+    calling notebook's cell order it happens.
+    """
+    return f'''# Databricks notebook source
+# MAGIC %md
+# MAGIC # 🔧 Common Functions — Shared Helpers
+# MAGIC **Generated:** {ts}
+# MAGIC
+# MAGIC SQL-escaping helpers shared by the other metadata-driven notebooks via
+# MAGIC `%run ./_Meta_CommonFunctions`. Keeping these in one place means a fix
+# MAGIC here reaches every notebook that uses them, instead of needing the same
+# MAGIC edit copy-pasted (and kept in sync by hand) across each one.
+# MAGIC ---
+
+# COMMAND ----------
+
+def _sql_esc(val):
+    """Escape a value for safe SQL string interpolation (no surrounding quotes)."""
+    if val is None:
+        return "NULL"
+    s = str(val).replace("\\x00", "").replace("'", "''").replace("\\n", " ").replace("\\r", " ")
+    return s[:500]
+
+def _esc(v):
+    """Escape a value as a quoted SQL literal (NULL or 'escaped value')."""
+    if v is None:
+        return "NULL"
+    return "'" + str(v).replace("'", "''") + "'"
+'''
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -224,6 +279,10 @@ print(f"📓 Extract notebook: {{_NB_PATH}}")
 
 # COMMAND ----------
 
+# MAGIC %run ./_Meta_CommonFunctions
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## 🔍 Read Job Metadata from Delta
 
@@ -232,13 +291,6 @@ print(f"📓 Extract notebook: {{_NB_PATH}}")
 import json, re as _re
 from pyspark.sql import functions as F
 from datetime import datetime
-
-def _sql_esc(val):
-    """Escape a value for safe SQL string interpolation."""
-    if val is None:
-        return "NULL"
-    s = str(val).replace("\\x00", "").replace("'", "''").replace("\\n", " ").replace("\\r", " ")
-    return s[:500]
 
 job_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
 wm_tbl  = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_watermark_metadata"
@@ -600,6 +652,10 @@ print(f"📓 Bronze notebook: {{_NB_PATH}}")
 
 # COMMAND ----------
 
+# MAGIC %run ./_Meta_CommonFunctions
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## 🔍 Read Job Metadata
 
@@ -608,13 +664,6 @@ print(f"📓 Bronze notebook: {{_NB_PATH}}")
 import json, re as _re
 from pyspark.sql import functions as F
 from datetime import datetime
-
-def _sql_esc(val):
-    """Escape a value for safe SQL string interpolation."""
-    if val is None:
-        return "NULL"
-    s = str(val).replace("\\x00", "").replace("'", "''").replace("\\n", " ").replace("\\r", " ")
-    return s[:500]
 
 job_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
 run_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history"
@@ -986,6 +1035,10 @@ print(f"📓 Silver notebook: {{_NB_PATH}}")
 
 # COMMAND ----------
 
+# MAGIC %run ./_Meta_CommonFunctions
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## 🔍 Read Job Metadata
 
@@ -994,13 +1047,6 @@ print(f"📓 Silver notebook: {{_NB_PATH}}")
 import json, re as _re
 from pyspark.sql import functions as F
 from datetime import datetime
-
-def _sql_esc(val):
-    \"\"\"Escape a value for safe SQL string interpolation.\"\"\"
-    if val is None:
-        return "NULL"
-    s = str(val).replace("\\x00", "").replace("'", "''").replace("\\n", " ").replace("\\r", " ")
-    return s[:500]
 
 job_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
 run_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history"
@@ -2246,15 +2292,14 @@ print(f"📝 Logging SDP stage: status={{_st}} groups={{len(GROUPS)}} rows={{_to
 
 # COMMAND ----------
 
+# MAGIC %run ./_Meta_CommonFunctions
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## 🗄️ Update Metadata Tables
 
 # COMMAND ----------
-
-def _esc(v):
-    if v is None:
-        return "NULL"
-    return "'" + str(v).replace("'", "''") + "'"
 
 job_tbl  = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
 pipe_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_pipeline_metadata"
@@ -2488,14 +2533,17 @@ def _make_bronze(job):
     # prefix and no post-run relocation.
     bronze_full = f"{{BRONZE_CATALOG}}.{{TARGET_SCHEMA}}.{{tbl.lower()}}"
 
+    # No manual delta.autoOptimize.*/pipelines.autoOptimize.managed properties
+    # here -- enable Predictive Optimization on the {{BRONZE_CATALOG}} catalog
+    # instead (ALTER CATALOG ... SET PREDICTIVE OPTIMIZATION ENABLED). It
+    # supersedes manual auto-optimize, adapts per-table instead of using one
+    # fixed setting for every table, and also covers OPTIMIZE/VACUUM/ANALYZE
+    # that autoOptimize alone never did.
     @dlt.table(
         name=bronze_full,
         comment=f"Bronze — raw ingestion of {{full}} via Auto Loader",
         table_properties={{
             "quality": "bronze",
-            "delta.autoOptimize.optimizeWrite": "true",
-            "delta.autoOptimize.autoCompact":   "true",
-            "pipelines.autoOptimize.managed":   "true",
         }},
     )
     @dlt.expect_or_drop("dq01_valid_landing_ts",   "__landing_ts IS NOT NULL")
@@ -2601,13 +2649,14 @@ def _make_silver(job):
     else:
         silver_full = f"{{BRONZE_CATALOG}}.{{TARGET_SCHEMA}}.silver_{{tbl.lower()}}"
 
+    # Same reasoning as the Bronze table above -- rely on Predictive
+    # Optimization enabled on the {{SILVER_CATALOG}} catalog instead of a
+    # fixed manual autoOptimize setting.
     @dlt.table(
         name=silver_full,
         comment=f"Silver — cleansed & validated {{full}}",
         table_properties={{
             "quality": "silver",
-            "delta.autoOptimize.optimizeWrite": "true",
-            "delta.autoOptimize.autoCompact":   "true",
         }},
     )
     @dlt.expect_or_drop("dq01_valid_bronze_ts",    "__bronze_ts IS NOT NULL")
