@@ -1725,19 +1725,6 @@ async function wfRunOnDatabricks(groupId, pwd){
   // Same as wfCreateMetadataFlow() -- the backend resolves an empty/masked
   // token from Databricks Secrets itself, so only host needs to be present.
   if(!c.host){toast('Databricks host required — configure in MetadataFlow or Settings','terr');return false;}
-  // Get cluster — try UI dropdown first, fallback to auto-detect running cluster
-  let clusterId=(G('wfClusterSelect')||{}).value||'';
-  if(!clusterId){
-    try{
-      const clr=await fetch('/api/v1/workflow/clusters?host='+encodeURIComponent(c.host)+'&token='+encodeURIComponent(c.token));
-      const cld=await clr.json();
-      if(cld.success&&cld.clusters){
-        const running=cld.clusters.find(cl=>cl.state==='RUNNING');
-        if(running)clusterId=running.cluster_id;
-      }
-    }catch(e){}
-  }
-  if(!clusterId){toast('No running cluster found — start a cluster in Pipeline Studio or MetadataFlow','terr');return false;}
   // Get password — try UI field, then deployconfig
   if(pwd===undefined||pwd===''){
     pwd=(G('wfSrcPass')||{}).value||'';
@@ -1754,7 +1741,6 @@ async function wfRunOnDatabricks(groupId, pwd){
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
         host:c.host,token:c.token,catalog:c.catalog,schema:c.schema,
-        cluster_id:clusterId,
         password:pwd,
         workspace_path:G('wfNbWsPath')?.value?.trim()||'/Shared/DBX/MetadataPipeline',
         landing_path:G('wfNbLandingPath')?.value?.trim()||'/mnt/landing',
@@ -2347,13 +2333,6 @@ document.addEventListener('click',function(e){
 
 async function wfCreatePipeline(){
   if(!_wfSelectedJ){toast('Select a table from the dropdown — connect data source first','terr');return;}
-  /* ── Cluster gate ── */
-  const _sel=G('wfClusterSelect');
-  if(!_sel||!_sel.value){toast('Please select a Databricks cluster first','terr');return;}
-  const _cOpt=_sel.options[_sel.selectedIndex];
-  if(_cOpt&&_cOpt.dataset.state!=='RUNNING'){
-    toast('Cluster is '+(_cOpt.dataset.state||'not running')+' — please start the cluster before creating a pipeline','terr');return;
-  }
   const schema=_wfSelectedJ.schema||'dbo';
   const table=_wfSelectedJ.table||_wfSelectedJ.full_name.split('.').pop();
   const loadType=G('wfLoadType').value;
@@ -2387,13 +2366,6 @@ async function wfQuickCreate(){
     ? [..._wfQChecked].sort((a,b)=>a-b).map(i=>_wfQSelected[i]).filter(Boolean)
     : [];
   if(!checkedTables.length){toast('Check the tables you want to migrate using the checkboxes','terr');return;}
-  /* ── Cluster gate ── */
-  const _sel=G('wfClusterSelect');
-  if(!_sel||!_sel.value){toast('Please select a Databricks cluster first','terr');return;}
-  const _cOpt=_sel.options[_sel.selectedIndex];
-  if(_cOpt&&_cOpt.dataset.state!=='RUNNING'){
-    toast('Cluster is '+(_cOpt.dataset.state||'not running')+' — please start the cluster before creating a pipeline','terr');return;
-  }
   // Validate incremental tables have watermark columns (skip for Change Tracking CDC — uses SYS_CHANGE_VERSION)
   const _cdcMode=(G('cfgCdcMode')||{}).value||'watermark';
   for(const t of checkedTables){
@@ -2504,7 +2476,6 @@ async function wfRefreshAll(){
   wfRefreshHistory();
   wfRefreshAuditHistory();
   wfRefreshWatermarks();
-  if(!_wfClustersLoaded)wfFetchClusters();
   if(!_wfCatSchemaLoaded) _wfLoadCatalogSchemas();
   // Re-render open layer detail if any
   if(_openLayer){
@@ -2577,110 +2548,6 @@ async function wfRefreshStats(){
     });
   }catch(e){console.error('wfRefreshStats',e);}
 }
-
-/* ─── Fetch Databricks Clusters ─── */
-let _wfClustersLoaded=false;
-async function wfFetchClusters(){
-  const c=await _wfDbrCredsWithFallback();
-  // Token is intentionally never echoed back to the browser as a real value
-  // (masked, or lives purely in Databricks Secrets) -- the backend resolves
-  // it server-side, so gating on c.token here silently emptied the cluster
-  // dropdown with zero feedback even when real running clusters existed.
-  if(!c.host) return;  // no host configured yet — nothing to query
-  const sel=G('wfClusterSelect'), stat=G('wfClusterStatus'), info=G('wfClusterInfo');
-  stat.textContent='Loading…';stat.style.color='var(--t4)';
-  try{
-    const r=await fetch(`/api/v1/workflow/clusters?host=${encodeURIComponent(c.host)}&token=${encodeURIComponent(c.token)}`);
-    const d=await r.json();
-    if(!d.success)throw new Error(d.error||'Failed to list clusters');
-    const clusters=d.clusters||[];
-    // Keep current selection if possible
-    const prev=sel.value;
-    sel.innerHTML='<option value="">— Select a cluster —</option>';
-    let runCount=0;
-    clusters.forEach(cl=>{
-      const st=cl.state||'UNKNOWN';
-      const isRun=st==='RUNNING';
-      if(isRun)runCount++;
-      const icon=isRun?'🟢':st==='TERMINATED'?'🔴':st==='PENDING'?'🟡':'⚪';
-      const opt=document.createElement('option');
-      opt.value=cl.cluster_id;
-      opt.textContent=`${icon} ${cl.cluster_name}  (${st} · DBR ${cl.spark_version||'N/A'})`;
-      opt.dataset.state=st;
-      sel.appendChild(opt);
-    });
-    // Restore previous selection or auto-select if only one cluster
-    if(prev){sel.value=prev;}
-    else if(clusters.length===1){sel.value=clusters[0].cluster_id;}
-    stat.textContent=`${clusters.length} cluster${clusters.length!==1?'s':''} found (${runCount} running)`;
-    stat.style.color='var(--green)';
-    _wfClustersLoaded=true;
-    _updateClusterInfo();
-  }catch(e){
-    stat.textContent=e.message;stat.style.color='var(--red)';
-    console.error('wfFetchClusters',e);
-  }
-}
-function _updateClusterInfo(){
-  const sel=G('wfClusterSelect'),info=G('wfClusterInfo');
-  const opt=sel.options[sel.selectedIndex];
-  if(opt&&opt.value){
-    info.style.display='block';
-    info.innerHTML=`<span style="font-weight:600;">ID:</span> <code style="font-size:9px;">${opt.value}</code>`;
-  }else{info.style.display='none';}
-  // Start button: never hide, only disable when running
-  const btn=G('btnStartCluster');
-  if(btn){
-    if(opt&&opt.value&&opt.dataset.state==='RUNNING'){
-      btn.disabled=true;btn.style.opacity='0.4';
-      btn.innerHTML='<svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:currentColor;"><polygon points="5 3 19 12 5 21 5 3"/></svg> Running';
-    }else if(opt&&opt.value){
-      btn.disabled=false;btn.style.opacity='1';
-      btn.innerHTML='<svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:currentColor;"><polygon points="5 3 19 12 5 21 5 3"/></svg> Start';
-    }else{
-      btn.disabled=true;btn.style.opacity='0.4';
-      btn.innerHTML='<svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:currentColor;"><polygon points="5 3 19 12 5 21 5 3"/></svg> Start';
-    }
-  }
-}
-
-async function wfStartCluster(){
-  const sel=G('wfClusterSelect');
-  if(!sel||!sel.value){toast('Select a cluster first','terr');return;}
-  const opt=sel.options[sel.selectedIndex];
-  if(opt&&opt.dataset.state==='RUNNING'){toast('Cluster is already running','tinfo');return;}
-  const c=await _wfDbrCredsWithFallback();
-  if(!c.host){toast('Configure Databricks connection in Settings first','terr');return;}
-  const btn=G('btnStartCluster');
-  btn.disabled=true;btn.textContent='Starting…';
-  try{
-    const r=await fetch('/api/v1/workflow/clusters/start',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({host:c.host,token:c.token,cluster_id:sel.value})
-    });
-    const d=await r.json();
-    if(!d.success)throw new Error(d.error||d.message||'Failed');
-    toast('Cluster start initiated — may take 2–5 minutes','tok');
-    // Poll for cluster status update
-    let polls=0;
-    const poller=setInterval(async()=>{
-      polls++;
-      await wfFetchClusters();
-      const updated=sel.options[sel.selectedIndex];
-      if(updated&&updated.dataset.state==='RUNNING'){
-        clearInterval(poller);
-        toast('Cluster is now RUNNING ✔','tok');
-        btn.style.display='none';
-      }
-      if(polls>=40)clearInterval(poller); // stop after ~5 min
-    },8000);
-  }catch(e){toast(e.message,'terr');}
-  btn.disabled=false;btn.innerHTML='<svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:currentColor;"><polygon points="5 3 19 12 5 21 5 3"/></svg> Start Cluster';
-}
-(function(){
-  const sel=document.getElementById('wfClusterSelect');
-  if(sel)sel.addEventListener('change',_updateClusterInfo);
-})();
 
 let _wfPipelineData=[];  // cached for filtering
 async function wfRefreshPipelines(){
@@ -4762,10 +4629,6 @@ async function saveSecretVaultItem(key){
       const nbr=await fetch('/api/v1/workflow/notebooks/status');const nbd=await nbr.json();
       if(nbd.deployed) _wfNbDeployed=true;
     }catch(e){}
-    // Auto-fetch clusters if credentials available
-    if(host&&token&&!_wfClustersLoaded){
-      try{await wfFetchClusters();}catch(e){}
-    }
   }catch(e){console.log('[Auto-Init] No saved config:',e);}
 })();
 

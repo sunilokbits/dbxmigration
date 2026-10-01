@@ -367,7 +367,7 @@ def wf_run_on_databricks(group_id):
         password = get_source_password()
     result = wfm.run_pipeline_on_databricks(
         group_id=group_id, host=d.get("host", "").strip(),
-        token=token, cluster_id=d.get("cluster_id", "").strip(),
+        token=token,
         load_type=d.get("load_type", "").strip(), password=password,
         workspace_path=d.get("workspace_path", "").strip(),
         catalog=d.get("catalog", "").strip(), schema=d.get("schema", "").strip(),
@@ -413,25 +413,6 @@ def wf_list_clusters():
             result["error"] = result.pop("message")
 
         return jsonify(result)
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
-
-
-@workflow_bp.route("/workflow/clusters/start", methods=["POST"])
-@login_required
-def wf_start_cluster():
-    d = request.get_json() or {}
-    host = d.get("host", "").strip()
-    token = d.get("token", "").strip()
-    cluster_id = d.get("cluster_id", "").strip()
-    if not token or is_masked(token):
-        token = get_databricks_token()
-    if not host or not token or not cluster_id:
-        return jsonify({"success": False, "error": "host, token, and cluster_id required"})
-    try:
-        from databricks_connector import DatabricksConnector
-        connector = DatabricksConnector(host, token)
-        return jsonify(connector.start_cluster(cluster_id))
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 

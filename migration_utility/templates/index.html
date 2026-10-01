@@ -2253,26 +2253,11 @@
           </div>
         </div>
 
-        <!-- Cluster Selector — compact bar -->
+        <!-- Compute — serverless only, no cluster selection needed -->
         <div class="card" id="wfClusterCard" style="padding:10px 16px;">
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-            <div style="display:flex;align-items:center;gap:6px;">
-              <svg viewBox="0 0 24 24" style="width:15px;height:15px;color:var(--amber);"><rect x="2" y="3" width="20" height="6" rx="1"/><rect x="2" y="13" width="20" height="6" rx="1"/><circle cx="17" cy="6" r="1.5" fill="currentColor"/><circle cx="17" cy="16" r="1.5" fill="currentColor"/></svg>
-              <span style="font-size:12px;font-weight:700;color:var(--t1);">Cluster</span>
-            </div>
-            <select class="inp" id="wfClusterSelect" style="font-size:11px;min-width:220px;max-width:340px;padding:5px 8px;">
-              <option value="">— Select a cluster —</option>
-            </select>
-            <button class="btn btn-ghost btn-xs" onclick="wfFetchClusters()" title="Refresh cluster list" style="padding:4px 8px;">
-              <svg viewBox="0 0 24 24" style="width:12px;height:12px;"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
-              Refresh
-            </button>
-            <button class="btn btn-xs" id="btnStartCluster" onclick="wfStartCluster()" title="Start the selected cluster" style="display:inline-flex !important;align-items:center;gap:4px;padding:5px 12px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-weight:600;font-size:11px;cursor:pointer;visibility:visible !important;">
-              <svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:currentColor;"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Start
-            </button>
-            <span id="wfClusterStatus" style="font-size:10px;color:var(--t4);"></span>
-            <div id="wfClusterInfo" style="margin-left:auto;font-size:10px;color:var(--t4);display:none;"></div>
+          <div style="display:flex;align-items:center;gap:8px;padding:8px 0;">
+            <span style="background:#059669;color:white;padding:4px 12px;border-radius:12px;font-size:0.8rem;font-weight:600;">⚡ Serverless Compute</span>
+            <span style="color:#6b7280;font-size:0.85rem;">Auto-managed — no cluster selection needed</span>
           </div>
         </div>
 

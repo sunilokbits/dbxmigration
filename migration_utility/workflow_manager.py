@@ -2629,7 +2629,6 @@ def _execute_job_run(run_id: str, job_id: str):
             
             bronze_result = connector.run_notebook(
                 notebook_path=_bronze_nb,
-                cluster_id=cluster_id or None,
                 params=_bronze_params,
             )
             
@@ -2646,7 +2645,6 @@ def _execute_job_run(run_id: str, job_id: str):
             
             silver_result = connector.run_notebook(
                 notebook_path=_silver_nb,
-                cluster_id=cluster_id or None,
                 params=_silver_params,
             )
             
@@ -2798,7 +2796,6 @@ def _execute_job_run(run_id: str, job_id: str):
 
         submit_result = connector.run_notebook(
             notebook_path=nb_path,
-            cluster_id=None,
             params=nb_params,
         )
 
@@ -3772,7 +3769,6 @@ def run_pipeline_on_databricks(
     group_id: str,
     host: str = "",
     token: str = "",
-    cluster_id: str = "",
     load_type: str = "",
     password: str = "",
     workspace_path: str = "",
@@ -3960,7 +3956,6 @@ def run_pipeline_on_databricks(
 
     result = connector.run_notebook(
         notebook_path=orchestrator_nb,
-        cluster_id=cluster_id or None,
         params=params,
     )
 

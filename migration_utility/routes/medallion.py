@@ -95,7 +95,6 @@ def medallion_run_pipeline():
         if not token or is_masked(token):
             token = get_databricks_token()
         workspace_path = d.get("workspace_path", "/Shared/Medallion").strip()
-        cluster_id = d.get("cluster_id", "").strip()
         load_type = d.get("load_type", "full").strip()
         password = d.get("password", "")
         if not host or not token:
@@ -104,7 +103,6 @@ def medallion_run_pipeline():
         connector = DatabricksConnector(host, token)
         result = connector.run_notebook(
             notebook_path=f"{workspace_path}/00_Orchestrator",
-            cluster_id=cluster_id or None,
             params={"load_type": load_type, "password_b64": pwd_b64},
         )
         return jsonify(result)

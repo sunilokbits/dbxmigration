@@ -197,94 +197,41 @@ class DatabricksConnector:
             return {"success": False, "message": f"Upload error: {str(e)[:300]}"}
 
     # ── Run Notebook via Job ──────────────────────────────────────────────────
-    def run_notebook(self, notebook_path: str, cluster_id: str = None,
-                     params: dict = None) -> dict:
-        """Submit a one-time run for a notebook in Databricks."""
+    def run_notebook(self, notebook_path: str, params: dict = None) -> dict:
+        """Submit a one-time serverless run for a notebook in Databricks.
+
+        Every pipeline stage (Extract -> Bronze -> Silver) runs on serverless
+        compute -- there is no cluster fallback here. If serverless is not
+        enabled for this workspace, the submit call fails outright and that
+        failure is surfaced to the caller rather than silently falling back
+        to a job cluster the user never asked for.
+        """
         try:
             nb_name = notebook_path.rsplit("/", 1)[-1]
             task_key = nb_name.replace(" ", "_")[:100]
             nb_task_d = {"notebook_path": notebook_path, "base_parameters": params or {}}
 
             if self._sess:
-                task = {"task_key": task_key, "notebook_task": nb_task_d}
-                if cluster_id:
-                    task["existing_cluster_id"] = cluster_id
-                    d = self._api("POST", "/api/2.1/jobs/runs/submit",
-                                  json={"run_name": f"MigrationStudio_{nb_name}",
-                                        "tasks": [task]})
-                    if "_http_error" in d:
-                        return {"success": False, "message": d["_http_error"]}
-                    return self._fmt_run(d.get("run_id"))
-                try:
-                    sl = {**task, "environment_key": "Default"}
-                    d = self._api("POST", "/api/2.1/jobs/runs/submit", json={
-                        "run_name": f"MigrationStudio_{nb_name}", "tasks": [sl],
-                        "environments": [{"environment_key": "Default",
-                                          "spec": {"client": "1"}}],
-                    })
-                    if "run_id" in d:
-                        return self._fmt_run(d["run_id"])
-                except Exception:
-                    pass
-                fallback_cluster = None
-                try:
-                    cd = self._api("GET", "/api/2.0/clusters/list")
-                    for c in cd.get("clusters", []):
-                        if c.get("state") == "RUNNING":
-                            fallback_cluster = c.get("cluster_id")
-                            break
-                except Exception:
-                    pass
-                if fallback_cluster:
-                    task["existing_cluster_id"] = fallback_cluster
-                else:
-                    task["new_cluster"] = {"spark_version": "14.3.x-scala2.12",
-                                           "node_type_id": "Standard_DS3_v2",
-                                           "num_workers": 2}
-                d = self._api("POST", "/api/2.1/jobs/runs/submit",
-                              json={"run_name": f"MigrationStudio_{nb_name}",
-                                    "tasks": [task]})
+                task = {"task_key": task_key, "notebook_task": nb_task_d,
+                        "environment_key": "Default"}
+                d = self._api("POST", "/api/2.1/jobs/runs/submit", json={
+                    "run_name": f"MigrationStudio_{nb_name}", "tasks": [task],
+                    "environments": [{"environment_key": "Default",
+                                      "spec": {"client": "1"}}],
+                })
                 if "_http_error" in d:
                     return {"success": False, "message": d["_http_error"]}
                 return self._fmt_run(d.get("run_id"))
 
             from databricks.sdk.service.jobs import SubmitTask, NotebookTask, JobEnvironment
-            from databricks.sdk.service.compute import (
-                State as ClusterState, Environment as ComputeEnvironment, ClusterSpec)
+            from databricks.sdk.service.compute import Environment as ComputeEnvironment
             nb_task = NotebookTask(notebook_path=notebook_path, base_parameters=params or {})
-            if cluster_id:
-                run = self._client.jobs.submit(
-                    run_name=f"MigrationStudio_{nb_name}",
-                    tasks=[SubmitTask(task_key=task_key,
-                                     existing_cluster_id=cluster_id,
-                                     notebook_task=nb_task)]).result()
-                return self._format_run_result(run)
-            try:
-                run = self._client.jobs.submit(
-                    run_name=f"MigrationStudio_{nb_name}",
-                    tasks=[SubmitTask(task_key=task_key, environment_key="Default",
-                                     notebook_task=nb_task)],
-                    environments=[JobEnvironment(environment_key="Default",
-                                                 spec=ComputeEnvironment(client="1"))]).result()
-                return self._format_run_result(run)
-            except Exception as e:
-                if not any(kw in str(e).lower() for kw in
-                           ("serverless", "environment_key", "not supported", "not enabled")):
-                    return {"success": False, "message": f"Run submit failed: {str(e)[:300]}"}
-            fallback_cluster = None
-            for c in self._client.clusters.list():
-                if c.state == ClusterState.RUNNING:
-                    fallback_cluster = c.cluster_id
-                    break
-            st = SubmitTask(task_key=task_key, notebook_task=nb_task)
-            if fallback_cluster:
-                st.existing_cluster_id = fallback_cluster
-            else:
-                st.new_cluster = ClusterSpec(spark_version="14.3.x-scala2.12",
-                                             node_type_id="Standard_DS3_v2",
-                                             num_workers=2)
             run = self._client.jobs.submit(
-                run_name=f"MigrationStudio_{nb_name}", tasks=[st]).result()
+                run_name=f"MigrationStudio_{nb_name}",
+                tasks=[SubmitTask(task_key=task_key, environment_key="Default",
+                                 notebook_task=nb_task)],
+                environments=[JobEnvironment(environment_key="Default",
+                                             spec=ComputeEnvironment(client="1"))]).result()
             return self._format_run_result(run)
 
         except Exception as e:
@@ -423,20 +370,5 @@ class DatabricksConnector:
                  "spark_version": c.spark_version, "num_workers": c.num_workers or 0}
                 for c in clusters
             ]}
-        except Exception as e:
-            return {"success": False, "message": str(e)[:300]}
-
-    # ── Start Cluster ─────────────────────────────────────────────────────────
-    def start_cluster(self, cluster_id: str) -> dict:
-        """Start a terminated Databricks cluster."""
-        try:
-            if self._sess:
-                r = self._api("POST", "/api/2.0/clusters/start",
-                              json={"cluster_id": cluster_id})
-                if "_http_error" in r:
-                    return {"success": False, "message": r["_http_error"]}
-                return {"success": True, "message": "Cluster start initiated"}
-            self._client.clusters.start(cluster_id=cluster_id)
-            return {"success": True, "message": "Cluster start initiated"}
         except Exception as e:
             return {"success": False, "message": str(e)[:300]}
