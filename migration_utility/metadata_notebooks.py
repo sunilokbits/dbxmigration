@@ -348,22 +348,32 @@ print(f"🔧 Load Type: {{LOAD_TYPE}}")
 
 IS_SNOWFLAKE = (SRC_TYPE == "snowflake")
 
+# Serverless compute only allows a fixed whitelist of Spark data sources
+# (UNSUPPORTED_DATA_SOURCE otherwise) -- the generic "jdbc" format with an
+# explicit driver class (what spark.read.jdbc()/.format("jdbc") both use
+# under the hood) is NOT on that list, even though the vendor-specific
+# connectors below (format("snowflake")/format("sqlserver")) are. This
+# notebook used to connect via spark.read.jdbc() -- fine on an all-purpose
+# cluster, but it started failing with UNSUPPORTED_DATA_SOURCE the moment
+# everything moved to serverless-only compute. Switched to the native
+# per-vendor connectors instead, which push query/count/table reads down to
+# the source the same way but are explicitly serverless-supported.
 if IS_SNOWFLAKE:
     # Snowflake identifies itself by account (e.g. xy12345.us-east-1), not
     # host:port -- no comma/colon port-splitting needed.
-    print(f"🔧 JDBC target: Snowflake account {{SF_ACCOUNT}}")
-    _sf_url_params = [f"db={{DATABASE}}"] if DATABASE else []
-    if SF_WAREHOUSE:
-        _sf_url_params.append(f"warehouse={{SF_WAREHOUSE}}")
-    if SF_ROLE:
-        _sf_url_params.append(f"role={{SF_ROLE}}")
-    jdbc_url = f"jdbc:snowflake://{{SF_ACCOUNT}}.snowflakecomputing.com/?" + "&".join(_sf_url_params)
-    jdbc_props = {{
-        "user":     USERNAME,
-        "password": PASSWORD,
-        "driver":   "net.snowflake.client.jdbc.SnowflakeDriver",
-        "loginTimeout": "60",
+    print(f"🔧 Source: Snowflake account {{SF_ACCOUNT}}")
+    _SRC_OPTIONS = {{
+        "sfUrl":      f"{{SF_ACCOUNT}}.snowflakecomputing.com",
+        "sfUser":     USERNAME,
+        "sfPassword": PASSWORD,
     }}
+    if DATABASE:
+        _SRC_OPTIONS["sfDatabase"] = DATABASE
+    if SF_WAREHOUSE:
+        _SRC_OPTIONS["sfWarehouse"] = SF_WAREHOUSE
+    if SF_ROLE:
+        _SRC_OPTIONS["sfRole"] = SF_ROLE
+    _SRC_FORMAT = "snowflake"
 
     def _qtbl(sch, tbl):
         return f'"{{sch}}"."{{tbl}}"'
@@ -374,32 +384,27 @@ else:
     encrypt = "true" if SRC_TYPE in ("azuresql", "synapse") else "false"
     trust   = "false" if SRC_TYPE in ("azuresql", "synapse") else "true"
 
-    # Normalize server address to hostname:port for JDBC
+    # Normalize server address to hostname:port.
     # Azure SQL often uses comma notation (server.database.windows.net,1433) but
-    # the JDBC driver only accepts colon notation (server:1433) in the URL.
+    # the connector only accepts colon notation (server:1433) here.
     if "," in SERVER:
         _host, _port = SERVER.rsplit(",", 1)
     elif ":" in SERVER:
         _host, _port = SERVER.rsplit(":", 1)
     else:
         _host, _port = SERVER, "1433"
-    print(f"🔧 JDBC target: {{_host}}:{{_port}}")
+    print(f"🔧 Source: SQL Server {{_host}}:{{_port}}")
 
-    jdbc_url = (
-        f"jdbc:sqlserver://{{_host}}:{{_port}};databaseName={{DATABASE}};"
-        f"encrypt={{encrypt}};trustServerCertificate={{trust}};"
-        f"loginTimeout=60;socketTimeout=0;selectMethod=cursor"
-    )
-
-    jdbc_props = {{
+    _SRC_OPTIONS = {{
+        "host":     _host,
+        "port":     _port,
+        "database": DATABASE,
         "user":     USERNAME,
         "password": PASSWORD,
-        "driver":   "com.microsoft.sqlserver.jdbc.SQLServerDriver",
-        "fetchsize": "10000",
-        "queryTimeout": "0",
-        "loginTimeout": "60",
-        "socketTimeout": "0",
+        "encrypt":  encrypt,
+        "trustServerCertificate": trust,
     }}
+    _SRC_FORMAT = "sqlserver"
 
     def _qtbl(sch, tbl):
         return f"[{{sch}}].[{{tbl}}]"
@@ -407,13 +412,25 @@ else:
     def _qcol(col):
         return f"[{{col}}]"
 
-# Verify JDBC connectivity
+def _read_source(sql_query=None, table=None):
+    """Read from the source via its native serverless-supported connector.
+
+    Exactly one of sql_query (a plain SELECT statement, no wrapping parens
+    or alias needed) or table (a schema-qualified name from _qtbl) must be
+    given -- mirrors dbtable vs query on both the snowflake and sqlserver
+    connectors.
+    """
+    r = spark.read.format(_SRC_FORMAT).options(**_SRC_OPTIONS)
+    r = r.option("query", sql_query) if sql_query else r.option("dbtable", table)
+    return r.load()
+
+# Verify source connectivity
 try:
-    test_df = spark.read.jdbc(jdbc_url, "(SELECT 1 AS ok) AS t", properties=jdbc_props)
+    test_df = _read_source(sql_query="SELECT 1 AS ok")
     test_df.collect()
-    print("✅ JDBC connection verified")
+    print("✅ Source connection verified")
 except Exception as e:
-    msg = f"❌ JDBC connection failed: {{e}}"
+    msg = f"❌ Source connection failed: {{e}}"
     print(msg)
     try:
         spark.sql(f"""
@@ -459,40 +476,32 @@ if use_incremental:
 run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 landing_dest = f"{{LANDING_PATH}}/{{TABLE_NAME}}"
 
-# Build query
+# Build query -- a plain SELECT statement for the `query` option (the native
+# connectors push this straight to the source, no wrapping parens/alias
+# needed the way the old spark.read.jdbc() subquery convention required).
 _qualified_table = _qtbl(TABLE_SCHEMA, TABLE_NAME)
 if use_incremental and watermark:
     _esc_wm = _sql_esc(watermark)
-    query = f"(SELECT * FROM {{_qualified_table}} WHERE {{_qcol(WM_COL)}} > '{{_esc_wm}}') AS q"
+    _query_sql = f"SELECT * FROM {{_qualified_table}} WHERE {{_qcol(WM_COL)}} > '{{_esc_wm}}'"
     print(f"📥 Incremental extract: {{WM_COL}} > '{{_esc_wm}}'")
 else:
-    query = _qualified_table
+    _query_sql = None  # full load -- read the table directly via dbtable
     print(f"📥 Full extract from {{_qualified_table}}")
 
 # Read from source
 try:
-    # For large tables (>100K rows), use partitioned JDBC read to avoid
-    # driver memory pressure.  We estimate row count first with a fast
-    # COUNT query, then use numPartitions if it's a big table.
-    _est_count = 0
+    # Row count is informational only here -- the native connectors manage
+    # their own read parallelism, unlike raw JDBC's numPartitions tuning
+    # this notebook used to do (dropped along with spark.read.jdbc() itself,
+    # since numPartitions isn't a guaranteed option on these connectors).
     try:
-        _cnt_q = f"(SELECT COUNT(1) AS cnt FROM {{_qualified_table}}) AS cq"
-        _est_count = spark.read.jdbc(jdbc_url, _cnt_q, properties=jdbc_props).collect()[0][0]
+        _cnt_sql = f"SELECT COUNT(1) AS cnt FROM ({{_query_sql}}) q" if _query_sql else f"SELECT COUNT(1) AS cnt FROM {{_qualified_table}}"
+        _est_count = _read_source(sql_query=_cnt_sql).collect()[0][0]
         print(f"📊 Estimated row count: {{_est_count:,}}")
     except Exception:
         pass
 
-    _num_partitions = 1
-    if _est_count > 500000:
-        _num_partitions = 8
-    elif _est_count > 100000:
-        _num_partitions = 4
-
-    if _num_partitions > 1:
-        jdbc_props["numPartitions"] = str(_num_partitions)
-        print(f"📊 Using {{_num_partitions}} JDBC partitions for large table")
-
-    df = spark.read.jdbc(jdbc_url, query, properties=jdbc_props)
+    df = _read_source(sql_query=_query_sql, table=_qualified_table)
 
     # Add audit columns
     df = (df
