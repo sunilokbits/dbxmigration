@@ -162,7 +162,6 @@ _METADATA_TABLES = {
         ("wf_source_tables",
          "source_id, source_type, server, database_name, table_schema, table_name, full_name, col_count, "
          "row_estimate, discovered_at"),
-        ("wf_watermark_metadata", "table_name, watermark_column, last_value, updated_at"),
         ("wf_scheduler_config",
          "schedule_id, table_name, table_schema, group_id, job_names, type, cron, interval_value, interval_unit, "
          "status, created_at, last_run, next_run"),
@@ -424,7 +423,7 @@ Uses the Databricks Workspace API to upload each notebook to the configured targ
 
     "metadataflow": """**MetadataFlow** — Provision Unity Catalog and Delta metadata tables.
 
-Creates your configured metadata catalog (`{META}`), schemas, and all 6 config tables (wf_job_metadata, wf_pipeline_metadata, wf_run_history, wf_scheduler_config, wf_source_tables, wf_watermark_metadata).
+Creates your configured metadata catalog (`{META}`), schemas, and all 5 config tables (wf_job_metadata, wf_pipeline_metadata, wf_run_history, wf_scheduler_config, wf_source_tables).
 
 **Must complete before Pipeline Studio or Job Manager.**""",
 

@@ -227,14 +227,14 @@ box(sl, dbr_x + Inches(0.12), meta_y, dbr_w - Inches(0.24), Inches(0.22),
     GREEN, "Metadata Delta Tables  •  Reconciliation  •  Logging  •  DQ Metrics", sz=7.5, fc=WHITE, bold=True)
 
 meta_tables = ["wf_pipeline_metadata", "wf_job_metadata", "wf_run_history",
-               "wf_watermark_metadata", "wf_source_tables",
+               "wf_source_tables",
                "Reconciliation.*", "ExecutionLog.*"]
-mt_w = (dbr_w - Inches(0.24) - Inches(0.07) * 6) / 7
+mt_w = (dbr_w - Inches(0.24) - Inches(0.07) * 5) / 6
 for i, tbl in enumerate(meta_tables):
     mx = dbr_x + Inches(0.12) + i * (mt_w + Inches(0.07))
-    clr = GREEN if i < 5 else ORANGE
+    clr = GREEN if i < 4 else ORANGE
     box(sl, mx, meta_y + Inches(0.24), mt_w, Inches(0.26),
-        RGBColor(0xE8, 0xF5, 0xE9) if i < 5 else RGBColor(0xFF, 0xF3, 0xE0),
+        RGBColor(0xE8, 0xF5, 0xE9) if i < 4 else RGBColor(0xFF, 0xF3, 0xE0),
         tbl, sz=5.5, fc=DARK_GRAY, line_clr=clr)
 
 # ── Notebooks (inside Databricks) ───────────────────────────────────────────

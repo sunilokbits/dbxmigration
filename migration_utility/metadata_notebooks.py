@@ -84,7 +84,7 @@ def generate_metadata_notebooks(
             },
             {
                 "name":        "01_Meta_Extract",
-                "code":        _gen_extract(catalog, schema, landing_path, ts),
+                "code":        _gen_extract(catalog, schema, landing_path, ts, "dlt"),
                 "description": "Metadata-driven JDBC extraction → Landing Zone",
                 "layer":       "extract",
             },
@@ -129,7 +129,7 @@ def generate_metadata_notebooks(
             },
             {
                 "name":        "01_Meta_Extract",
-                "code":        _gen_extract(catalog, schema, landing_path, ts),
+                "code":        _gen_extract(catalog, schema, landing_path, ts, "standard"),
                 "description": "Metadata-driven JDBC extraction → Landing Zone",
                 "layer":       "extract",
             },
@@ -218,6 +218,54 @@ def _esc(v):
     if v is None:
         return "NULL"
     return "'" + str(v).replace("'", "''") + "'"
+
+def _resolve_bronze_table(target_config, metadata_catalog, metadata_schema, table_name, pipeline_mode):
+    """Resolve the fully-qualified Bronze table name for a job from its
+    stored target_config -- used by Extract to read MAX(watermark_column)
+    live from the table Bronze actually writes to, instead of a separately
+    maintained watermark bookkeeping table that can drift out of sync with
+    reality. Pure name resolution only (no catalog/schema creation, no
+    notebook.exit) -- safe to call even before the table exists, since
+    callers wrap the resulting query in their own try/except.
+
+    Mirrors two DIFFERENT pre-existing naming conventions depending on
+    pipeline_mode, since each one was built independently:
+      - "dlt": mirrors _gen_dlt_pipeline's bronze_full -- direct publish,
+        no bronze_ prefix, lowercase table name.
+      - anything else ("standard"): mirrors _gen_bronze's own MULTI_CATALOG
+        vs single-catalog-with-bronze_-prefix fallback logic exactly, so
+        Extract's read and Bronze's write always agree on the same name.
+    """
+    bronze_cat = target_config.get("bronze_catalog", "") or "bronze"
+    tgt_schema = target_config.get("target_schema", "") or metadata_schema
+
+    if pipeline_mode == "dlt":
+        return f"`{{bronze_cat}}`.`{{tgt_schema}}`.`{{table_name.lower()}}`"
+
+    volumes_cat = target_config.get("volumes_catalog", "")
+    multi_catalog = bool(volumes_cat and target_config.get("bronze_catalog", "") and tgt_schema)
+    if multi_catalog:
+        return f"`{{bronze_cat}}`.`{{tgt_schema}}`.`{{table_name}}`"
+
+    fallback_cat = target_config.get("catalog", "")
+    meta_cat = target_config.get("metadata_catalog", metadata_catalog)
+    if fallback_cat and fallback_cat != meta_cat and fallback_cat != metadata_catalog:
+        target_catalog = fallback_cat
+    elif target_config.get("bronze_catalog", ""):
+        target_catalog = bronze_cat
+    else:
+        target_catalog = metadata_catalog
+
+    fallback_sch = target_config.get("schema", "")
+    meta_sch = target_config.get("metadata_schema", metadata_schema)
+    if fallback_sch and fallback_sch != meta_sch and fallback_sch != metadata_schema:
+        target_schema = fallback_sch
+    elif target_config.get("target_schema", ""):
+        target_schema = tgt_schema
+    else:
+        target_schema = metadata_schema
+
+    return f"`{{target_catalog}}`.`{{target_schema}}`.`bronze_{{table_name}}`"
 '''
 
 
@@ -225,7 +273,7 @@ def _esc(v):
 #  1. METADATA-DRIVEN EXTRACT NOTEBOOK
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def _gen_extract(catalog, schema, landing_path, ts):
+def _gen_extract(catalog, schema, landing_path, ts, pipeline_mode="standard"):
     return f'''# Databricks notebook source
 # MAGIC %md
 # MAGIC # 📥 Metadata-Driven Extract — Landing Zone
@@ -255,6 +303,10 @@ dbutils.widgets.text("password_b64", "", "Source DB Password (base64)")
 dbutils.widgets.text("catalog", "{catalog}", "Metadata Catalog")
 dbutils.widgets.text("schema", "{schema}", "Metadata Schema")
 dbutils.widgets.text("landing_path", "{landing_path}", "Landing Base Path")
+# Baked in at generation time from which manifest this notebook was built
+# for -- Bronze tables are named differently per mode (_resolve_bronze_table
+# in _Meta_CommonFunctions), and this notebook is shared by both.
+dbutils.widgets.text("pipeline_mode", "{pipeline_mode}", "Pipeline Mode (standard/dlt)")
 
 import base64
 
@@ -267,6 +319,7 @@ PASSWORD     = base64.b64decode(_PWD_B64.encode("ascii")).decode("utf-8") if _PW
 CATALOG      = dbutils.widgets.get("catalog").strip()
 SCHEMA       = dbutils.widgets.get("schema").strip()
 LANDING_PATH = dbutils.widgets.get("landing_path").strip()
+PIPELINE_MODE = dbutils.widgets.get("pipeline_mode").strip() or "standard"
 
 print(f"🔧 Job ID  : {{JOB_ID}}")
 print(f"🔧 Run ID  : {{RUN_ID}}")
@@ -292,9 +345,9 @@ import json, re as _re
 from pyspark.sql import functions as F
 from datetime import datetime
 
-job_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
-wm_tbl  = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_watermark_metadata"
-run_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history"
+job_tbl     = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
+run_tbl     = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history"      # READ from this (the latest-per-run_id view)
+run_log_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history_log"  # WRITE to this (append-only)
 
 job_df = spark.sql(f"SELECT * FROM {{job_tbl}} WHERE job_id = '{{_sql_esc(JOB_ID)}}'")
 if job_df.count() == 0:
@@ -434,11 +487,8 @@ except Exception as e:
     print(msg)
     try:
         spark.sql(f"""
-            MERGE INTO {{run_tbl}} AS t
-            USING (SELECT '{{RUN_ID}}' AS run_id) AS s ON t.run_id = s.run_id
-            WHEN MATCHED THEN UPDATE SET t.status = 'failed',
-                t.error_message = '{{_sql_esc(e)}}',
-                t.completed_at = current_timestamp()
+            INSERT INTO {{run_log_tbl}} (run_id, status, error_message, completed_at, logged_at)
+            VALUES ('{{RUN_ID}}', 'failed', '{{_sql_esc(e)}}', current_timestamp(), current_timestamp())
         """)
     except Exception:
         pass
@@ -451,20 +501,32 @@ except Exception as e:
 
 # COMMAND ----------
 
+# Read the current watermark live from the Bronze table Bronze itself
+# writes to, instead of a separately-maintained bookkeeping table -- a
+# bookkeeping table can drift out of sync with reality (its own write
+# failing while the real data write succeeds, or vice versa); querying the
+# data itself can't. Bronze doesn't exist yet on the very first run for a
+# table, so "table/column not found" is expected and just means "no
+# watermark yet, do a full load" -- same fallback behavior as before.
 watermark = None
 use_incremental = (LOAD_TYPE == "incremental" and WM_COL)
 
 if use_incremental:
     try:
-        wm_df = spark.sql(f"SELECT last_value FROM {{wm_tbl}} WHERE table_name = '{{FULL_TABLE}}'")
+        _bronze_table = _resolve_bronze_table(target_config, CATALOG, SCHEMA, TABLE_NAME, PIPELINE_MODE)
+        # Backticks here, not _qcol() -- this queries the Bronze Delta table
+        # via Spark SQL, a different dialect than the source-DB quoting
+        # _qcol() provides (double-quotes for Snowflake, [brackets] for
+        # SQL Server) -- using those here would be invalid Spark SQL.
+        wm_df = spark.sql(f"SELECT MAX(`{{WM_COL}}`) AS mx FROM {{_bronze_table}}")
         rows = wm_df.collect()
-        if rows and rows[0]["last_value"]:
-            watermark = rows[0]["last_value"]
-            print(f"🔄 Watermark found: {{WM_COL}} > '{{watermark}}'")
+        if rows and rows[0]["mx"] is not None:
+            watermark = str(rows[0]["mx"])
+            print(f"🔄 Watermark found in {{_bronze_table}}: {{WM_COL}} > '{{watermark}}'")
         else:
-            print("🔄 No watermark — will do initial full load")
-    except Exception:
-        print("🔄 Watermark table not found — will do full load")
+            print(f"🔄 {{_bronze_table}} is empty — will do initial full load")
+    except Exception as _wm_err:
+        print(f"🔄 Bronze table not found or unreadable ({{_wm_err}}) — will do full load")
 
 # COMMAND ----------
 
@@ -542,11 +604,8 @@ except Exception as e:
     print(msg)
     try:
         spark.sql(f"""
-            MERGE INTO {{run_tbl}} AS t
-            USING (SELECT '{{RUN_ID}}' AS run_id) AS s ON t.run_id = s.run_id
-            WHEN MATCHED THEN UPDATE SET t.status = 'failed',
-                t.error_message = '{{_sql_esc(e)}}',
-                t.completed_at = current_timestamp()
+            INSERT INTO {{run_log_tbl}} (run_id, status, error_message, completed_at, logged_at)
+            VALUES ('{{RUN_ID}}', 'failed', '{{_sql_esc(e)}}', current_timestamp(), current_timestamp())
         """)
     except Exception:
         pass
@@ -555,34 +614,24 @@ except Exception as e:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 💾 Update Watermark & Run History
+# MAGIC ## 💾 Update Run History
 
 # COMMAND ----------
 
-# Update watermark if incremental (using pre-computed value)
-if use_incremental and WM_COL and row_count > 0 and new_wm:
-    try:
-        spark.sql(f"""
-            MERGE INTO {{wm_tbl}} AS t
-            USING (SELECT '{{FULL_TABLE}}' AS table_name, '{{new_wm}}' AS last_value, '{{WM_COL}}' AS watermark_column, current_timestamp() AS updated_at) AS s
-            ON t.table_name = s.table_name
-            WHEN MATCHED THEN UPDATE SET t.last_value = s.last_value, t.updated_at = s.updated_at
-            WHEN NOT MATCHED THEN INSERT *
-        """)
-        print(f"💾 Watermark updated: {{WM_COL}} → {{new_wm}}")
-    except Exception as e:
-        print(f"⚠️ Watermark update failed: {{e}}")
+# No separate watermark bookkeeping write anymore -- next run's incremental
+# read picks up the new value live from Bronze (see the watermark-read cell
+# above), so there's nothing to persist here.
 
-# Update run history
+# Update run history. duration_sec reads started_at back from run_tbl (the
+# view) rather than carrying it forward from this notebook's own state,
+# since the INITIAL 'running' row was inserted by the orchestrator, not
+# here -- this notebook never knew that timestamp to begin with.
 try:
     spark.sql(f"""
-        MERGE INTO {{run_tbl}} AS t
-        USING (SELECT '{{RUN_ID}}' AS run_id) AS s ON t.run_id = s.run_id
-        WHEN MATCHED THEN UPDATE SET
-            t.status = 'success',
-            t.rows_processed = {{row_count}},
-            t.completed_at = current_timestamp(),
-            t.duration_sec = unix_timestamp(current_timestamp()) - unix_timestamp(t.started_at)
+        INSERT INTO {{run_log_tbl}} (run_id, status, rows_processed, completed_at, duration_sec, logged_at)
+        SELECT '{{RUN_ID}}', 'success', {{row_count}}, current_timestamp(),
+               unix_timestamp(current_timestamp()) - unix_timestamp((SELECT started_at FROM {{run_tbl}} WHERE run_id = '{{RUN_ID}}')),
+               current_timestamp()
     """)
 except Exception as e:
     print(f"⚠️ Run history update failed: {{e}}")
@@ -674,8 +723,9 @@ import json, re as _re
 from pyspark.sql import functions as F
 from datetime import datetime
 
-job_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
-run_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history"
+job_tbl     = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
+run_tbl     = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history"      # READ from this (the latest-per-run_id view)
+run_log_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history_log"  # WRITE to this (append-only)
 
 job_df = spark.sql(f"SELECT * FROM {{job_tbl}} WHERE job_id = '{{JOB_ID}}'")
 if job_df.count() == 0:
@@ -766,11 +816,8 @@ except Exception as e:
     print(msg)
     try:
         spark.sql(f"""
-            MERGE INTO {{run_tbl}} AS t
-            USING (SELECT '{{RUN_ID}}' AS run_id) AS s ON t.run_id = s.run_id
-            WHEN MATCHED THEN UPDATE SET t.status = 'failed',
-                t.error_message = '{{_sql_esc(e)}}',
-                t.completed_at = current_timestamp()
+            INSERT INTO {{run_log_tbl}} (run_id, status, error_message, completed_at, logged_at)
+            VALUES ('{{RUN_ID}}', 'failed', '{{_sql_esc(e)}}', current_timestamp(), current_timestamp())
         """)
     except Exception:
         pass
@@ -799,11 +846,8 @@ if row_count == 0:
     print("⚠️ DQ-01: Landing file has 0 rows — skipping Bronze write")
     try:
         spark.sql(f"""
-            MERGE INTO {{run_tbl}} AS t
-            USING (SELECT '{{RUN_ID}}' AS run_id) AS s ON t.run_id = s.run_id
-            WHEN MATCHED THEN UPDATE SET t.status = 'skipped',
-                t.error_message = 'Empty landing file — 0 rows',
-                t.completed_at = current_timestamp()
+            INSERT INTO {{run_log_tbl}} (run_id, status, error_message, completed_at, logged_at)
+            VALUES ('{{RUN_ID}}', 'skipped', 'Empty landing file — 0 rows', current_timestamp(), current_timestamp())
         """)
     except Exception:
         pass
@@ -959,11 +1003,8 @@ except Exception as e:
         pass
     try:
         spark.sql(f"""
-            MERGE INTO {{run_tbl}} AS t
-            USING (SELECT '{{RUN_ID}}' AS run_id) AS s ON t.run_id = s.run_id
-            WHEN MATCHED THEN UPDATE SET t.status = 'failed',
-                t.error_message = '{{_sql_esc(e)}}',
-                t.completed_at = current_timestamp()
+            INSERT INTO {{run_log_tbl}} (run_id, status, error_message, completed_at, logged_at)
+            VALUES ('{{RUN_ID}}', 'failed', '{{_sql_esc(e)}}', current_timestamp(), current_timestamp())
         """)
     except Exception:
         pass
@@ -978,13 +1019,10 @@ except Exception as e:
 
 try:
     spark.sql(f"""
-        MERGE INTO {{run_tbl}} AS t
-        USING (SELECT '{{RUN_ID}}' AS run_id) AS s ON t.run_id = s.run_id
-        WHEN MATCHED THEN UPDATE SET
-            t.status = 'success',
-            t.rows_processed = {{row_count}},
-            t.completed_at = current_timestamp(),
-            t.duration_sec = unix_timestamp(current_timestamp()) - unix_timestamp(t.started_at)
+        INSERT INTO {{run_log_tbl}} (run_id, status, rows_processed, completed_at, duration_sec, logged_at)
+        SELECT '{{RUN_ID}}', 'success', {{row_count}}, current_timestamp(),
+               unix_timestamp(current_timestamp()) - unix_timestamp((SELECT started_at FROM {{run_tbl}} WHERE run_id = '{{RUN_ID}}')),
+               current_timestamp()
     """)
 except Exception as e:
     print(f"⚠️ Run history update failed: {{e}}")
@@ -1057,8 +1095,9 @@ import json, re as _re
 from pyspark.sql import functions as F
 from datetime import datetime
 
-job_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
-run_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history"
+job_tbl     = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
+run_tbl     = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history"      # READ from this (the latest-per-run_id view)
+run_log_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history_log"  # WRITE to this (append-only)
 
 job_df = spark.sql(f"SELECT * FROM {{job_tbl}} WHERE job_id = '{{_sql_esc(JOB_ID)}}'")
 if job_df.count() == 0:
@@ -1161,11 +1200,8 @@ try:
 except Exception as e:
     try:
         spark.sql(f"""
-            MERGE INTO {{run_tbl}} AS t
-            USING (SELECT '{{RUN_ID}}' AS run_id) AS s ON t.run_id = s.run_id
-            WHEN MATCHED THEN UPDATE SET t.status = 'failed',
-                t.error_message = '{{_sql_esc(e)}}',
-                t.completed_at = current_timestamp()
+            INSERT INTO {{run_log_tbl}} (run_id, status, error_message, completed_at, logged_at)
+            VALUES ('{{RUN_ID}}', 'failed', '{{_sql_esc(e)}}', current_timestamp(), current_timestamp())
         """)
     except Exception:
         pass
@@ -1346,11 +1382,8 @@ except Exception as e:
             pass
     try:
         spark.sql(f"""
-            MERGE INTO {{run_tbl}} AS t
-            USING (SELECT '{{RUN_ID}}' AS run_id) AS s ON t.run_id = s.run_id
-            WHEN MATCHED THEN UPDATE SET t.status = 'failed',
-                t.error_message = '{{_sql_esc(e)}}',
-                t.completed_at = current_timestamp()
+            INSERT INTO {{run_log_tbl}} (run_id, status, error_message, completed_at, logged_at)
+            VALUES ('{{RUN_ID}}', 'failed', '{{_sql_esc(e)}}', current_timestamp(), current_timestamp())
         """)
     except Exception:
         pass
@@ -1391,13 +1424,10 @@ except Exception as e:
 # Update run history
 try:
     spark.sql(f"""
-        MERGE INTO {{run_tbl}} AS t
-        USING (SELECT '{{RUN_ID}}' AS run_id) AS s ON t.run_id = s.run_id
-        WHEN MATCHED THEN UPDATE SET
-            t.status = 'success',
-            t.rows_processed = {{final_count}},
-            t.completed_at = current_timestamp(),
-            t.duration_sec = unix_timestamp(current_timestamp()) - unix_timestamp(t.started_at)
+        INSERT INTO {{run_log_tbl}} (run_id, status, rows_processed, completed_at, duration_sec, logged_at)
+        SELECT '{{RUN_ID}}', 'success', {{final_count}}, current_timestamp(),
+               unix_timestamp(current_timestamp()) - unix_timestamp((SELECT started_at FROM {{run_tbl}} WHERE run_id = '{{RUN_ID}}')),
+               current_timestamp()
     """)
 except Exception as e:
     print(f"⚠️ Run history update failed: {{e}}")
@@ -1472,9 +1502,10 @@ print(f"📁 Workspace path (sub-notebooks resolve from here): {{WORKSPACE_PATH}
 import json, uuid
 from datetime import datetime
 
-job_tbl  = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
-run_tbl  = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history"
-pipe_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_pipeline_metadata"
+job_tbl     = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
+run_tbl     = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history"      # READ from this (the latest-per-run_id view)
+run_log_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history_log"  # WRITE to this (append-only)
+pipe_tbl    = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_pipeline_metadata"
 
 # Get pipeline groups
 if GROUP_ID:
@@ -1558,11 +1589,11 @@ for group in groups:
         # Create run record in metadata
         try:
             spark.sql(f"""
-                INSERT INTO {{run_tbl}} (run_id, job_id, job_name, stage, full_table,
-                    load_type, watermark_column, status, started_at)
+                INSERT INTO {{run_log_tbl}} (run_id, job_id, job_name, stage, full_table,
+                    load_type, watermark_column, status, started_at, logged_at)
                 VALUES ('{{run_id}}', '{{job_id}}', '{{job["job_name"]}}', '{{stage}}',
                     '{{job["full_table"]}}', '{{load_type}}', '{{job.get("watermark_column","")}}',
-                    'running', current_timestamp())
+                    'running', current_timestamp(), current_timestamp())
             """)
         except Exception as e:
             print(f"   ⚠️ Could not create run record: {{e}}")
@@ -1630,12 +1661,8 @@ for group in groups:
             # Mark failure in run history
             try:
                 spark.sql(f"""
-                    MERGE INTO {{run_tbl}} AS t
-                    USING (SELECT '{{run_id}}' AS run_id) AS s ON t.run_id = s.run_id
-                    WHEN MATCHED THEN UPDATE SET
-                        t.status = 'failed',
-                        t.error_message = '{{_sql_esc(e)}}'
-                        , t.completed_at = current_timestamp()
+                    INSERT INTO {{run_log_tbl}} (run_id, status, error_message, completed_at, logged_at)
+                    VALUES ('{{run_id}}', 'failed', '{{_sql_esc(e)}}', current_timestamp(), current_timestamp())
                 """)
                 spark.sql(f"""
                     UPDATE {{job_tbl}}
@@ -2310,9 +2337,9 @@ print(f"📝 Logging SDP stage: status={{_st}} groups={{len(GROUPS)}} rows={{_to
 
 # COMMAND ----------
 
-job_tbl  = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
-pipe_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_pipeline_metadata"
-run_tbl  = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history"
+job_tbl     = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
+pipe_tbl    = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_pipeline_metadata"
+run_log_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history_log"  # append-only -- wf_run_history itself is a view over this
 
 updated_jobs = 0
 updated_pipes = 0
@@ -2362,15 +2389,15 @@ else:
         for _j in _jobs:
             _rid = uuid.uuid4().hex[:12]
             spark.sql(f"""
-                INSERT INTO {{run_tbl}}
+                INSERT INTO {{run_log_tbl}}
                 (run_id, job_id, job_name, stage, full_table, load_type, watermark_column,
                  status, started_at, completed_at, rows_processed, error_message,
-                 dlt_status, dlt_pipeline_id)
+                 dlt_status, dlt_pipeline_id, logged_at)
                 VALUES (
                     {{_esc(_rid)}}, {{_esc(_j['job_id'])}}, {{_esc(_j['job_name'])}}, 'dlt_bronze_silver',
                     {{_esc(_j['full_table'])}}, {{_esc(_j['load_type'])}}, {{_esc(_j['watermark_column'])}},
                     {{_esc(_st)}}, current_timestamp(), current_timestamp(), {{_total_rows}},
-                    {{_esc(_err)}}, {{_esc(DLT_STATUS)}}, {{_esc(PIPELINE_ID)}}
+                    {{_esc(_err)}}, {{_esc(DLT_STATUS)}}, {{_esc(PIPELINE_ID)}}, current_timestamp()
                 )
             """)
             inserted_runs += 1
@@ -2921,9 +2948,10 @@ else:
 
 # COMMAND ----------
 
-job_tbl  = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
-run_tbl  = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history"
-pipe_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_pipeline_metadata"
+job_tbl     = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
+run_tbl     = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history"      # READ from this (the latest-per-run_id view)
+run_log_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history_log"  # WRITE to this (append-only)
+pipe_tbl    = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_pipeline_metadata"
 
 if GROUP_ID:
     groups_df = spark.sql(f"SELECT * FROM {{pipe_tbl}} WHERE group_id = '{{GROUP_ID}}'")
@@ -2995,11 +3023,11 @@ def _run_extract(idx, job):
     # Create run record
     try:
         spark.sql(f"""
-            INSERT INTO {{run_tbl}} (run_id, job_id, job_name, stage, full_table,
-                load_type, watermark_column, status, started_at)
+            INSERT INTO {{run_log_tbl}} (run_id, job_id, job_name, stage, full_table,
+                load_type, watermark_column, status, started_at, logged_at)
             VALUES ('{{run_id}}', '{{job_id}}', '{{job["job_name"]}}', 'extract',
                 '{{job["full_table"]}}', '{{load_type}}',
-                '{{job.get("watermark_column","")}}', 'running', current_timestamp())
+                '{{job.get("watermark_column","")}}', 'running', current_timestamp(), current_timestamp())
         """)
     except Exception:
         pass

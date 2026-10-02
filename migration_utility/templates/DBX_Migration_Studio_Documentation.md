@@ -138,7 +138,7 @@ Migration Studio App  ←→  Genie AI Assistant
 - `admin_source.configtables.wf_run_history` — Pipeline run history
 - `admin_source.configtables.wf_scheduler_config` — Cron schedules
 - `admin_source.configtables.wf_source_tables` — Discovered source tables
-- `admin_source.configtables.wf_watermark_metadata` — Incremental watermarks
+- `admin_source.configtables.wf_run_history_log` — Append-only run history (wf_run_history is a view over this)
 
 **API Endpoints:**
 - `POST /api/v1/workflow/metadata/init` — Initialize metadata flow
@@ -342,10 +342,10 @@ Migration Studio App  ←→  Genie AI Assistant
 |---|---|---|
 | configtables | wf_job_metadata | Registered migration jobs (source_table, target_table, status, row_count, error_msg) |
 | configtables | wf_pipeline_metadata | Pipeline definitions (catalog, schema, layer, pipeline_id, pipeline_type) |
-| configtables | wf_run_history | Every pipeline run (job_name, start_time, end_time, rows_read, rows_written, status, duration_mins) |
+| configtables | wf_run_history | VIEW — latest status per run_id, resolved from wf_run_history_log (job_name, start_time, end_time, rows_read, rows_written, status, duration_mins) |
+| configtables | wf_run_history_log | Append-only physical table wf_run_history is built on — one row per status transition, never updated in place |
 | configtables | wf_scheduler_config | Cron schedules (job_name, schedule, enabled, next_run) |
 | configtables | wf_source_tables | Source tables discovered in SQL Server (schema, table_name, row_count, complexity_score) |
-| configtables | wf_watermark_metadata | Incremental watermarks (table_name, last_loaded_value, column_name) |
 | migration_app | migration_jobs | Live job tracker (job_id, source, target, state, started_at, finished_at, rows_migrated, error) |
 | migration_app | audit_log | Every user action (user_email, action, entity, timestamp, details) |
 | migration_app | user_roles | RBAC (user_email, role, granted_by, granted_at) |

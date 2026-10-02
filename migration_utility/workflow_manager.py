@@ -432,8 +432,21 @@ _restore_from_deploy_config()
 TBL_PIPELINES    = "wf_pipeline_metadata"
 TBL_JOBS         = "wf_job_metadata"
 TBL_JOBS_HISTORY = "wf_job_metadatahis"
+# wf_run_history is a VIEW (created in init_metadata_flow, after
+# wf_run_history_log and a one-time migration from the old MERGE-updated
+# table) that resolves the latest known value per column per run_id.
+# Every reader in this file keeps querying TBL_RUNS unchanged; only writers
+# need TBL_RUNS_LOG, the physical append-only table they actually insert
+# into. See _sync_run_to_dbr() and _migrate_run_history_to_append_only().
 TBL_RUNS         = "wf_run_history"
-TBL_WATERMARKS   = "wf_watermark_metadata"
+TBL_RUNS_LOG     = "wf_run_history_log"
+# wf_watermark_metadata removed: incremental extracts now read
+# MAX(watermark_column) directly from the target Bronze/Silver table
+# instead of a separately-maintained bookkeeping table, which could
+# silently drift out of sync with the actual data (its own MERGE failing
+# while the real write succeeded, or vice versa) -- see metadata_notebooks.
+# _gen_extract()'s watermark read and _gen_common_functions()'s
+# _resolve_target_table().
 TBL_SOURCES      = "wf_source_tables"
 TBL_SCH_CONFIG   = "wf_scheduler_config"
 TBL_SCH_HISTORY  = "wf_scheduler_history"
@@ -611,6 +624,92 @@ def _prevalidate_storage_credentials(session):
         logger.warning("Storage credential pre-validation skipped: %s", e)
 
 
+# Columns exposed by the wf_run_history VIEW -- every column of
+# wf_run_history_log except logged_at (that one is purely an internal
+# ordering marker for the view, never meant to be read by callers).
+_RUN_HISTORY_COLUMNS = [
+    "run_id", "job_id", "job_name", "stage", "full_table", "load_type",
+    "watermark_column", "watermark_value", "status", "started_at",
+    "completed_at", "duration_sec", "rows_processed", "error_message", "logs",
+    "source_tag", "dlt_status", "dlt_pipeline_id", "dlt_update_id",
+    "extract_failed_count", "silver_failed_count",
+]
+
+
+def _migrate_run_history_to_append_only():
+    """One-time upgrade from the old MERGE-updated wf_run_history table to
+    the append-only wf_run_history_log table (wf_run_history itself becomes
+    a view over it -- see _create_run_history_view()).
+
+    Idempotent and safe to call on every "Create MetadataFlow": checked via
+    information_schema (not a brittle try/except on a specific error
+    string), so it no-ops immediately once wf_run_history is already a view
+    (migration already done, or a fresh deployment that never had the old
+    table at all).
+    """
+    try:
+        already_view = _rows_from_exec(_exec_sql(f"""
+            SELECT 1 FROM `{_dbr_catalog}`.information_schema.views
+            WHERE table_schema = '{_dbr_schema}' AND table_name = '{TBL_RUNS}'
+        """))
+        if already_view:
+            return
+        legacy_table = _rows_from_exec(_exec_sql(f"""
+            SELECT 1 FROM `{_dbr_catalog}`.information_schema.tables
+            WHERE table_schema = '{_dbr_schema}' AND table_name = '{TBL_RUNS}'
+        """))
+        if not legacy_table:
+            return  # fresh deployment -- nothing to migrate
+        logger.info("Migrating legacy %s table into append-only %s ...", TBL_RUNS, TBL_RUNS_LOG)
+        cols_sql = ", ".join(_RUN_HISTORY_COLUMNS)
+        r = _exec_sql(f"""
+            INSERT INTO {_fqn(TBL_RUNS_LOG)} ({cols_sql}, logged_at)
+            SELECT {cols_sql}, COALESCE(completed_at, started_at, current_timestamp()) AS logged_at
+            FROM {_fqn(TBL_RUNS)}
+        """)
+        if r.get("status", {}).get("state") != "SUCCEEDED":
+            raise RuntimeError(r.get("status", {}).get("error", {}).get("message") or str(r))
+        _exec_sql(f"DROP TABLE {_fqn(TBL_RUNS)}")
+        logger.info("Migrated legacy %s -> %s (%d historical row(s) carried over)",
+                    TBL_RUNS, TBL_RUNS_LOG, len(legacy_table) if isinstance(legacy_table, list) else -1)
+    except Exception as exc:
+        # Non-blocking: if this fails, _create_run_history_view() below will
+        # also fail (can't CREATE VIEW over a name that's still a table with
+        # the old schema) and that failure is what actually surfaces to the
+        # user -- this is just the more specific diagnostic in the logs.
+        logger.error("Could not migrate legacy %s (non-blocking): %s", TBL_RUNS, exc)
+
+
+def _create_run_history_view():
+    """(Re)create the wf_run_history VIEW over wf_run_history_log.
+
+    Resolves the latest known value per column per run_id using
+    first_value(..., true) [ignore nulls] over the whole per-run_id
+    partition ordered by logged_at DESC -- every row in a partition gets
+    the identical result for a full-frame window, so SELECT DISTINCT
+    collapses them to exactly one row per run_id. This means a writer only
+    ever has to INSERT the columns it's actually setting (run_id + whatever
+    changed) and leave the rest NULL, exactly mirroring what the old
+    MERGE ... WHEN MATCHED UPDATE SET <subset> statements used to do --
+    nothing has to re-send unchanged columns (job_name, full_table, etc.)
+    on every write.
+    """
+    window = "(PARTITION BY run_id ORDER BY logged_at DESC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"
+    select_list = ",\n            ".join(
+        col if col == "run_id" else f"first_value({col}, true) OVER {window} AS {col}"
+        for col in _RUN_HISTORY_COLUMNS
+    )
+    r = _exec_sql(f"""
+        CREATE OR REPLACE VIEW {_fqn(TBL_RUNS)} AS
+        SELECT DISTINCT
+            {select_list}
+        FROM {_fqn(TBL_RUNS_LOG)}
+    """)
+    if r.get("status", {}).get("state") != "SUCCEEDED":
+        logger.error("Could not create %s view (non-blocking): %s", TBL_RUNS,
+                     r.get("status", {}).get("error", {}).get("message") or r)
+
+
 def init_metadata_flow(host: str, token: str, catalog: str = "main",
                        schema: str = "default", warehouse_id: str = "") -> dict:
     """
@@ -700,8 +799,17 @@ def init_metadata_flow(host: str, token: str, catalog: str = "main",
         COMMENT 'Individual jobs in the medallion pipeline'
         TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')""",
 
-        # 3. Run history
-        f"""CREATE TABLE IF NOT EXISTS {_fqn(TBL_RUNS)} (
+        # 3. Run history -- append-only log. Writers only ever INSERT a new
+        # row per status transition, never UPDATE/MERGE in place, so
+        # concurrent writes from different pipeline runs never collide on
+        # Delta's ConcurrentModificationException the way the old
+        # MERGE-based table could (even touching different run_ids, Delta's
+        # optimistic concurrency control can still conflict on overlapping
+        # files for concurrent UPDATE/MERGE -- concurrent blind appends have
+        # no such conflict). wf_run_history itself is a VIEW over this table
+        # (created after the migration step below), so every existing
+        # reader keeps working unchanged.
+        f"""CREATE TABLE IF NOT EXISTS {_fqn(TBL_RUNS_LOG)} (
             run_id               STRING NOT NULL,
             job_id               STRING,
             job_name             STRING,
@@ -722,33 +830,10 @@ def init_metadata_flow(host: str, token: str, catalog: str = "main",
             dlt_pipeline_id      STRING COMMENT 'Databricks Lakeflow/DLT pipeline_id for this run, for cross-referencing the Pipelines UI',
             dlt_update_id        STRING COMMENT 'Databricks Lakeflow/DLT update_id for this run, for cross-referencing the Pipelines UI run history',
             extract_failed_count INT COMMENT 'Count of source tables that failed extraction in this run (0 on success)',
-            silver_failed_count  INT COMMENT 'Count of tables that failed to finalize into Silver in this run (0 on success)'
+            silver_failed_count  INT COMMENT 'Count of tables that failed to finalize into Silver in this run (0 on success)',
+            logged_at            TIMESTAMP COMMENT 'When THIS row was written -- not a business timestamp, purely so the wf_run_history view can resolve the latest row per run_id'
         ) USING DELTA
-        COMMENT 'Job execution run history'""",
-
-        # 3b. Add the richer RCA/annotation columns above to a wf_run_history
-        # table that already existed before this change -- CREATE TABLE IF
-        # NOT EXISTS above is a no-op against an existing table, so an
-        # already-deployed workspace would otherwise never get these columns.
-        # Safe to re-run: ADD COLUMNS fails harmlessly (caught, logged,
-        # non-blocking) once the columns already exist.
-        f"""ALTER TABLE {_fqn(TBL_RUNS)} ADD COLUMNS (
-            source_tag           STRING,
-            dlt_status           STRING,
-            dlt_pipeline_id      STRING,
-            dlt_update_id        STRING,
-            extract_failed_count INT,
-            silver_failed_count  INT
-        )""",
-
-        # 4. Watermarks
-        f"""CREATE TABLE IF NOT EXISTS {_fqn(TBL_WATERMARKS)} (
-            table_name       STRING NOT NULL,
-            watermark_column STRING,
-            last_value       STRING,
-            updated_at       TIMESTAMP
-        ) USING DELTA
-        COMMENT 'Watermark tracking for incremental loads'""",
+        COMMENT 'Append-only job execution run history — one row per status transition per run, never updated in place'""",
 
         # 5a. Job metadata history (archive)
         f"""CREATE TABLE IF NOT EXISTS {_fqn(TBL_JOBS_HISTORY)} (
@@ -920,6 +1005,15 @@ def init_metadata_flow(host: str, token: str, catalog: str = "main",
 
     _metadata_initialized = True
 
+    # One-time migration from the old MERGE-updated wf_run_history table to
+    # the append-only wf_run_history_log created above, then (re)create the
+    # wf_run_history VIEW over it. Must run sequentially, after the table
+    # above exists -- unlike every CREATE TABLE/SCHEMA IF NOT EXISTS
+    # statement in the parallel block, these two steps have a real
+    # dependency order, so they're deliberately outside that block.
+    _migrate_run_history_to_append_only()
+    _create_run_history_view()
+
     # Persist metadata catalog/schema. The local deployconfig.json write
     # below only survives a same-process restart, NOT a redeploy (Databricks
     # Apps replaces the whole source tree) -- also save to the Delta-backed
@@ -950,7 +1044,7 @@ def init_metadata_flow(host: str, token: str, catalog: str = "main",
         logger.warning("Could not persist metadata catalog/schema to app config or replicate app tables: %s", exc)
 
     _meta_tables = [TBL_PIPELINES, TBL_JOBS, TBL_JOBS_HISTORY, TBL_RUNS,
-                    TBL_WATERMARKS, TBL_SOURCES, TBL_SCH_CONFIG, TBL_SCH_HISTORY]
+                    TBL_SOURCES, TBL_SCH_CONFIG, TBL_SCH_HISTORY]
     _extra_tables = [RECON_TABLE, f"{DQ_SCHEMA_NAME}.{DQ_METRICS_TABLE}"]
     _app_tables = ["migration_jobs", "dm_models", "app_config", "audit_log",
                    "job_schedules", "user_roles"]
@@ -982,7 +1076,7 @@ def get_metadata_status() -> dict:
     if not _dbr_host or not _dbr_token:
         return {"success": True, "initialized": False, "message": "Databricks not connected"}
 
-    tables = [TBL_PIPELINES, TBL_JOBS, TBL_JOBS_HISTORY, TBL_RUNS, TBL_WATERMARKS, TBL_SOURCES, TBL_SCH_CONFIG, TBL_SCH_HISTORY]
+    tables = [TBL_PIPELINES, TBL_JOBS, TBL_JOBS_HISTORY, TBL_RUNS, TBL_SOURCES, TBL_SCH_CONFIG, TBL_SCH_HISTORY]
     tables_status = {}
 
     # Fix 2: Single UNION ALL query replaces 8 serial COUNTs for ~8x faster dashboard polling.
@@ -1141,63 +1235,45 @@ def _sync_job_to_dbr(job: dict):
         logger.error("_sync_job_to_dbr(%s) raised: %s", job.get('job_id'), exc)
 
 def _sync_run_to_dbr(run: dict):
-    """Insert/update a run record to Databricks."""
+    """Append the current state of a run to Databricks as a new row.
+
+    wf_run_history_log is append-only -- every call does a plain INSERT,
+    never an UPDATE/MERGE in place, so concurrent syncs for different runs
+    never collide on Delta's ConcurrentModificationException (even touching
+    different run_ids, concurrent MERGE/UPDATE into the same table can
+    still conflict on overlapping files; concurrent blind appends can't).
+    `run` is the same mutable dict JOB_RUNS[run_id] points to for the whole
+    lifecycle of the run, so by the time this is called at any point it
+    already carries every field known so far -- unlike the old MERGE's
+    WHEN MATCHED UPDATE SET <subset>, there's no need to track "what
+    changed since last sync"; every row this function writes carries the
+    full current snapshot, and wf_run_history (the view) picks the latest.
+    """
     if not _metadata_initialized:
         return
     try:
         logs_str = json.dumps(run.get("logs", []))
-        sql = f"""MERGE INTO {_fqn(TBL_RUNS)} AS t
-        USING (SELECT {_esc(run['run_id'])} AS run_id) AS s
-        ON t.run_id = s.run_id
-        WHEN MATCHED THEN UPDATE SET
-            status = {_esc(run.get('status'))},
-            completed_at = {_esc(run.get('completed_at'))},
-            duration_sec = {run.get('duration_sec') or 'NULL'},
-            rows_processed = {run.get('rows_processed', 0)},
-            error_message = {_esc(run.get('error'))},
-            logs = {_esc(logs_str)},
-            source_tag = {_esc(run.get('source_tag', ''))},
-            dlt_status = {_esc(run.get('dlt_status', ''))},
-            dlt_pipeline_id = {_esc(run.get('dlt_pipeline_id', ''))},
-            dlt_update_id = {_esc(run.get('dlt_update_id', ''))},
-            extract_failed_count = {run.get('extract_failed_count', 0) or 0},
-            silver_failed_count = {run.get('silver_failed_count', 0) or 0}
-        WHEN NOT MATCHED THEN INSERT (
+        sql = f"""INSERT INTO {_fqn(TBL_RUNS_LOG)} (
             run_id, job_id, job_name, stage, full_table, load_type,
-            watermark_column, watermark_value, status, started_at, rows_processed, logs,
-            source_tag, dlt_status, dlt_pipeline_id, dlt_update_id, extract_failed_count, silver_failed_count
+            watermark_column, watermark_value, status, started_at, completed_at,
+            duration_sec, rows_processed, error_message, logs,
+            source_tag, dlt_status, dlt_pipeline_id, dlt_update_id,
+            extract_failed_count, silver_failed_count, logged_at
         ) VALUES (
-            {_esc(run['run_id'])}, {_esc(run['job_id'])}, {_esc(run.get('job_name'))},
-            {_esc(run.get('stage'))}, {_esc(run.get('full_table'))},
-            {_esc(run.get('load_type'))}, {_esc(run.get('watermark_column', ''))},
-            {_esc(run.get('watermark_value'))}, {_esc(run.get('status'))},
-            {_esc(run.get('started_at'))}, {run.get('rows_processed', 0)},
-            {_esc(logs_str)},
+            {_esc(run['run_id'])}, {_esc(run.get('job_id'))}, {_esc(run.get('job_name'))},
+            {_esc(run.get('stage'))}, {_esc(run.get('full_table'))}, {_esc(run.get('load_type'))},
+            {_esc(run.get('watermark_column', ''))}, {_esc(run.get('watermark_value'))},
+            {_esc(run.get('status'))}, {_esc(run.get('started_at'))}, {_esc(run.get('completed_at'))},
+            {run.get('duration_sec') or 'NULL'}, {run.get('rows_processed', 0)},
+            {_esc(run.get('error'))}, {_esc(logs_str)},
             {_esc(run.get('source_tag', ''))}, {_esc(run.get('dlt_status', ''))},
             {_esc(run.get('dlt_pipeline_id', ''))}, {_esc(run.get('dlt_update_id', ''))},
-            {run.get('extract_failed_count', 0) or 0}, {run.get('silver_failed_count', 0) or 0}
+            {run.get('extract_failed_count', 0) or 0}, {run.get('silver_failed_count', 0) or 0},
+            current_timestamp()
         )"""
         _exec_sql_checked(sql, f"run {run.get('run_id')} status={run.get('status')}")
     except Exception as exc:
         logger.error("_sync_run_to_dbr(%s) raised: %s", run.get('run_id'), exc)
-
-def _sync_watermark_to_dbr(table_name: str, wm: dict):
-    """Upsert watermark to Databricks."""
-    if not _metadata_initialized:
-        return
-    try:
-        sql = f"""MERGE INTO {_fqn(TBL_WATERMARKS)} AS t
-        USING (SELECT {_esc(table_name)} AS table_name) AS s
-        ON t.table_name = s.table_name
-        WHEN MATCHED THEN UPDATE SET
-            watermark_column = {_esc(wm.get('column'))},
-            last_value = {_esc(wm.get('last_value'))},
-            updated_at = current_timestamp()
-        WHEN NOT MATCHED THEN INSERT (table_name, watermark_column, last_value, updated_at)
-        VALUES ({_esc(table_name)}, {_esc(wm.get('column'))}, {_esc(wm.get('last_value'))}, current_timestamp())"""
-        _exec_sql_checked(sql, f"watermark {table_name}")
-    except Exception as exc:
-        logger.error("_sync_watermark_to_dbr(%s) raised: %s", table_name, exc)
 
 def _delete_pipeline_from_dbr(group_id: str):
     """Delete pipeline and associated jobs from Databricks."""
@@ -1215,7 +1291,8 @@ def _delete_job_from_dbr(job_id: str):
         return
     try:
         _exec_sql(f"DELETE FROM {_fqn(TBL_JOBS)} WHERE job_id = {_esc(job_id)}")
-        _exec_sql(f"DELETE FROM {_fqn(TBL_RUNS)} WHERE job_id = {_esc(job_id)}")
+        # TBL_RUNS is a view now -- DELETE must target the physical log table.
+        _exec_sql(f"DELETE FROM {_fqn(TBL_RUNS_LOG)} WHERE job_id = {_esc(job_id)}")
     except Exception:
         pass
 
@@ -1360,20 +1437,10 @@ def load_metadata_from_dbr() -> dict:
                 stages = {JOB_REGISTRY[jid].get("stage", "") for jid in grp.get("job_ids", []) if jid in JOB_REGISTRY}
                 grp["pipeline_mode"] = "dlt" if "dlt_bronze_silver" in stages else "standard"
 
-        # Load watermarks
-        r = _exec_sql(f"SELECT * FROM {_fqn(TBL_WATERMARKS)}")
-        if r.get("status", {}).get("state") == "SUCCEEDED":
-            cols = [c["name"] for c in r.get("manifest", {}).get("schema", {}).get("columns", [])]
-            for row in r.get("result", {}).get("data_array", []):
-                rec = dict(zip(cols, row))
-                tbl = rec["table_name"]
-                with _lock:
-                    WATERMARKS[tbl] = {
-                        "column": rec.get("watermark_column", ""),
-                        "last_value": rec.get("last_value"),
-                        "updated_at": rec.get("updated_at", ""),
-                    }
-                loaded["watermarks"] += 1
+        # Watermarks are no longer stored/hydrated here -- see the
+        # WATERMARK MANAGEMENT comment above get_watermarks() for why.
+        # loaded["watermarks"] stays 0; kept in the dict only because the
+        # frontend's "Loaded N watermarks" toast reads that key.
 
         # Load run history — Fix 6: skip logs column (lazy-loaded on demand)
         run_cols_no_logs = (
@@ -1460,13 +1527,10 @@ def _run_full_sync(task_id: str):
                 synced["runs"] += 1
             except Exception as e:
                 logger.warning("full_sync run %s failed: %s", rid, e)
+        # Watermarks are no longer synced here -- see the WATERMARK
+        # MANAGEMENT comment above get_watermarks(). synced["watermarks"]
+        # stays 0.
         _set(progress="watermarks", synced=dict(synced))
-        for tbl, wm in list(WATERMARKS.items()):
-            try:
-                _sync_watermark_to_dbr(tbl, wm)
-                synced["watermarks"] += 1
-            except Exception as e:
-                logger.warning("full_sync watermark %s failed: %s", tbl, e)
         _set(status="succeeded", progress="done", synced=synced,
              completed_at=datetime.now().isoformat())
     except Exception as e:
@@ -1524,9 +1588,8 @@ def full_sync_to_dbr() -> dict:
     for rid, run in JOB_RUNS.items():
         _sync_run_to_dbr(run)
         synced["runs"] += 1
-    for tbl, wm in WATERMARKS.items():
-        _sync_watermark_to_dbr(tbl, wm)
-        synced["watermarks"] += 1
+    # Watermarks are no longer synced here -- see the WATERMARK MANAGEMENT
+    # comment above get_watermarks(). synced["watermarks"] stays 0.
     return {"success": True, "synced": synced}
 
 
@@ -2137,8 +2200,6 @@ def create_pipeline_for_table(
     _sync_pipeline_to_dbr(group)
     for j in jobs:
         _sync_job_to_dbr(j)
-    if load_type == "incremental" and watermark_column and full_table in WATERMARKS:
-        _sync_watermark_to_dbr(full_table, WATERMARKS[full_table])
 
     return {
         "success":       True,
@@ -2429,14 +2490,10 @@ def update_job(job_id: str, updates: dict) -> dict:
                 job[k] = v
         job["updated_at"] = datetime.now().isoformat()
 
-    # If load_type changed to incremental and watermark set, update WATERMARKS
-    if job["load_type"] == "incremental" and job["watermark_column"]:
-        ft = job["full_table"]
-        if ft not in WATERMARKS:
-            WATERMARKS[ft] = {"column": job["watermark_column"], "last_value": None, "updated_at": job["updated_at"]}
-        else:
-            WATERMARKS[ft]["column"] = job["watermark_column"]
-        _sync_watermark_to_dbr(ft, WATERMARKS[ft])
+    # Watermarks are no longer stored/bookkept here -- see the WATERMARK
+    # MANAGEMENT comment above get_watermarks(). No action needed when
+    # load_type changes to incremental; the Extract notebook reads the
+    # current value live from the target table on its next run.
 
     _sync_job_to_dbr(job)
     return {"success": True, "job": job}
@@ -2512,12 +2569,12 @@ def run_job(job_id: str, force_full: bool = False) -> dict:
     ts = datetime.now().isoformat()
     load_type = "full" if force_full else job["load_type"]
 
-    # Get watermark if incremental
+    # Watermark is no longer tracked here -- the Extract notebook reads
+    # MAX(watermark_column) live from the target Bronze/Silver table at
+    # extract time instead of a separately-maintained bookkeeping table
+    # (see metadata_notebooks._gen_extract()), so the app has no stored
+    # value to show before the run actually happens.
     watermark_value = None
-    if load_type == "incremental" and job["watermark_column"]:
-        wm = WATERMARKS.get(job["full_table"])
-        if wm:
-            watermark_value = wm.get("last_value")
 
     run = {
         "run_id":           run_id,
@@ -2542,10 +2599,8 @@ def run_job(job_id: str, force_full: bool = False) -> dict:
         ],
     }
 
-    if watermark_value:
-        run["logs"].append(f"[{ts}] 🔄 Watermark: {job['watermark_column']} > '{watermark_value}'")
-    elif load_type == "incremental":
-        run["logs"].append(f"[{ts}] ⚠️ No watermark found — will do initial full load")
+    if load_type == "incremental":
+        run["logs"].append(f"[{ts}] 🔄 Watermark ({job.get('watermark_column', '')}) will be read live from the target table at extract time")
 
     with _lock:
         JOB_RUNS[run_id] = run
@@ -3210,33 +3265,38 @@ def get_recent_failed_runs_context(limit: int = 8) -> str:
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  WATERMARK MANAGEMENT
+#
+#  There is deliberately no stored/synced watermark state anymore -- the
+#  Extract notebook reads MAX(watermark_column) live from the target
+#  Bronze/Silver table at extract time instead of a separately-maintained
+#  bookkeeping table (see metadata_notebooks._gen_extract()). A bookkeeping
+#  table can silently drift from reality (its own write failing while the
+#  real data write succeeds, or vice versa); querying the data itself can't.
+#  WATERMARKS therefore stays empty by design -- the UI's "No watermarks —
+#  use incremental loads to track" empty state covers this correctly.
+#  update_watermark()/reset_watermark() are kept only so any existing caller
+#  gets a clear explanation instead of a crash; "Reset" is superseded by
+#  running a job with force_full=True, which already existed.
 # ─────────────────────────────────────────────────────────────────────────────
 def get_watermarks() -> dict:
-    """Get all watermark entries."""
+    """Get all watermark entries (always empty -- see module comment above)."""
     return {"success": True, "watermarks": dict(WATERMARKS)}
 
 
 def update_watermark(table_name: str, column: str, value: str) -> dict:
-    """Manually update a watermark value."""
-    with _lock:
-        WATERMARKS[table_name] = {
-            "column":     column,
-            "last_value": value,
-            "updated_at": datetime.now().isoformat(),
-        }
-    _sync_watermark_to_dbr(table_name, WATERMARKS[table_name])
-    return {"success": True, "table": table_name, "watermark": WATERMARKS[table_name]}
+    """No-op: watermarks are read live from the target table, not stored."""
+    return {"success": False, "error": (
+        "Watermarks are no longer stored separately -- the Extract notebook reads "
+        "the current value live from the target table at extract time."
+    )}
 
 
 def reset_watermark(table_name: str) -> dict:
-    """Reset watermark to force full reload on next incremental run."""
-    if table_name not in WATERMARKS:
-        return {"success": False, "error": f"No watermark for '{table_name}'"}
-    with _lock:
-        WATERMARKS[table_name]["last_value"] = None
-        WATERMARKS[table_name]["updated_at"] = datetime.now().isoformat()
-    _sync_watermark_to_dbr(table_name, WATERMARKS[table_name])
-    return {"success": True, "table": table_name, "message": "Watermark reset — next run will do full load"}
+    """No-op: use 'Run with Force Full Load' instead of resetting a stored watermark."""
+    return {"success": False, "error": (
+        "Watermarks are no longer stored separately, so there's nothing to reset. "
+        "Run the job with Force Full Load instead to re-extract everything."
+    )}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

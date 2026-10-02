@@ -1507,7 +1507,7 @@ async function wfCheckMetaStatus(){
       if(G('wfNotebookCard'))G('wfNotebookCard').style.display='';
       // Update table counts
       const tbls=d.tables||{};
-      const m={wf_pipeline_metadata:'wfMetaTblPipelines',wf_job_metadata:'wfMetaTblJobs',wf_job_metadatahis:'wfMetaTblJobHis',wf_run_history:'wfMetaTblRuns',wf_watermark_metadata:'wfMetaTblWm',wf_source_tables:'wfMetaTblSrc',wf_scheduler_config:'wfMetaTblSchCfg',wf_scheduler_history:'wfMetaTblSchHis'};
+      const m={wf_pipeline_metadata:'wfMetaTblPipelines',wf_job_metadata:'wfMetaTblJobs',wf_job_metadatahis:'wfMetaTblJobHis',wf_run_history:'wfMetaTblRuns',wf_source_tables:'wfMetaTblSrc',wf_scheduler_config:'wfMetaTblSchCfg',wf_scheduler_history:'wfMetaTblSchHis'};
       for(const[t,info]of Object.entries(tbls)){
         const el=G(m[t]);
         if(el){

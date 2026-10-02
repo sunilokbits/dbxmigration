@@ -751,8 +751,11 @@ def clean_metadata():
             log.append(f"Could not enumerate landing paths (non-blocking): {exc}")
 
     if clean_tables:
-        for tbl in (wfm.TBL_PIPELINES, wfm.TBL_JOBS, wfm.TBL_JOBS_HISTORY, wfm.TBL_RUNS,
-                    wfm.TBL_WATERMARKS, wfm.TBL_SOURCES, wfm.TBL_SCH_CONFIG, wfm.TBL_SCH_HISTORY):
+        # TBL_RUNS is a view now -- clear the physical append-only log table
+        # it's built on (TBL_RUNS_LOG) instead; DELETE FROM a view isn't
+        # supported. TBL_WATERMARKS no longer exists (see workflow_manager.py).
+        for tbl in (wfm.TBL_PIPELINES, wfm.TBL_JOBS, wfm.TBL_JOBS_HISTORY, wfm.TBL_RUNS_LOG,
+                    wfm.TBL_SOURCES, wfm.TBL_SCH_CONFIG, wfm.TBL_SCH_HISTORY):
             try:
                 wfm._exec_sql(f"DELETE FROM {wfm._fqn(tbl)}")
                 log.append(f"Cleared {tbl}")
