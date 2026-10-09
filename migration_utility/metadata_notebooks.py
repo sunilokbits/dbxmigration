@@ -269,6 +269,57 @@ def _resolve_bronze_table(target_config, metadata_catalog, metadata_schema, tabl
 
 # COMMAND ----------
 
+# Source connections. Serverless allows only a fixed whitelist of Spark data
+# sources -- the generic "jdbc" format is NOT on it, the native per-vendor
+# connectors format("snowflake") / format("sqlserver") are. Shared by Extract
+# and Reconciliation so both always connect to the source the same way.
+def _source_connection(source_config, password):
+    """Returns (format, options, qtbl, qcol); qtbl/qcol quote identifiers in
+    the SOURCE's SQL dialect (not Spark SQL)."""
+    src_type = source_config.get("source_type", "sqlserver")
+    server = source_config.get("server", "") or (source_config.get("account", "") if src_type == "snowflake" else "")
+    database = source_config.get("database", "")
+    user = source_config.get("username", "")
+    if src_type == "snowflake":
+        # Snowflake identifies itself by account (e.g. xy12345.us-east-1), not host:port.
+        account = source_config.get("account", "") or server
+        print(f"🔧 Source: Snowflake account {{account}}")
+        options = {{"sfUrl": f"{{account}}.snowflakecomputing.com", "sfUser": user, "sfPassword": password}}
+        if database:
+            options["sfDatabase"] = database
+        if source_config.get("warehouse", ""):
+            options["sfWarehouse"] = source_config["warehouse"]
+        if source_config.get("role", ""):
+            options["sfRole"] = source_config["role"]
+        return ("snowflake", options,
+                lambda sch, tbl: f'"{{sch}}"."{{tbl}}"',
+                lambda col: f'"{{col}}"')
+    encrypt = "true" if src_type in ("azuresql", "synapse") else "false"
+    trust   = "false" if src_type in ("azuresql", "synapse") else "true"
+    # Azure SQL often uses comma notation (server.database.windows.net,1433);
+    # the connector only accepts host + port.
+    if "," in server:
+        host, port = server.rsplit(",", 1)
+    elif ":" in server:
+        host, port = server.rsplit(":", 1)
+    else:
+        host, port = server, "1433"
+    print(f"🔧 Source: SQL Server {{host}}:{{port}}")
+    options = {{"host": host, "port": port, "database": database, "user": user, "password": password,
+               "encrypt": encrypt, "trustServerCertificate": trust}}
+    return ("sqlserver", options,
+            lambda sch, tbl: f"[{{sch}}].[{{tbl}}]",
+            lambda col: f"[{{col}}]")
+
+def _read_source_with(fmt, options, sql_query=None, table=None):
+    """Exactly one of sql_query (a plain SELECT, no wrapping parens/alias) or
+    table (a name from qtbl) -- mirrors query vs dbtable on both connectors."""
+    r = spark.read.format(fmt).options(**options)
+    r = r.option("query", sql_query) if sql_query else r.option("dbtable", table)
+    return r.load()
+
+# COMMAND ----------
+
 # Isolated child runs: each stage notebook runs as its OWN Databricks job run
 # (own serverless driver + executors, visible in the Jobs UI) instead of
 # in-process via dbutils.notebook.run(), which shares the caller's session.
@@ -319,7 +370,7 @@ def _target_label(job, metadata_catalog, metadata_schema, pipeline_mode,
             bronze = f"{{b_cat}}.{{sch}}.{{tbl.lower()}}"
             silver = (f"{{s_cat}}.{{sch}}.{{tbl.lower()}}" if s_cat != b_cat
                       else f"{{b_cat}}.{{sch}}.silver_{{tbl.lower()}}")
-            return f"{{bronze}} → {{silver}}"
+            return f"{{bronze}} -> {{silver}}"
         return _resolve_bronze_table(tc, metadata_catalog, metadata_schema, tbl, pipeline_mode).replace("`", "")
     except Exception:
         return ""
@@ -332,12 +383,14 @@ def _run_child_notebook(notebook_path, timeout_seconds, arguments, label="", tar
     import requests as _rq
     nb_name = notebook_path.rstrip("/").rsplit("/", 1)[-1]
     # The Jobs UI "Run parameters" column shows only the first parameter, so
-    # the human-readable table names go first.
+    # the human-readable table names go first. Jobs API rejects non-ASCII
+    # notebook parameters (HTTP 400), so these display-only labels are ASCII.
+    _ascii = lambda v: str(v).encode("ascii", "replace").decode("ascii")
     params = {{}}
     if label:
-        params["table"] = str(label)
+        params["table"] = _ascii(label)
     if target:
-        params["target_table"] = str(target)
+        params["target_table"] = _ascii(target)
     params.update({{k: "" if v is None else str(v) for k, v in (arguments or {{}}).items()}})
     host, hdrs = _CHILD_RUNNER["host"], _CHILD_RUNNER["headers"]
 
@@ -507,9 +560,6 @@ SRC_TYPE = source_config.get("source_type", "sqlserver")
 SERVER    = source_config.get("server", "") or (source_config.get("account", "") if SRC_TYPE == "snowflake" else "")
 DATABASE = source_config.get("database", "")
 USERNAME = source_config.get("username", "")
-SF_ACCOUNT   = source_config.get("account", "") or SERVER
-SF_WAREHOUSE = source_config.get("warehouse", "")
-SF_ROLE      = source_config.get("role", "")
 TABLE_SCHEMA = job["table_schema"]
 TABLE_NAME   = job["table_name"]
 FULL_TABLE   = job["full_table"]
@@ -538,83 +588,12 @@ print(f"🔧 Load Type: {{LOAD_TYPE}}")
 
 # COMMAND ----------
 
-IS_SNOWFLAKE = (SRC_TYPE == "snowflake")
-
-# Serverless compute only allows a fixed whitelist of Spark data sources
-# (UNSUPPORTED_DATA_SOURCE otherwise) -- the generic "jdbc" format with an
-# explicit driver class (what spark.read.jdbc()/.format("jdbc") both use
-# under the hood) is NOT on that list, even though the vendor-specific
-# connectors below (format("snowflake")/format("sqlserver")) are. This
-# notebook used to connect via spark.read.jdbc() -- fine on an all-purpose
-# cluster, but it started failing with UNSUPPORTED_DATA_SOURCE the moment
-# everything moved to serverless-only compute. Switched to the native
-# per-vendor connectors instead, which push query/count/table reads down to
-# the source the same way but are explicitly serverless-supported.
-if IS_SNOWFLAKE:
-    # Snowflake identifies itself by account (e.g. xy12345.us-east-1), not
-    # host:port -- no comma/colon port-splitting needed.
-    print(f"🔧 Source: Snowflake account {{SF_ACCOUNT}}")
-    _SRC_OPTIONS = {{
-        "sfUrl":      f"{{SF_ACCOUNT}}.snowflakecomputing.com",
-        "sfUser":     USERNAME,
-        "sfPassword": PASSWORD,
-    }}
-    if DATABASE:
-        _SRC_OPTIONS["sfDatabase"] = DATABASE
-    if SF_WAREHOUSE:
-        _SRC_OPTIONS["sfWarehouse"] = SF_WAREHOUSE
-    if SF_ROLE:
-        _SRC_OPTIONS["sfRole"] = SF_ROLE
-    _SRC_FORMAT = "snowflake"
-
-    def _qtbl(sch, tbl):
-        return f'"{{sch}}"."{{tbl}}"'
-
-    def _qcol(col):
-        return f'"{{col}}"'
-else:
-    encrypt = "true" if SRC_TYPE in ("azuresql", "synapse") else "false"
-    trust   = "false" if SRC_TYPE in ("azuresql", "synapse") else "true"
-
-    # Normalize server address to hostname:port.
-    # Azure SQL often uses comma notation (server.database.windows.net,1433) but
-    # the connector only accepts colon notation (server:1433) here.
-    if "," in SERVER:
-        _host, _port = SERVER.rsplit(",", 1)
-    elif ":" in SERVER:
-        _host, _port = SERVER.rsplit(":", 1)
-    else:
-        _host, _port = SERVER, "1433"
-    print(f"🔧 Source: SQL Server {{_host}}:{{_port}}")
-
-    _SRC_OPTIONS = {{
-        "host":     _host,
-        "port":     _port,
-        "database": DATABASE,
-        "user":     USERNAME,
-        "password": PASSWORD,
-        "encrypt":  encrypt,
-        "trustServerCertificate": trust,
-    }}
-    _SRC_FORMAT = "sqlserver"
-
-    def _qtbl(sch, tbl):
-        return f"[{{sch}}].[{{tbl}}]"
-
-    def _qcol(col):
-        return f"[{{col}}]"
+# Native serverless-supported connector + source-dialect quoting, shared with
+# Reconciliation via _Meta_CommonFunctions.
+_SRC_FORMAT, _SRC_OPTIONS, _qtbl, _qcol = _source_connection(source_config, PASSWORD)
 
 def _read_source(sql_query=None, table=None):
-    """Read from the source via its native serverless-supported connector.
-
-    Exactly one of sql_query (a plain SELECT statement, no wrapping parens
-    or alias needed) or table (a schema-qualified name from _qtbl) must be
-    given -- mirrors dbtable vs query on both the snowflake and sqlserver
-    connectors.
-    """
-    r = spark.read.format(_SRC_FORMAT).options(**_SRC_OPTIONS)
-    r = r.option("query", sql_query) if sql_query else r.option("dbtable", table)
-    return r.load()
+    return _read_source_with(_SRC_FORMAT, _SRC_OPTIONS, sql_query=sql_query, table=table)
 
 # Verify source connectivity
 try:
@@ -1917,11 +1896,15 @@ def _gen_reconciliation(catalog, schema, landing_path, ts):
 # MAGIC
 # MAGIC **What it does:**
 # MAGIC 1. Identifies all numeric columns (int, bigint, float, decimal, numeric, smallint, tinyint, real, money)
-# MAGIC 2. Computes SUM for each numeric column from **Source** (via JDBC) and **Bronze** (Delta)
+# MAGIC 2. Computes SUM for each numeric column from **Source** (native Snowflake / SQL Server connector) and **Bronze** (Delta)
 # MAGIC 3. Compares row counts
 # MAGIC 4. Saves per-column results to `{{CATALOG}}.reconciliation.reconcilationdetails`
 # MAGIC 5. Each execution creates a unique `recon_run_id` — no duplicates, full audit trail
 # MAGIC ---
+
+# COMMAND ----------
+
+# MAGIC %run ./_Meta_CommonFunctions
 
 # COMMAND ----------
 
@@ -2028,9 +2011,8 @@ TABLE_SCHEMA = job["table_schema"]
 FULL_TABLE   = job["full_table"]
 
 source_config = json.loads(job.get("source_config", "{{}}") or "{{}}")
-SERVER   = source_config.get("server", "")
+SERVER   = source_config.get("server", "") or source_config.get("account", "")
 DATABASE = source_config.get("database", "")
-USERNAME = source_config.get("username", "")
 
 target_config = json.loads(job.get("target_config", "{{}}") or "{{}}")
 BRONZE_CATALOG = target_config.get("bronze_catalog", "")
@@ -2085,27 +2067,19 @@ print(f"📋 Bronze: {{BRONZE_TABLE}}")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 🔌 JDBC Connection to Source
+# MAGIC ## 🔌 Source Connection (Snowflake / SQL Server)
 
 # COMMAND ----------
 
-encrypt = "true" if source_config.get("source_type") in ("azuresql", "synapse") else "false"
-trust   = "false" if source_config.get("source_type") in ("azuresql", "synapse") else "true"
+# Same native, serverless-supported connector Extract uses (shared via
+# _Meta_CommonFunctions) -- this notebook used to hard-code SQL Server JDBC,
+# so every Snowflake source failed trying to reach the Snowflake account as
+# a SQL Server host on port 1433.
+_SRC_TYPE = source_config.get("source_type", "sqlserver")
+_SRC_FORMAT, _SRC_OPTIONS, _qtbl, _qcol = _source_connection(source_config, PASSWORD)
 
-if "," in SERVER:
-    _host, _port = SERVER.rsplit(",", 1)
-elif ":" in SERVER:
-    _host, _port = SERVER.rsplit(":", 1)
-else:
-    _host, _port = SERVER, "1433"
-
-jdbc_url = f"jdbc:sqlserver://{{_host}}:{{_port}};databaseName={{DATABASE}};encrypt={{encrypt}};trustServerCertificate={{trust}}"
-jdbc_props = {{
-    "user":     USERNAME,
-    "password": PASSWORD,
-    "driver":   "com.microsoft.sqlserver.jdbc.SQLServerDriver",
-    "fetchsize": "10000",
-}}
+def _read_source(sql_query):
+    return _read_source_with(_SRC_FORMAT, _SRC_OPTIONS, sql_query=sql_query)
 
 # COMMAND ----------
 
@@ -2114,18 +2088,21 @@ jdbc_props = {{
 
 # COMMAND ----------
 
-# Query SQL Server INFORMATION_SCHEMA to find numeric columns
-numeric_types_sql = "('int','bigint','smallint','tinyint','float','real','decimal','numeric','money','smallmoney')"
-col_query = f"""(
-    SELECT COLUMN_NAME, DATA_TYPE
-    FROM INFORMATION_SCHEMA.COLUMNS
-    WHERE TABLE_SCHEMA = '{{TABLE_SCHEMA}}'
-      AND TABLE_NAME   = '{{TABLE_NAME}}'
-      AND DATA_TYPE IN {{numeric_types_sql}}
-) AS col_info"""
+# INFORMATION_SCHEMA.COLUMNS exists on both sources; only the reported type names differ.
+if _SRC_TYPE == "snowflake":
+    numeric_types_sql = ("('NUMBER','DECIMAL','NUMERIC','INT','INTEGER','BIGINT','SMALLINT','TINYINT',"
+                         "'BYTEINT','FLOAT','FLOAT4','FLOAT8','DOUBLE','DOUBLE PRECISION','REAL')")
+else:
+    numeric_types_sql = "('int','bigint','smallint','tinyint','float','real','decimal','numeric','money','smallmoney')"
+_sch_lit = str(TABLE_SCHEMA).replace("'", "''")
+_tbl_lit = str(TABLE_NAME).replace("'", "''")
+col_query = (
+    "SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
+    f"WHERE TABLE_SCHEMA = '{{_sch_lit}}' AND TABLE_NAME = '{{_tbl_lit}}' AND DATA_TYPE IN {{numeric_types_sql}}"
+)
 
 try:
-    cols_df = spark.read.jdbc(jdbc_url, col_query, properties=jdbc_props)
+    cols_df = _read_source(col_query)
     numeric_cols = [(r["COLUMN_NAME"], r["DATA_TYPE"]) for r in cols_df.collect()]
     print(f"🔢 Found {{len(numeric_cols)}} numeric columns:")
     for cn, ct in numeric_cols:
@@ -2141,22 +2118,20 @@ if not numeric_cols:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 📊 Compute Source Aggregates (JDBC)
+# MAGIC ## 📊 Compute Source Aggregates
 
 # COMMAND ----------
 
-# Build a single SQL query that computes COUNT(*) plus SUM of each numeric column
-agg_exprs = ["COUNT(*) AS __row_count"]
+# One query: COUNT(*) plus SUM of each numeric column. Aliases are quoted so
+# Snowflake keeps them lowercase (unquoted aliases come back UPPERCASE there).
+agg_exprs = [f"COUNT(*) AS {{_qcol('__row_count')}}"]
 for cn, _ in numeric_cols:
-    safe_col = cn.replace("'", "''")
-    agg_exprs.append(f"SUM(CAST([{{cn}}] AS FLOAT)) AS [sum_{{cn}}]")
+    agg_exprs.append(f"SUM(CAST({{_qcol(cn)}} AS FLOAT)) AS {{_qcol('sum_' + cn)}}")
 
-agg_sql = ", ".join(agg_exprs)
-src_query = f"(SELECT {{agg_sql}} FROM [{{TABLE_SCHEMA}}].[{{TABLE_NAME}}]) AS src_agg"
+src_query = f"SELECT {{', '.join(agg_exprs)}} FROM {{_qtbl(TABLE_SCHEMA, TABLE_NAME)}}"
 
 try:
-    src_agg_df = spark.read.jdbc(jdbc_url, src_query, properties=jdbc_props)
-    src_row = src_agg_df.collect()[0]
+    src_row = _read_source(src_query).collect()[0]
     src_count = int(src_row["__row_count"])
     print(f"📊 Source row count: {{src_count:,}}")
 except Exception as e:
@@ -4102,14 +4077,24 @@ if dlt_status == "COMPLETED" and extract_results:
                 jid   = job["job_id"]
                 rid   = extract_results[job_idx].get("run_id", "")
                 print(f"  📊 Reconciling: {{job['job_name']}}")
-                _run_child_notebook(recon_nb, 1800, {{
+                _recon_json = _run_child_notebook(recon_nb, 1800, {{
                     "job_id": jid, "run_id": rid,
                     "password_b64": PASSWORD_B64,
                     "catalog": CATALOG, "schema": SCHEMA,
                     "landing_path": LANDING_PATH,
                 }}, label=job.get("full_table", ""),
                     target=_target_label(job, CATALOG, SCHEMA, "dlt", _BRONZE_CAT, _SILVER_CAT, _TARGET_SCHEMA))
-                recon_ok_count += 1
+                # Reconciliation reports failure in its exit JSON (the run itself
+                # still ends cleanly), so the result must be read, not assumed ok.
+                try:
+                    _recon_res = json.loads(_recon_json) if _recon_json else {{}}
+                except Exception:
+                    _recon_res = {{}}
+                if str(_recon_res.get("status", "")).upper() in ("FAILED", "ERROR"):
+                    recon_fail_count += 1
+                    print(f"    ❌ Recon failed for {{job['job_name']}}: {{str(_recon_res.get('error', ''))[:300]}}")
+                else:
+                    recon_ok_count += 1
             except Exception as rj_err:
                 recon_fail_count += 1
                 print(f"    ⚠️ Recon failed for {{job['job_name']}}: {{rj_err}}")

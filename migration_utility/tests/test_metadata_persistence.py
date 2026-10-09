@@ -111,6 +111,22 @@ class TestCreatePipelineFailsLoudly(unittest.TestCase):
         self.assertIn("NATION was NOT saved", out["error"])
 
 
+class TestGroupDisplayName(unittest.TestCase):
+    def test_uses_memory_then_delta_never_the_group_id(self):
+        with mock.patch.dict(wfm.PIPELINE_GROUPS, {"g1": {"full_table": "TPCH_SF1.REGION"}}):
+            self.assertEqual(wfm._group_display_name("g1"), "TPCH_SF1.REGION")
+        with mock.patch.object(wfm, "_ensure_metadata_ready", return_value=True), \
+             mock.patch.object(wfm, "_exec_sql", return_value={}), \
+             mock.patch.object(wfm, "_rows_from_exec", return_value=[{"full_table": "TPCDS_SF100TCL.WAREHOUSE"}]):
+            self.assertEqual(wfm._group_display_name("9170f9e89d56"), "TPCDS_SF100TCL.WAREHOUSE")
+
+    def test_falls_back_to_group_id_and_is_ascii(self):
+        with mock.patch.object(wfm, "_ensure_metadata_ready", return_value=False):
+            self.assertEqual(wfm._group_display_name("abc123"), "abc123")
+        with mock.patch.dict(wfm.PIPELINE_GROUPS, {"g2": {"full_table": "HR.Emplöyee"}}):
+            self.assertTrue(wfm._group_display_name("g2").isascii())
+
+
 class TestOrchestratorsFailWhenNothingToRun(unittest.TestCase):
     def _nb(self, mode):
         r = generate_metadata_notebooks("m", "s", "/l", "/Shared/DBX/MetadataPipeline", mode)

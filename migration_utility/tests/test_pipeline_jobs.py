@@ -225,11 +225,11 @@ class TestGeneratedChildRunner(unittest.TestCase):
                "target_config": json.dumps({"bronze_catalog": "dbx_bronze", "target_schema": "sales"})}
         lbl = g["_target_label"](job, "dbx_admin_source", "configtables", "dlt",
                                  "dbx_bronze", "dbx_silver", "sales")
-        self.assertEqual(lbl, "dbx_bronze.sales.partsupp → dbx_silver.sales.partsupp")
+        self.assertEqual(lbl, "dbx_bronze.sales.partsupp -> dbx_silver.sales.partsupp")
         same_cat = g["_target_label"](job, "m", "s", "dlt", "dbx_bronze", "", "sales")
-        self.assertEqual(same_cat, "dbx_bronze.sales.partsupp → dbx_bronze.sales.silver_partsupp")
+        self.assertEqual(same_cat, "dbx_bronze.sales.partsupp -> dbx_bronze.sales.silver_partsupp")
         from_config = g["_target_label"](job, "m", "s", "dlt")
-        self.assertEqual(from_config, "dbx_bronze.sales.partsupp → dbx_bronze.sales.silver_partsupp")
+        self.assertEqual(from_config, "dbx_bronze.sales.partsupp -> dbx_bronze.sales.silver_partsupp")
 
     def test_target_label_standard_uses_bronze_resolver_and_never_raises(self):
         g, _, _ = self._load({})
@@ -238,6 +238,32 @@ class TestGeneratedChildRunner(unittest.TestCase):
         self.assertEqual(g["_target_label"](job, "m", "s", "standard"), "bronze.hr.Emp")
         self.assertEqual(g["_target_label"]({"target_config": "{not json"}, "m", "s", "dlt"), "")
         self.assertEqual(g["_target_label"]({}, "m", "s", "dlt"), "")
+
+    def test_display_labels_are_ascii_for_jobs_api(self):
+        g, calls, _ = self._load({
+            ("POST", "/api/2.1/jobs/run-now"): _Resp(200, {"run_id": 900}),
+            ("GET", "/api/2.1/jobs/runs/get"): self._terminal("SUCCESS"),
+            ("GET", "/api/2.1/jobs/runs/get-output"): _Resp(200, {"notebook_output": {"result": "x"}}),
+        }, jobs={"01_Meta_Extract": 42})
+        g["_run_child_notebook"](f"{WS}/01_Meta_Extract", 3600, {}, label="HR.Emplöyee", target="a → b")
+        sent = calls[0][2]["notebook_params"]
+        self.assertTrue(all(v.isascii() for v in sent.values()), sent)
+        self.assertEqual(sent["target_table"], "a ? b")
+
+    def test_source_connection_matches_source_dialect(self):
+        g, _, _ = self._load({})
+        fmt, opts, qtbl, qcol = g["_source_connection"](
+            {"source_type": "snowflake", "account": "QHWKPTI-XS87582", "username": "u",
+             "database": "SNOWFLAKE_SAMPLE_DATA", "warehouse": "WH"}, "pw")
+        self.assertEqual(fmt, "snowflake")
+        self.assertEqual(opts["sfUrl"], "QHWKPTI-XS87582.snowflakecomputing.com")
+        self.assertEqual((opts["sfDatabase"], opts["sfWarehouse"]), ("SNOWFLAKE_SAMPLE_DATA", "WH"))
+        self.assertEqual((qtbl("S", "T"), qcol("sum_X")), ('"S"."T"', '"sum_X"'))
+        fmt, opts, qtbl, qcol = g["_source_connection"](
+            {"source_type": "azuresql", "server": "srv.database.windows.net,1433", "database": "db"}, "pw")
+        self.assertEqual((fmt, opts["host"], opts["port"], opts["encrypt"]),
+                         ("sqlserver", "srv.database.windows.net", "1433", "true"))
+        self.assertEqual((qtbl("dbo", "T"), qcol("c")), ("[dbo].[T]", "[c]"))
 
     def test_timeout_cancels_child_run(self):
         g, calls, _ = self._load({
@@ -280,6 +306,25 @@ class TestOrchestratorsUseIsolatedRuns(unittest.TestCase):
         # Bronze/Silver tables would be dropped.
         self.assertIn('if pname in _OUR_DLT_NAMES or (existing and pid == existing["pipeline_id"]):', code)
         self.assertNotIn('p.get("name") == DLT_NAME', code)
+
+
+    def test_reconciliation_uses_native_source_connector(self):
+        for mode in ("standard", "dlt"):
+            code = self._nb(mode, "04_Meta_Reconciliation")
+            self.assertIn("%run ./_Meta_CommonFunctions", code)
+            self.assertIn("_source_connection(source_config, PASSWORD)", code)
+            for legacy in ("spark.read.jdbc", "jdbc:sqlserver://", "com.microsoft.sqlserver.jdbc"):
+                self.assertNotIn(legacy, code)
+            self.assertIn("AS {_qcol('__row_count')}", code)
+
+    def test_extract_shares_the_same_connector(self):
+        code = self._nb("dlt", "01_Meta_Extract")
+        self.assertIn("_SRC_FORMAT, _SRC_OPTIONS, _qtbl, _qcol = _source_connection(source_config, PASSWORD)", code)
+        self.assertNotIn('"sfUrl"', code)
+
+    def test_sdp_orchestrator_counts_failed_reconciliation(self):
+        code = self._nb("dlt", "00_Meta_Orchestrator")
+        self.assertIn('if str(_recon_res.get("status", "")).upper() in ("FAILED", "ERROR"):', code)
 
 
 class TestAppRunParameters(unittest.TestCase):

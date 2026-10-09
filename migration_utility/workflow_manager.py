@@ -2949,7 +2949,8 @@ def _execute_job_run(run_id: str, job_id: str):
         if stage == "dlt_bronze_silver":
             nb_params["child_jobs"] = json.dumps(_jobs)
         # First parameter is what the Jobs UI "Run parameters" column shows.
-        nb_params = {"table": job.get("full_table", ""), **nb_params}
+        nb_params = {"table": str(job.get("full_table", "")).encode("ascii", "replace").decode("ascii"),
+                     **nb_params}
         submit_result = connector.run_notebook(
             notebook_path=nb_path,
             params=nb_params,
@@ -3628,6 +3629,21 @@ _notebooks_workspace_path = ""       # e.g. "/Shared/MetadataPipeline"
 _pipeline_jobs = {}                  # {"workspace_path": ..., "jobs": {notebook_name: job_id}}
 
 
+def _group_display_name(group_id: str) -> str:
+    """Source table name for a pipeline group, ASCII-only (Jobs API rejects
+    non-ASCII run parameters). Falls back to the Delta metadata because this
+    worker may not hold a group another worker created."""
+    name = (PIPELINE_GROUPS.get(group_id) or {}).get("full_table", "")
+    if not name and _ensure_metadata_ready():
+        try:
+            rows = _rows_from_exec(_exec_sql(
+                f"SELECT full_table FROM {_fqn(TBL_PIPELINES)} WHERE group_id = {_esc(group_id)} LIMIT 1"))
+            name = (rows[0].get("full_table") if rows else "") or ""
+        except Exception as exc:
+            logger.warning("Could not look up table name for group %s: %s", group_id, exc)
+    return (name or group_id).encode("ascii", "replace").decode("ascii")
+
+
 def _pipeline_job_map(ws: str) -> dict:
     """Persistent stage-job ids ({notebook_name: job_id}) deployed for this
     workspace path, or {} if none -- callers then use one-time runs."""
@@ -4160,7 +4176,7 @@ def run_pipeline_on_databricks(
     _jobs = _pipeline_job_map(ws)
     params["child_jobs"] = json.dumps(_jobs)
     # First parameter is what the Jobs UI "Run parameters" column shows.
-    _label = (grp_pre.get("full_table") or group_id) if group_id else "all pipeline groups"
+    _label = _group_display_name(group_id) if group_id else "all pipeline groups"
     params = {"table": _label, **params}
     result = connector.run_notebook(
         notebook_path=orchestrator_nb,
