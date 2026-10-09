@@ -171,7 +171,7 @@ jobs:
           # then absent from this bundle's Terraform state, so a plain deploy dies
           # with "Scope migration-studio already exists". Bind adopts it instead.
           if databricks secrets list-scopes -o json 2>/dev/null \
-             | python3 -c "import json,sys; sys.exit(0 if any(s.get('name')=='migration-studio' for s in json.load(sys.stdin).get('scopes',[])) else 1)" 2>/dev/null; then
+             | python3 -c "import json,sys; d=json.load(sys.stdin); d=d.get('scopes',[]) if isinstance(d,dict) else d; sys.exit(0 if any(s.get('name')=='migration-studio' for s in d) else 1)" 2>/dev/null; then
             echo "Scope migration-studio exists - binding it to the bundle"
             databricks bundle deployment bind migration_studio_secrets migration-studio -t dev --auto-approve \
               || echo "NOTE: bind skipped (already managed by this bundle)"
