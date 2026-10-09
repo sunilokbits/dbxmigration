@@ -52,7 +52,8 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install Databricks CLI
-        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+        # Pinned: CLI v1.20.0 removed the Terraform bundle engine these deploys rely on.
+        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/v1.19.0/install.sh | sh
       - name: Install Python dependencies
         run: |
           set -e
@@ -117,7 +118,8 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install Databricks CLI
-        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+        # Pinned: CLI v1.20.0 removed the Terraform bundle engine these deploys rely on.
+        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/v1.19.0/install.sh | sh
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
@@ -186,7 +188,7 @@ jobs:
           # Terraform engine until direct-engine app support stabilizes.
           DATABRICKS_BUNDLE_ENGINE: terraform
         run: |
-          set -e
+          set -eo pipefail
           OUT=$(databricks bundle deploy -t dev --var="sql_warehouse_id=$SQL_WAREHOUSE_ID" 2>&1 | tee /dev/stderr)
           # bundle deploy reconciles the App resource's config but does not
           # itself trigger a code deployment (confirmed: "Resources: ...
@@ -194,7 +196,11 @@ jobs:
           # the workspace path it just uploaded to and deploy that snapshot
           # via the native Apps API command, which -- unlike `bundle run` --
           # doesn't hit the "Must specify environment variable source" bug.
-          SRC_PATH=$(echo "$OUT" | grep "Uploading bundle files to" | sed -E 's#.*Uploading bundle files to (.*)\.\.\.#\1#')
+          SRC_PATH=$(echo "$OUT" | grep "Uploading bundle files to" | sed -E 's#.*Uploading bundle files to (.*)\.\.\.#\1#' || true)
+          if [ -z "$SRC_PATH" ]; then
+            echo "::error::bundle deploy uploaded no files -- refusing to redeploy the app on stale code"
+            exit 1
+          fi
           # A freshly created app sits STOPPED; `apps deploy` rejects anything not
           # running, so start it and wait for compute before shipping the code.
           bash deploy/wait_for_app.sh dbxmigration
@@ -253,7 +259,8 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install Databricks CLI
-        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+        # Pinned: CLI v1.20.0 removed the Terraform bundle engine these deploys rely on.
+        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/v1.19.0/install.sh | sh
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
@@ -370,7 +377,8 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install Databricks CLI
-        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+        # Pinned: CLI v1.20.0 removed the Terraform bundle engine these deploys rely on.
+        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/v1.19.0/install.sh | sh
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
