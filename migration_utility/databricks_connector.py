@@ -68,6 +68,52 @@ class DatabricksConnector:
                 return {}
         return {"_http_error": f"HTTP {resp.status_code}: {resp.text[:300]}"}
 
+    def _call(self, method: str, path: str, json: dict = None, params: dict = None) -> dict:
+        """REST call that works for both auth modes (PAT session or SDK client)."""
+        if self._sess:
+            return self._api(method, path, json=json, params=params)
+        try:
+            return self._client.api_client.do(method, path, query=params, body=json) or {}
+        except Exception as e:
+            return {"_http_error": str(e)[:300]}
+
+    # ── Persistent Jobs ───────────────────────────────────────────────────────
+    def list_jobs_by_name(self, name: str) -> dict:
+        """Jobs whose name matches exactly (case-insensitive), with their notebook paths."""
+        d = self._call("GET", "/api/2.1/jobs/list",
+                       params={"name": name, "expand_tasks": "true", "limit": 100})
+        if "_http_error" in d:
+            return {"success": False, "error": d["_http_error"]}
+        jobs = [{
+            "job_id": j["job_id"],
+            "notebook_paths": [(t.get("notebook_task") or {}).get("notebook_path")
+                               for t in (j.get("settings") or {}).get("tasks", [])],
+        } for j in d.get("jobs", [])]
+        return {"success": True, "jobs": jobs}
+
+    def create_job(self, settings: dict) -> dict:
+        d = self._call("POST", "/api/2.1/jobs/create", json=settings)
+        if "_http_error" in d:
+            return {"success": False, "error": d["_http_error"]}
+        return {"success": True, "job_id": d.get("job_id")}
+
+    def reset_job(self, job_id: int, settings: dict) -> dict:
+        d = self._call("POST", "/api/2.1/jobs/reset", json={"job_id": job_id, "new_settings": settings})
+        if "_http_error" in d:
+            return {"success": False, "error": d["_http_error"]}
+        return {"success": True, "job_id": job_id}
+
+    def run_job_now(self, job_id: int, notebook_params: dict = None) -> dict:
+        params = {k: "" if v is None else str(v) for k, v in (notebook_params or {}).items()}
+        d = self._call("POST", "/api/2.1/jobs/run-now",
+                       json={"job_id": int(job_id), "notebook_params": params})
+        if "_http_error" in d:
+            return {"success": False, "message": d["_http_error"]}
+        run_id = d.get("run_id")
+        return {"success": True, "run_id": run_id, "job_id": job_id, "message": "Job run started",
+                "run_url": f"{self.host}/#job/{job_id}/run/{run_id}",
+                "submitted_at": str(datetime.now())}
+
     # ── Connection Test ───────────────────────────────────────────────────────
     def test_connection(self) -> dict:
         """Verify token and host by listing clusters."""
@@ -197,25 +243,33 @@ class DatabricksConnector:
             return {"success": False, "message": f"Upload error: {str(e)[:300]}"}
 
     # ── Run Notebook via Job ──────────────────────────────────────────────────
-    def run_notebook(self, notebook_path: str, params: dict = None) -> dict:
-        """Submit a one-time serverless run for a notebook in Databricks.
+    def run_notebook(self, notebook_path: str, params: dict = None, job_id: int = None) -> dict:
+        """Run a notebook in Databricks on serverless compute.
 
-        Every pipeline stage (Extract -> Bronze -> Silver) runs on serverless
-        compute -- there is no cluster fallback here. If serverless is not
-        enabled for this workspace, the submit call fails outright and that
-        failure is surfaced to the caller rather than silently falling back
-        to a job cluster the user never asked for.
+        With job_id, triggers that persistent job (visible under its name in
+        the Databricks Jobs UI); if the job is gone or the trigger fails,
+        falls back to a one-time submitted run. There is no cluster fallback:
+        if serverless is not enabled the submit fails and that failure is
+        surfaced rather than silently using a job cluster nobody asked for.
         """
+        if job_id:
+            r = self.run_job_now(job_id, params)
+            if r.get("success"):
+                return r
+            logger.warning("run-now failed for job %s (%s); submitting a one-time run instead",
+                           job_id, r.get("message"))
         try:
             nb_name = notebook_path.rsplit("/", 1)[-1]
             task_key = nb_name.replace(" ", "_")[:100]
             nb_task_d = {"notebook_path": notebook_path, "base_parameters": params or {}}
+            from pipeline_jobs import job_display_name
+            run_name = job_display_name(nb_name)
 
             if self._sess:
                 task = {"task_key": task_key, "notebook_task": nb_task_d,
                         "environment_key": "Default"}
                 d = self._api("POST", "/api/2.1/jobs/runs/submit", json={
-                    "run_name": f"MigrationStudio_{nb_name}", "tasks": [task],
+                    "run_name": run_name, "tasks": [task],
                     "environments": [{"environment_key": "Default",
                                       "spec": {"client": "1"}}],
                 })
@@ -227,7 +281,7 @@ class DatabricksConnector:
             from databricks.sdk.service.compute import Environment as ComputeEnvironment
             nb_task = NotebookTask(notebook_path=notebook_path, base_parameters=params or {})
             run = self._client.jobs.submit(
-                run_name=f"MigrationStudio_{nb_name}",
+                run_name=run_name,
                 tasks=[SubmitTask(task_key=task_key, environment_key="Default",
                                  notebook_task=nb_task)],
                 environments=[JobEnvironment(environment_key="Default",

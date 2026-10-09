@@ -2849,9 +2849,13 @@ def _execute_job_run(run_id: str, job_id: str):
         run["logs"].append(f"[{ts}] ⚡ Submitting {stage} notebook to Databricks…")
         run["logs"].append(f"[{ts}] 📋 Notebook: {nb_path}")
 
+        _jobs = _pipeline_job_map(ws)
+        if stage == "dlt_bronze_silver":
+            nb_params["child_jobs"] = json.dumps(_jobs)
         submit_result = connector.run_notebook(
             notebook_path=nb_path,
             params=nb_params,
+            job_id=_jobs.get(nb_path.rsplit("/", 1)[-1]),
         )
 
         if not submit_result.get("success"):
@@ -3523,6 +3527,22 @@ def add_custom_job(
 # ─────────────────────────────────────────────────────────────────────────────
 _notebooks_deployed = False          # tracks if notebooks have been uploaded
 _notebooks_workspace_path = ""       # e.g. "/Shared/MetadataPipeline"
+_pipeline_jobs = {}                  # {"workspace_path": ..., "jobs": {notebook_name: job_id}}
+
+
+def _pipeline_job_map(ws: str) -> dict:
+    """Persistent stage-job ids ({notebook_name: job_id}) deployed for this
+    workspace path, or {} if none -- callers then use one-time runs."""
+    entry = _pipeline_jobs
+    if not entry:
+        try:
+            from config_cache import get_config as _gc_jobs
+            entry = (_gc_jobs() or {}).get("pipeline_jobs") or {}
+        except Exception:
+            entry = {}
+    if not isinstance(entry, dict) or entry.get("workspace_path") != ws:
+        return {}
+    return dict(entry.get("jobs") or {})
 
 def deploy_metadata_notebooks(
     host: str = "",
@@ -3540,7 +3560,7 @@ def deploy_metadata_notebooks(
     pipeline_mode: "standard" (4 notebooks) or "dlt" (3 DLT notebooks).
     cdc_mode: "watermark" or "change_tracking" (SQL Server CT).
     """
-    global _notebooks_deployed, _notebooks_workspace_path
+    global _notebooks_deployed, _notebooks_workspace_path, _pipeline_jobs
 
     host  = host or _dbr_host
     token = token or _dbr_token
@@ -3605,13 +3625,38 @@ def deploy_metadata_notebooks(
         except Exception as _cfg_err:
             logger.warning("Could not persist notebooks_workspace_path to config: %s", _cfg_err)
 
+    # 3. Register one persistent, named Databricks Job per stage notebook so
+    #    every stage runs isolated and is visible in the Jobs UI. Never fails
+    #    the deploy: missing jobs just mean runs use one-time submissions.
+    job_results = []
+    if ok > 0:
+        try:
+            from pipeline_jobs import ensure_pipeline_jobs
+            jr = ensure_pipeline_jobs(connector, workspace_path,
+                                      [r["name"] for r in results if r["success"]])
+            job_results = jr["results"]
+            _pipeline_jobs = {"workspace_path": workspace_path, "jobs": jr["jobs"]}
+            try:
+                from config_cache import save_config
+                save_config({"pipeline_jobs": _pipeline_jobs})
+            except Exception as _cfg_err:
+                logger.warning("Could not persist pipeline job ids to config: %s", _cfg_err)
+        except Exception as _job_err:
+            logger.warning("Could not register pipeline Databricks Jobs: %s", _job_err)
+
+    jobs_ok = sum(1 for j in job_results if j["success"])
+    message = f"Deployed {ok}/{len(results)} metadata notebooks to {workspace_path}"
+    if job_results:
+        message += f" · {jobs_ok}/{len(job_results)} Databricks Jobs registered"
+
     return {
         "success":        ok > 0,
         "uploaded":       ok,
         "total":          len(results),
         "results":        results,
+        "jobs":           job_results,
         "workspace_path": workspace_path,
-        "message":        f"Deployed {ok}/{len(results)} metadata notebooks to {workspace_path}",
+        "message":        message,
     }
 
 
@@ -4014,9 +4059,12 @@ def run_pipeline_on_databricks(
     orchestrator_nb = f"{ws}/00_Meta_Orchestrator"
     logger.info("run_pipeline_on_databricks: mode=%s, orchestrator=%s", _pipeline_mode, orchestrator_nb)
 
+    _jobs = _pipeline_job_map(ws)
+    params["child_jobs"] = json.dumps(_jobs)
     result = connector.run_notebook(
         notebook_path=orchestrator_nb,
         params=params,
+        job_id=_jobs.get("00_Meta_Orchestrator"),
     )
 
     # Normalise: connector uses 'message' but frontend expects 'error'

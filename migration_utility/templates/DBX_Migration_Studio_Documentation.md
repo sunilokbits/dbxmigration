@@ -411,6 +411,20 @@ Located at: `/apps/dbxmigrator/src/notebooks/`
 | 04_Meta_Reconciliation | Source vs target reconciliation |
 | 05_Meta_ExecutionLog | Pipeline execution logging |
 
+### Databricks Jobs
+
+**Deploy Notebooks** also registers one persistent Databricks Job per stage, visible under **Jobs & Pipelines** with the `application: migration-studio` tag:
+
+| Databricks Job | Notebook | Runs |
+|---|---|---|
+| Migration Studio - 00 Pipeline Orchestrator | 00_Meta_Orchestrator | One run per pipeline-group execution |
+| Migration Studio - 01 Extract (Source to Landing) | 01_Meta_Extract | One run per table |
+| Migration Studio - 02 Bronze (Landing to Bronze) | 02_Meta_Bronze | One run per table (standard mode) |
+| Migration Studio - 03 Silver (Bronze to Silver) | 03_Meta_Silver | One run per table (standard mode) |
+| Migration Studio - 04 Reconciliation (Source vs Bronze) | 04_Meta_Reconciliation | One run per table |
+
+Every stage runs as its own job run with its own serverless driver and executors, so one table's failure or memory pressure cannot affect another. Each run's `source_table` parameter identifies the table. Jobs are updated in place on redeploy, so their run history and any permissions granted on them are preserved. In SDP mode, Bronze/Silver run inside the Spark Declarative Pipeline instead.
+
 ---
 
 ## Data Flow (Medallion Architecture)

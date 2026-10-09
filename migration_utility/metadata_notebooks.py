@@ -79,7 +79,7 @@ def generate_metadata_notebooks(
             {
                 "name":        "_Meta_CommonFunctions",
                 "code":        _gen_common_functions(ts),
-                "description": "Shared SQL-escaping helpers, %run'd by Extract and ExecutionLog",
+                "description": "Shared helpers (SQL escaping, isolated stage-job launcher), %run'd by the Orchestrator, Extract and ExecutionLog",
                 "layer":       "common",
             },
             {
@@ -124,7 +124,7 @@ def generate_metadata_notebooks(
             {
                 "name":        "_Meta_CommonFunctions",
                 "code":        _gen_common_functions(ts),
-                "description": "Shared SQL-escaping helpers, %run'd by Extract/Bronze/Silver",
+                "description": "Shared helpers (SQL escaping, isolated stage-job launcher), %run'd by the Orchestrator and Extract/Bronze/Silver",
                 "layer":       "common",
             },
             {
@@ -266,6 +266,112 @@ def _resolve_bronze_table(target_config, metadata_catalog, metadata_schema, tabl
         target_schema = metadata_schema
 
     return f"`{{target_catalog}}`.`{{target_schema}}`.`bronze_{{table_name}}`"
+
+# COMMAND ----------
+
+# Isolated child runs: each stage notebook runs as its OWN Databricks job run
+# (own serverless driver + executors, visible in the Jobs UI) instead of
+# in-process via dbutils.notebook.run(), which shares the caller's session.
+import json
+_CHILD_RUNNER = {{"host": None, "headers": None, "jobs": {{}}}}
+
+def _init_child_runner(child_jobs_json=""):
+    """Call once from the orchestrator's main thread (notebook context is not
+    reliably reachable from worker threads)."""
+    try:
+        _CHILD_RUNNER["jobs"] = json.loads(child_jobs_json) if child_jobs_json else {{}}
+    except Exception:
+        _CHILD_RUNNER["jobs"] = {{}}
+    try:
+        _ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+        try:
+            _host = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
+        except Exception:
+            _host = "https://" + _ctx.browserHostName().get()
+        _CHILD_RUNNER["host"] = _host
+        _CHILD_RUNNER["headers"] = {{"Authorization": f"Bearer {{_ctx.apiToken().get()}}",
+                                    "Content-Type": "application/json"}}
+        print(f"🧩 Isolated stage runs enabled ({{len(_CHILD_RUNNER['jobs'])}} stage job(s) registered)")
+    except Exception as _e:
+        _CHILD_RUNNER["host"] = None
+        print(f"⚠️ Jobs API unavailable ({{_e}}) — stages will run in-process")
+
+def _run_child_notebook(notebook_path, timeout_seconds, arguments, label=""):
+    """Drop-in replacement for dbutils.notebook.run(): returns the child's
+    dbutils.notebook.exit() value and raises on failure/timeout. Falls back to
+    dbutils.notebook.run() only if no isolated run could be launched."""
+    import time as _t
+    import requests as _rq
+    nb_name = notebook_path.rstrip("/").rsplit("/", 1)[-1]
+    params = {{k: "" if v is None else str(v) for k, v in (arguments or {{}}).items()}}
+    if label:
+        params.setdefault("source_table", str(label))
+    host, hdrs = _CHILD_RUNNER["host"], _CHILD_RUNNER["headers"]
+
+    run_id = None
+    if host and len(json.dumps(params)) <= 9500:  # Jobs API caps run parameters at 10 KB
+        try:
+            job_id = _CHILD_RUNNER["jobs"].get(nb_name)
+            if job_id:
+                _r = _rq.post(f"{{host}}/api/2.1/jobs/run-now", headers=hdrs, timeout=60,
+                              json={{"job_id": int(job_id), "notebook_params": params}})
+                if _r.ok:
+                    run_id = _r.json().get("run_id")
+                else:
+                    print(f"⚠️ Stage job {{job_id}} could not be triggered (HTTP {{_r.status_code}}) — using a one-time run")
+            if not run_id:
+                _r = _rq.post(f"{{host}}/api/2.1/jobs/runs/submit", headers=hdrs, timeout=60, json={{
+                    "run_name": f"Migration Studio - {{nb_name}}" + (f" - {{label}}" if label else ""),
+                    "timeout_seconds": int(timeout_seconds),
+                    "tasks": [{{"task_key": nb_name[:100], "environment_key": "Default",
+                               "notebook_task": {{"notebook_path": notebook_path, "base_parameters": params}}}}],
+                    "environments": [{{"environment_key": "Default", "spec": {{"client": "1"}}}}],
+                }})
+                _r.raise_for_status()
+                run_id = _r.json().get("run_id")
+        except Exception as _e:
+            print(f"⚠️ Could not launch isolated run for {{nb_name}} ({{_e}}) — running in-process")
+            run_id = None
+    if not run_id:
+        return dbutils.notebook.run(notebook_path, int(timeout_seconds), arguments)
+
+    print(f"   🧩 {{nb_name}}{{' [' + str(label) + ']' if label else ''}} → job run {{run_id}}")
+    # Queue/startup time is not part of the notebook's own timeout budget.
+    deadline = _t.time() + int(timeout_seconds) + 900
+    run, delay = {{}}, 5
+    while True:
+        try:
+            _g = _rq.get(f"{{host}}/api/2.1/jobs/runs/get", headers=hdrs, timeout=60, params={{"run_id": run_id}})
+            if _g.ok:
+                run = _g.json()
+                if run.get("state", {{}}).get("life_cycle_state") in ("TERMINATED", "SKIPPED", "INTERNAL_ERROR"):
+                    break
+        except Exception:
+            pass
+        if _t.time() > deadline:
+            try:
+                _rq.post(f"{{host}}/api/2.1/jobs/runs/cancel", headers=hdrs, timeout=60, json={{"run_id": run_id}})
+            except Exception:
+                pass
+            raise TimeoutError(f"{{nb_name}} job run {{run_id}} exceeded {{timeout_seconds}}s and was cancelled")
+        _t.sleep(delay)
+        delay = min(delay + 5, 20)
+
+    state = run.get("state", {{}})
+    task_run_id = ((run.get("tasks") or [{{}}])[0]).get("run_id") or run_id
+    out = {{}}
+    try:
+        _o = _rq.get(f"{{host}}/api/2.1/jobs/runs/get-output", headers=hdrs, timeout=60, params={{"run_id": task_run_id}})
+        out = _o.json() if _o.ok else {{}}
+    except Exception:
+        pass
+    if state.get("result_state") == "SUCCESS":
+        return (out.get("notebook_output") or {{}}).get("result", "")
+    detail = out.get("error") or state.get("state_message") or state.get("result_state") or "unknown error"
+    trace = out.get("error_trace") or ""
+    raise RuntimeError(f"{{nb_name}} job run {{run_id}} {{state.get('result_state') or state.get('life_cycle_state')}}: "
+                       f"{{detail}}" + (f"\\nCaused by: {{trace[-1500:]}}" if trace else "")
+                       + (f"\\nRun: {{run.get('run_page_url')}}" if run.get("run_page_url") else ""))
 '''
 
 
@@ -1471,7 +1577,14 @@ def _gen_orchestrator(catalog, schema, landing_path, workspace_path, ts):
 # MAGIC   Then logs all execution details to the Logging catalog.
 # MAGIC
 # MAGIC Can run a **single pipeline group** or **all groups**.
+# MAGIC
+# MAGIC Every stage runs as its **own Databricks job run** (isolated serverless
+# MAGIC compute, visible in the Jobs UI) — not in-process in this notebook.
 # MAGIC ---
+
+# COMMAND ----------
+
+# MAGIC %run ./_Meta_CommonFunctions
 
 # COMMAND ----------
 
@@ -1482,6 +1595,9 @@ dbutils.widgets.text("catalog", "{catalog}", "Metadata Catalog")
 dbutils.widgets.text("schema", "{schema}", "Metadata Schema")
 dbutils.widgets.text("landing_path", "{landing_path}", "Landing Base Path")
 dbutils.widgets.text("workspace_path", "{workspace_path}", "Notebook Workspace Path")
+dbutils.widgets.text("child_jobs", "", "Stage Job IDs (JSON, set by the app)")
+
+_init_child_runner(dbutils.widgets.get("child_jobs").strip())
 
 GROUP_ID       = dbutils.widgets.get("group_id").strip()
 LOAD_OVERRIDE  = dbutils.widgets.get("load_type").strip()
@@ -1556,7 +1672,9 @@ for group in groups:
         if not nb_path:
             print(f"   ⚠️ Unknown stage '{{stage}}' — skipping")
             continue
-        
+
+        load_type = LOAD_OVERRIDE if LOAD_OVERRIDE else (job.get("load_type") or "full")
+
         # Convert DLT stage to standard (Bronze → Silver sequentially)
         if nb_path == "__STANDARD_CONVERT__":
             print(f"   🔄 Converting DLT stage to Standard (Bronze → Silver)")
@@ -1564,11 +1682,11 @@ for group in groups:
                 _sub_run_id = uuid.uuid4().hex[:12]
                 print(f"      ▶ Running: {{_sub_stage}} ({{_sub_nb}})")
                 try:
-                    _sub_result = dbutils.notebook.run(_sub_nb, 3600, {{
+                    _sub_result = _run_child_notebook(_sub_nb, 3600, {{
                         "job_id": job_id, "run_id": _sub_run_id,
                         "load_type": load_type, "password_b64": PASSWORD_B64,
                         "catalog": CATALOG, "schema": SCHEMA, "landing_path": LANDING_PATH,
-                    }})
+                    }}, label=job.get("full_table", ""))
                     _sub_parsed = json.loads(_sub_result) if _sub_result else {{}}
                     if _sub_parsed.get("status") in ("FAILED", "ERROR"):
                         print(f"      ❌ {{_sub_stage}} failed: {{_sub_parsed.get('error','')}}")
@@ -1584,7 +1702,6 @@ for group in groups:
             continue
 
         run_id = uuid.uuid4().hex[:12]
-        load_type = LOAD_OVERRIDE if LOAD_OVERRIDE else (job.get("load_type") or "full")
 
         # Create run record in metadata
         try:
@@ -1601,7 +1718,7 @@ for group in groups:
         print(f"\\n   ▶ Running: {{job['job_name']}} ({{stage}})")
 
         try:
-            result_json = dbutils.notebook.run(
+            result_json = _run_child_notebook(
                 nb_path,
                 timeout_seconds=3600,
                 arguments={{
@@ -1612,7 +1729,8 @@ for group in groups:
                     "catalog":      CATALOG,
                     "schema":       SCHEMA,
                     "landing_path": LANDING_PATH,
-                }}
+                }},
+                label=job.get("full_table", ""),
             )
             result = json.loads(result_json) if result_json else {{}}
             status = result.get("status", "UNKNOWN")
@@ -1633,7 +1751,7 @@ for group in groups:
                 if stage == "landing_to_bronze":
                     print(f"\\n   🔍 Running Reconciliation for {{job['job_name']}}…")
                     try:
-                        recon_json = dbutils.notebook.run(
+                        recon_json = _run_child_notebook(
                             f"{{WORKSPACE_PATH}}/04_Meta_Reconciliation",
                             timeout_seconds=1800,
                             arguments={{
@@ -1643,7 +1761,8 @@ for group in groups:
                                 "catalog":       CATALOG,
                                 "schema":        SCHEMA,
                                 "landing_path":  LANDING_PATH,
-                            }}
+                            }},
+                            label=job.get("full_table", ""),
                         )
                         recon_result = json.loads(recon_json) if recon_json else {{}}
                         r_status = recon_result.get("status", "UNKNOWN")
@@ -2761,12 +2880,16 @@ def _gen_orchestrator_dlt(catalog, schema, landing_path, workspace_path, ts):
 # MAGIC **Generated:** {ts}
 # MAGIC
 # MAGIC Two-phase execution:
-# MAGIC 1. **Extract** — JDBC extraction via `dbutils.notebook.run()` (standard)
+# MAGIC 1. **Extract** — each table runs as its own Databricks job run (isolated serverless compute)
 # MAGIC 2. **Spark Declarative Pipeline** — Bronze + Silver via Lakeflow Spark Declarative Pipelines REST API
 # MAGIC
 # MAGIC The orchestrator auto-creates the Spark Declarative Pipeline on first run,
 # MAGIC then triggers pipeline updates for subsequent runs.
 # MAGIC ---
+
+# COMMAND ----------
+
+# MAGIC %run ./_Meta_CommonFunctions
 
 # COMMAND ----------
 
@@ -2786,6 +2909,9 @@ dbutils.widgets.text("volumes_catalog", "", "Volumes Catalog (dev_volumes)")
 dbutils.widgets.text("bronze_catalog", "", "Bronze Catalog")
 dbutils.widgets.text("silver_catalog", "", "Silver Catalog")
 dbutils.widgets.text("target_schema", "", "Target Schema (hr)")
+dbutils.widgets.text("child_jobs", "", "Stage Job IDs (JSON, set by the app)")
+
+_init_child_runner(dbutils.widgets.get("child_jobs").strip())
 
 GROUP_ID       = dbutils.widgets.get("group_id").strip()
 LOAD_OVERRIDE  = dbutils.widgets.get("load_type").strip()
@@ -3033,11 +3159,11 @@ def _run_extract(idx, job):
         pass
 
     try:
-        result_json = dbutils.notebook.run(extract_nb, 3600, {{
+        result_json = _run_child_notebook(extract_nb, 3600, {{
             "job_id": job_id, "run_id": run_id,
             "load_type": load_type, "password_b64": PASSWORD_B64,
             "catalog": CATALOG, "schema": SCHEMA, "landing_path": LANDING_PATH,
-        }})
+        }}, label=full_table)
         result = json.loads(result_json) if result_json else {{}}
         status = result.get("status", "UNKNOWN")
         rows   = result.get("rows", 0)
@@ -3888,12 +4014,12 @@ if dlt_status == "COMPLETED" and extract_results:
                 jid   = job["job_id"]
                 rid   = extract_results[job_idx].get("run_id", "")
                 print(f"  📊 Reconciling: {{job['job_name']}}")
-                dbutils.notebook.run(recon_nb, 1800, {{
+                _run_child_notebook(recon_nb, 1800, {{
                     "job_id": jid, "run_id": rid,
                     "password_b64": PASSWORD_B64,
                     "catalog": CATALOG, "schema": SCHEMA,
                     "landing_path": LANDING_PATH,
-                }})
+                }}, label=job.get("full_table", ""))
                 recon_ok_count += 1
             except Exception as rj_err:
                 recon_fail_count += 1
@@ -3919,6 +4045,8 @@ if dlt_status == "COMPLETED":
     try:
         log_nb = f"{{WORKSPACE_PATH}}/05_Meta_ExecutionLog"
         print(f"📝 Execution-log notebook: {{log_nb}}")
+        # Stays in-process: lightweight bookkeeping over this run's own results,
+        # and results_json can exceed the Jobs API's 10 KB parameter limit.
         dbutils.notebook.run(log_nb, 1800, {{
             "catalog": CATALOG, "schema": SCHEMA,
             "results_json": json.dumps(extract_results),
