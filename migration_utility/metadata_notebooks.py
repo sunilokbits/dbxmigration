@@ -296,16 +296,49 @@ def _init_child_runner(child_jobs_json=""):
         _CHILD_RUNNER["host"] = None
         print(f"⚠️ Jobs API unavailable ({{_e}}) — stages will run in-process")
 
-def _run_child_notebook(notebook_path, timeout_seconds, arguments, label=""):
+def _target_label(job, metadata_catalog, metadata_schema, pipeline_mode,
+                  bronze_catalog="", silver_catalog="", target_schema=""):
+    """Display-only target table name(s) shown in the Jobs UI run parameters;
+    '' if it can't be resolved. Never used for processing."""
+    try:
+        tc = job.get("target_config") or {{}}
+        tc = json.loads(tc) if isinstance(tc, str) else dict(tc)
+        tbl = job.get("table_name") or str(job.get("full_table", "")).split(".")[-1]
+        if not tbl:
+            return ""
+        if pipeline_mode == "dlt":
+            # Mirrors the orchestrator's DLT_CATALOG/DLT_SCHEMA resolution and
+            # the SDP notebook's direct-publish table names.
+            if bronze_catalog:
+                b_cat, sch = bronze_catalog, (target_schema or metadata_schema)
+            else:
+                b_cat, sch = tc.get("bronze_catalog", ""), (tc.get("target_schema", "") or "hr")
+            if not b_cat:
+                return ""
+            s_cat = silver_catalog or b_cat
+            bronze = f"{{b_cat}}.{{sch}}.{{tbl.lower()}}"
+            silver = (f"{{s_cat}}.{{sch}}.{{tbl.lower()}}" if s_cat != b_cat
+                      else f"{{b_cat}}.{{sch}}.silver_{{tbl.lower()}}")
+            return f"{{bronze}} → {{silver}}"
+        return _resolve_bronze_table(tc, metadata_catalog, metadata_schema, tbl, pipeline_mode).replace("`", "")
+    except Exception:
+        return ""
+
+def _run_child_notebook(notebook_path, timeout_seconds, arguments, label="", target=""):
     """Drop-in replacement for dbutils.notebook.run(): returns the child's
     dbutils.notebook.exit() value and raises on failure/timeout. Falls back to
     dbutils.notebook.run() only if no isolated run could be launched."""
     import time as _t
     import requests as _rq
     nb_name = notebook_path.rstrip("/").rsplit("/", 1)[-1]
-    params = {{k: "" if v is None else str(v) for k, v in (arguments or {{}}).items()}}
+    # The Jobs UI "Run parameters" column shows only the first parameter, so
+    # the human-readable table names go first.
+    params = {{}}
     if label:
-        params.setdefault("source_table", str(label))
+        params["table"] = str(label)
+    if target:
+        params["target_table"] = str(target)
+    params.update({{k: "" if v is None else str(v) for k, v in (arguments or {{}}).items()}})
     host, hdrs = _CHILD_RUNNER["host"], _CHILD_RUNNER["headers"]
 
     run_id = None
@@ -1686,7 +1719,8 @@ for group in groups:
                         "job_id": job_id, "run_id": _sub_run_id,
                         "load_type": load_type, "password_b64": PASSWORD_B64,
                         "catalog": CATALOG, "schema": SCHEMA, "landing_path": LANDING_PATH,
-                    }}, label=job.get("full_table", ""))
+                    }}, label=job.get("full_table", ""),
+                        target=_target_label(job, CATALOG, SCHEMA, "standard") if _sub_stage == "landing_to_bronze" else "")
                     _sub_parsed = json.loads(_sub_result) if _sub_result else {{}}
                     if _sub_parsed.get("status") in ("FAILED", "ERROR"):
                         print(f"      ❌ {{_sub_stage}} failed: {{_sub_parsed.get('error','')}}")
@@ -1731,6 +1765,7 @@ for group in groups:
                     "landing_path": LANDING_PATH,
                 }},
                 label=job.get("full_table", ""),
+                target=_target_label(job, CATALOG, SCHEMA, "standard") if stage in ("extract", "landing_to_bronze") else "",
             )
             result = json.loads(result_json) if result_json else {{}}
             status = result.get("status", "UNKNOWN")
@@ -1763,6 +1798,7 @@ for group in groups:
                                 "landing_path":  LANDING_PATH,
                             }},
                             label=job.get("full_table", ""),
+                            target=_target_label(job, CATALOG, SCHEMA, "standard"),
                         )
                         recon_result = json.loads(recon_json) if recon_json else {{}}
                         r_status = recon_result.get("status", "UNKNOWN")
@@ -2338,8 +2374,10 @@ try:
     TOKEN = ctx.apiToken().get()
     _hdrs = {{"Authorization": f"Bearer {{TOKEN}}", "Content-Type": "application/json"}}
     _active = set(r[0] for r in spark.sql(f"SELECT DISTINCT group_id FROM {{pipe_tbl}} WHERE group_id IS NOT NULL AND lower(coalesce(status,'')) <> 'superseded'").collect() if r[0])
-    _pl = requests.get(f"{{HOST}}/api/2.0/pipelines", params={{"max_results": 100, "filter": "name LIKE 'MetadataPipeline_%'"}}, headers=_hdrs)
-    _pipes = _pl.json().get("statuses", []) if _pl.ok else []
+    _pipes = []
+    for _pat in ("MetadataPipeline_%", "Migration Studio - 02 SDP%"):
+        _pl = requests.get(f"{{HOST}}/api/2.0/pipelines", params={{"max_results": 100, "filter": f"name LIKE '{{_pat}}'"}}, headers=_hdrs)
+        _pipes += _pl.json().get("statuses", []) if _pl.ok else []
     _stale = []
     for _p in _pipes:
         _pid = _p.get("pipeline_id", "")
@@ -2353,7 +2391,7 @@ try:
     for _n, _pid, _gid in _stale:
         findings.append(("SDP pipeline", _n, _gid, "Stale (group gone) — safe to delete"))
         issues.append(f"Stale pipeline {{_n}} (group {{_gid}} no longer active)")
-    print(f"{{'⚠️' if _stale else '✅'}} Stale SDP pipelines: {{len(_stale)}} of {{len(_pipes)}} MetadataPipeline_*")
+    print(f"{{'⚠️' if _stale else '✅'}} Stale SDP pipelines: {{len(_stale)}} of {{len(_pipes)}} metadata SDP pipelines")
 except Exception as e:
     print(f"⚠️ pipeline ownership check skipped: {{e}}")
 
@@ -3163,7 +3201,8 @@ def _run_extract(idx, job):
             "job_id": job_id, "run_id": run_id,
             "load_type": load_type, "password_b64": PASSWORD_B64,
             "catalog": CATALOG, "schema": SCHEMA, "landing_path": LANDING_PATH,
-        }}, label=full_table)
+        }}, label=full_table,
+            target=_target_label(job, CATALOG, SCHEMA, "dlt", _BRONZE_CAT, _SILVER_CAT, _TARGET_SCHEMA))
         result = json.loads(result_json) if result_json else {{}}
         status = result.get("status", "UNKNOWN")
         rows   = result.get("rows", 0)
@@ -3249,7 +3288,12 @@ if not DLT_SCHEMA:
 # pipelines that fight over the same streaming table's ownership.
 import re as _re_name
 _safe_name = lambda s: _re_name.sub(r'[^A-Za-z0-9_]', '_', str(s or ''))
-DLT_NAME = f"MetadataPipeline_{{_safe_name(DLT_CATALOG)}}_{{_safe_name(DLT_SCHEMA)}}"
+DLT_NAME = f"Migration Studio - 02 SDP Bronze & Silver ({{DLT_CATALOG}}.{{DLT_SCHEMA}})"
+# Pre-naming-standard name. A pipeline found under it is RENAMED IN PLACE
+# (same pipeline_id) -- never recreated or treated as stale, because deleting
+# an SDP pipeline drops the Bronze/Silver tables it owns.
+LEGACY_DLT_NAME = f"MetadataPipeline_{{_safe_name(DLT_CATALOG)}}_{{_safe_name(DLT_SCHEMA)}}"
+_OUR_DLT_NAMES = (DLT_NAME, LEGACY_DLT_NAME)
 print(f"⚡ Shared SDP pipeline (one per catalog.schema): {{DLT_NAME}}")
 
 # Ensure the DLT output schema exists
@@ -3315,17 +3359,21 @@ print(f"📋 Active group_ids in metadata: {{len(_active_groups)}}")
 # ── Step 1: Find existing pipeline by name (fast, reliable) ──────
 existing = None
 
-# Use filter param to search by name directly (avoids pagination issues)
-_search_resp = requests.get(
-    f"{{HOST}}/api/2.0/pipelines",
-    params={{"filter": f"name LIKE '{{DLT_NAME}}'", "max_results": 10}},
-    headers=_hdrs,
-)
-if _search_resp.ok:
-    for p in _search_resp.json().get("statuses", []):
-        if p.get("name") == DLT_NAME:
-            existing = {{"pipeline_id": p["pipeline_id"], "name": p["name"]}}
-            break
+# Use filter param to search by name directly (avoids pagination issues).
+# Current name first, then the legacy name.
+for _nm in _OUR_DLT_NAMES:
+    _search_resp = requests.get(
+        f"{{HOST}}/api/2.0/pipelines",
+        params={{"filter": f"name LIKE '{{_nm}}'", "max_results": 10}},
+        headers=_hdrs,
+    )
+    if _search_resp.ok:
+        for p in _search_resp.json().get("statuses", []):
+            if p.get("name") == _nm:
+                existing = {{"pipeline_id": p["pipeline_id"], "name": p["name"]}}
+                break
+    if existing:
+        break
 
 # Fallback: paginate through all pipelines if filter didn't work
 if not existing:
@@ -3340,7 +3388,7 @@ if not existing:
             break
         _lr_json = _lr.json()
         for p in _lr_json.get("statuses", []):
-            if p.get("name") == DLT_NAME:
+            if p.get("name") in _OUR_DLT_NAMES:
                 existing = {{"pipeline_id": p["pipeline_id"], "name": p["name"]}}
                 _searched_all = True
                 break
@@ -3361,8 +3409,8 @@ _stale_ids = []
 for p in _all_pipelines:
     pid = p.get("pipeline_id", "")
     pname = p.get("name", "")
-    if pname == DLT_NAME:
-        continue  # this is ours, not stale
+    if pname in _OUR_DLT_NAMES or (existing and pid == existing["pipeline_id"]):
+        continue  # this is ours (current or pre-rename name), not stale
     try:
         pd = requests.get(f"{{HOST}}/api/2.0/pipelines/{{pid}}", headers=_hdrs)
         if not pd.ok:
@@ -3404,16 +3452,29 @@ if existing:
         print(f"⚠️ Pipeline {{pipeline_id}} no longer exists — will recreate.")
         existing = None
     else:
-        # Update pipeline config
-        requests.put(
+        # Update pipeline config (also renames a legacy-named pipeline in place)
+        _put = requests.put(
             f"{{HOST}}/api/2.0/pipelines/{{pipeline_id}}",
             json=pipeline_spec,
             headers=_hdrs,
         )
+        if existing["name"] != DLT_NAME:
+            if _put.ok:
+                print(f"🏷️ Renamed SDP pipeline '{{existing['name']}}' → '{{DLT_NAME}}' (same pipeline, tables untouched)")
+            else:
+                print(f"⚠️ Could not rename SDP pipeline (HTTP {{_put.status_code}}) — keeping '{{existing['name']}}'")
+                DLT_NAME = existing["name"]
+                pipeline_spec["name"] = DLT_NAME
+                requests.put(f"{{HOST}}/api/2.0/pipelines/{{pipeline_id}}", json=pipeline_spec, headers=_hdrs)
 
 if not existing:
     print(f"📦 Creating Spark Declarative Pipeline: {{DLT_NAME}}")
     cr = requests.post(f"{{HOST}}/api/2.0/pipelines", json=pipeline_spec, headers=_hdrs)
+    if cr.status_code == 400 and "name" in cr.text.lower():
+        print(f"⚠️ Pipeline name rejected ({{cr.text[:200]}}) — using '{{LEGACY_DLT_NAME}}'")
+        DLT_NAME = LEGACY_DLT_NAME
+        pipeline_spec["name"] = DLT_NAME
+        cr = requests.post(f"{{HOST}}/api/2.0/pipelines", json=pipeline_spec, headers=_hdrs)
     # Handle 409 (pipeline already exists but wasn't found in listing)
     if cr.status_code == 409:
         print("⚠️ 409 Conflict — pipeline already exists. Searching by name…")
@@ -3426,7 +3487,7 @@ if not existing:
         _found = False
         if _retry_search.ok:
             for p in _retry_search.json().get("statuses", []):
-                if p.get("name") == DLT_NAME:
+                if p.get("name") in _OUR_DLT_NAMES:
                     pipeline_id = p["pipeline_id"]
                     print(f"✅ Found existing pipeline: {{pipeline_id}} — updating config")
                     requests.put(
@@ -3448,7 +3509,7 @@ if not existing:
                     break
                 _prj = _pr.json()
                 for p in _prj.get("statuses", []):
-                    if p.get("name") == DLT_NAME:
+                    if p.get("name") in _OUR_DLT_NAMES:
                         pipeline_id = p["pipeline_id"]
                         print(f"✅ Found existing pipeline (page scan): {{pipeline_id}}")
                         requests.put(
@@ -4019,7 +4080,8 @@ if dlt_status == "COMPLETED" and extract_results:
                     "password_b64": PASSWORD_B64,
                     "catalog": CATALOG, "schema": SCHEMA,
                     "landing_path": LANDING_PATH,
-                }}, label=job.get("full_table", ""))
+                }}, label=job.get("full_table", ""),
+                    target=_target_label(job, CATALOG, SCHEMA, "dlt", _BRONZE_CAT, _SILVER_CAT, _TARGET_SCHEMA))
                 recon_ok_count += 1
             except Exception as rj_err:
                 recon_fail_count += 1

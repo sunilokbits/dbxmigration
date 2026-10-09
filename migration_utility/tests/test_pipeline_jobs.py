@@ -175,9 +175,12 @@ class TestGeneratedChildRunner(unittest.TestCase):
                                                self._terminal("SUCCESS")],
             ("GET", "/api/2.1/jobs/runs/get-output"): _Resp(200, {"notebook_output": {"result": '{"status":"OK","rows":5}'}}),
         }, jobs={"01_Meta_Extract": 42})
-        out = g["_run_child_notebook"](f"{WS}/01_Meta_Extract", 3600, {"job_id": "a"}, label="HR.Emp")
+        out = g["_run_child_notebook"](f"{WS}/01_Meta_Extract", 3600, {"job_id": "a"},
+                                       label="HR.Emp", target="dbx_bronze.hr.emp")
         self.assertEqual(json.loads(out)["rows"], 5)
-        self.assertEqual(calls[0][2], {"job_id": 42, "notebook_params": {"job_id": "a", "source_table": "HR.Emp"}})
+        sent = calls[0][2]["notebook_params"]
+        self.assertEqual(sent, {"table": "HR.Emp", "target_table": "dbx_bronze.hr.emp", "job_id": "a"})
+        self.assertEqual(list(sent)[:2], ["table", "target_table"])  # Jobs UI shows the first one
         self.assertEqual(calls[-1][2], {"run_id": 901})  # output read from the task run
         dbutils.notebook.run.assert_not_called()
 
@@ -216,6 +219,26 @@ class TestGeneratedChildRunner(unittest.TestCase):
         dbutils.notebook.run.assert_called_once()
         self.assertEqual(calls, [])
 
+    def test_target_label_matches_sdp_publish_names(self):
+        g, _, _ = self._load({})
+        job = {"table_name": "PARTSUPP", "full_table": "TPCH_SF1.PARTSUPP",
+               "target_config": json.dumps({"bronze_catalog": "dbx_bronze", "target_schema": "sales"})}
+        lbl = g["_target_label"](job, "dbx_admin_source", "configtables", "dlt",
+                                 "dbx_bronze", "dbx_silver", "sales")
+        self.assertEqual(lbl, "dbx_bronze.sales.partsupp → dbx_silver.sales.partsupp")
+        same_cat = g["_target_label"](job, "m", "s", "dlt", "dbx_bronze", "", "sales")
+        self.assertEqual(same_cat, "dbx_bronze.sales.partsupp → dbx_bronze.sales.silver_partsupp")
+        from_config = g["_target_label"](job, "m", "s", "dlt")
+        self.assertEqual(from_config, "dbx_bronze.sales.partsupp → dbx_bronze.sales.silver_partsupp")
+
+    def test_target_label_standard_uses_bronze_resolver_and_never_raises(self):
+        g, _, _ = self._load({})
+        job = {"table_name": "Emp", "target_config": {"bronze_catalog": "bronze", "volumes_catalog": "vol",
+                                                      "target_schema": "hr"}}
+        self.assertEqual(g["_target_label"](job, "m", "s", "standard"), "bronze.hr.Emp")
+        self.assertEqual(g["_target_label"]({"target_config": "{not json"}, "m", "s", "dlt"), "")
+        self.assertEqual(g["_target_label"]({}, "m", "s", "dlt"), "")
+
     def test_timeout_cancels_child_run(self):
         g, calls, _ = self._load({
             ("POST", "/api/2.1/jobs/run-now"): _Resp(200, {"run_id": 900}),
@@ -247,6 +270,33 @@ class TestOrchestratorsUseIsolatedRuns(unittest.TestCase):
         self.assertEqual(len(lines), 1)
         self.assertIn("log_nb", lines[0])
         self.assertEqual(code.count("_run_child_notebook("), 2)
+
+    def test_sdp_pipeline_renamed_in_place_never_treated_as_stale(self):
+        code = self._nb("dlt", "00_Meta_Orchestrator")
+        self.assertIn('DLT_NAME = f"Migration Studio - 02 SDP Bronze & Silver ({DLT_CATALOG}.{DLT_SCHEMA})"', code)
+        self.assertIn('LEGACY_DLT_NAME = f"MetadataPipeline_{_safe_name(DLT_CATALOG)}_{_safe_name(DLT_SCHEMA)}"', code)
+        # The stale-pipeline cleanup deletes other pipelines on the same
+        # catalog.schema; the legacy-named pipeline must be excluded or its
+        # Bronze/Silver tables would be dropped.
+        self.assertIn('if pname in _OUR_DLT_NAMES or (existing and pid == existing["pipeline_id"]):', code)
+        self.assertNotIn('p.get("name") == DLT_NAME', code)
+
+
+class TestAppRunParameters(unittest.TestCase):
+    def test_orchestrator_run_lists_table_first(self):
+        import workflow_manager as wfm
+        conn = MagicMock()
+        conn.run_notebook.return_value = {"success": False, "message": "stop here"}
+        with unittest.mock.patch("databricks_connector.DatabricksConnector", return_value=conn), \
+             unittest.mock.patch.dict(wfm.PIPELINE_GROUPS, {"g1": {"full_table": "TPCH_SF1.PARTSUPP",
+                                                                  "target_config": {"bronze_catalog": "b"},
+                                                                  "job_ids": []}}), \
+             unittest.mock.patch.object(wfm, "_load_deploy_config", return_value={}):
+            wfm.run_pipeline_on_databricks("g1", host="https://h", token="dapi-xxxxxxxxxx",
+                                           catalog="c", schema="s", workspace_path=WS)
+        params = conn.run_notebook.call_args[1]["params"]
+        self.assertEqual(list(params)[0], "table")
+        self.assertEqual(params["table"], "TPCH_SF1.PARTSUPP")
 
 
 if __name__ == "__main__":

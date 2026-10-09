@@ -2852,6 +2852,8 @@ def _execute_job_run(run_id: str, job_id: str):
         _jobs = _pipeline_job_map(ws)
         if stage == "dlt_bronze_silver":
             nb_params["child_jobs"] = json.dumps(_jobs)
+        # First parameter is what the Jobs UI "Run parameters" column shows.
+        nb_params = {"table": job.get("full_table", ""), **nb_params}
         submit_result = connector.run_notebook(
             notebook_path=nb_path,
             params=nb_params,
@@ -4061,6 +4063,9 @@ def run_pipeline_on_databricks(
 
     _jobs = _pipeline_job_map(ws)
     params["child_jobs"] = json.dumps(_jobs)
+    # First parameter is what the Jobs UI "Run parameters" column shows.
+    _label = (grp_pre.get("full_table") or group_id) if group_id else "all pipeline groups"
+    params = {"table": _label, **params}
     result = connector.run_notebook(
         notebook_path=orchestrator_nb,
         params=params,
