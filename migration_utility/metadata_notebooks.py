@@ -1666,6 +1666,13 @@ groups = [r.asDict() for r in groups_df.collect()]
 print(f"📋 Pipeline groups to run: {{len(groups)}}")
 for g in groups:
     print(f"   • {{g['full_table']}} ({{g.get('load_type','full')}})")
+if not groups:
+    raise RuntimeError(
+        f"No pipeline group found in {{pipe_tbl}}"
+        + (f" for group_id {{GROUP_ID}}" if GROUP_ID else "")
+        + " — nothing to run. The pipeline is missing from the Databricks metadata tables. "
+        "Re-create the pipeline in Migration Studio and run it again."
+    )
 
 # COMMAND ----------
 
@@ -1696,6 +1703,11 @@ for group in groups:
         ORDER BY job_order ASC
     """)
     jobs = [r.asDict() for r in jobs_df.collect()]
+    if not jobs:
+        print(f"   ❌ No enabled jobs in {{job_tbl}} for this pipeline group — re-create it in Migration Studio")
+        results.append({{"job": group["full_table"], "status": "FAILED",
+                        "error": f"No enabled jobs found in metadata for group {{gid}}"}})
+        continue
 
     group_ok = True
     for job in jobs:
@@ -1838,6 +1850,12 @@ for group in groups:
 # MAGIC ## 📊 Orchestration Summary
 
 # COMMAND ----------
+
+if results and all(str(r.get("error", "")).startswith("No enabled jobs found") for r in results):
+    raise RuntimeError(
+        "No enabled jobs found in the Databricks metadata tables for the selected pipeline group(s) — "
+        "nothing ran. Re-create the pipeline(s) in Migration Studio and run again."
+    )
 
 succeeded = [r for r in results if r.get("status") in ("COMPLETED", "SUCCESS") and not r.get("job","").startswith("Recon_")]
 failed    = [r for r in results if r.get("status") == "FAILED" and not r.get("job","").startswith("Recon_")]
@@ -3138,6 +3156,15 @@ for g in groups:
     extract_jobs.extend([r.asDict() for r in jobs])
 
 print(f"📋 Extract jobs: {{len(extract_jobs)}}")
+
+# Nothing to extract is a failure, not a silent "COMPLETED" with 0 rows.
+if not extract_jobs:
+    raise RuntimeError(
+        f"No enabled extract jobs found in {{job_tbl}} for "
+        + (f"pipeline group {{GROUP_ID}}" if GROUP_ID else "any pipeline group")
+        + " — nothing to run. The pipeline is missing from the Databricks metadata tables "
+        "(or all of its jobs are disabled). Re-create the pipeline in Migration Studio and run it again."
+    )
 
 # COMMAND ----------
 

@@ -15,6 +15,10 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# workflow_manager restores its metadata connection on demand; in tests that
+# would reach the real workspace whenever CI's DATABRICKS_* secrets are set.
+os.environ["MIGRATION_STUDIO_NO_LAZY_METADATA_INIT"] = "1"
+
 import dbsql_client
 
 _SQL_WAREHOUSE_ENV = (

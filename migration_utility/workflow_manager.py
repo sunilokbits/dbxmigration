@@ -284,7 +284,7 @@ def _evict_old_runs_if_needed():
 
 def list_runs_from_dbr(job_id: str = None, limit: int = 100) -> dict:
     """Fix 8: query Delta directly for historical runs beyond the in-memory window."""
-    if not _metadata_initialized:
+    if not _ensure_metadata_ready():
         return {"success": False, "error": "MetadataFlow not initialized"}
     where = f" WHERE job_id = {_esc(job_id)}" if job_id else ""
     cols = ("run_id, job_id, job_name, stage, full_table, load_type, status, "
@@ -427,6 +427,69 @@ def _restore_from_deploy_config():
     t.start()
 
 _restore_from_deploy_config()
+
+_lazy_init_lock = threading.Lock()
+_lazy_init_last_try = 0.0
+
+
+def _ensure_metadata_ready() -> bool:
+    """True once THIS worker process can read/write the metadata tables.
+
+    The app runs several gunicorn workers, each with its own globals. Boot-time
+    restore and "Create MetadataFlow" only initialise the worker they ran in,
+    so a request landing on another worker used to silently skip every
+    metadata write -- pipelines then existed only in that worker's memory and
+    the orchestrator (which reads Delta) found nothing to run. Resolve the
+    connection on demand from durable config instead.
+    """
+    global _dbr_host, _dbr_token, _dbr_catalog, _dbr_schema, _dbr_warehouse_id
+    global _metadata_initialized, _lazy_init_last_try
+    if _metadata_initialized:
+        return True
+    if os.environ.get("MIGRATION_STUDIO_NO_LAZY_METADATA_INIT") == "1":  # unit tests: never dial a workspace
+        return False
+    with _lazy_init_lock:
+        if _metadata_initialized:
+            return True
+        if time.time() - _lazy_init_last_try < 15:
+            return False
+        _lazy_init_last_try = time.time()
+        try:
+            dcfg = _load_deploy_config()
+            try:
+                from config_cache import get_config as _gc, normalize_host as _nh
+                acfg = _gc() or {}
+            except Exception:
+                acfg, _nh = {}, (lambda h: h)
+            host = (_dbr_host or acfg.get("databricks_host") or dcfg.get("databricks_host")
+                    or os.environ.get("DATABRICKS_HOST", ""))
+            host = _nh(host).rstrip("/") if host else ""
+            token = _dbr_token or _resolve_databricks_token(dcfg)
+            catalog = _dbr_catalog or acfg.get("metadata_catalog") or dcfg.get("metadata_catalog")
+            schema = _dbr_schema or acfg.get("metadata_schema") or dcfg.get("metadata_schema")
+            wh = (_dbr_warehouse_id or os.environ.get("DATABRICKS_SQL_WAREHOUSE_ID")
+                  or acfg.get("warehouse_id") or dcfg.get("warehouse_id") or dcfg.get("databricks_warehouse_id"))
+            if host and token and not wh:
+                resp = requests.get(f"{host}/api/2.0/sql/warehouses",
+                                    headers={"Authorization": f"Bearer {token}"}, timeout=15)
+                if resp.ok:
+                    whs = resp.json().get("warehouses", [])
+                    running = [w for w in whs if w.get("state") == "RUNNING"]
+                    wh = (running or whs or [{}])[0].get("id")
+            if not (host and token and catalog and schema and wh):
+                logger.error(
+                    "Metadata connection unavailable in this worker (host=%s token=%s catalog=%s "
+                    "schema=%s warehouse=%s) -- metadata reads/writes are blocked",
+                    bool(host), bool(token), catalog, schema, wh)
+                return False
+            _dbr_host, _dbr_token, _dbr_catalog, _dbr_schema, _dbr_warehouse_id = host, token, catalog, schema, wh
+            _metadata_initialized = True
+            logger.info("Metadata connection restored on demand: %s.%s (warehouse %s)", catalog, schema, wh)
+        except Exception as exc:
+            logger.error("On-demand metadata initialisation failed: %s", exc)
+            return False
+    threading.Thread(target=_auto_hydrate_from_dbr, name="dbr-lazy-hydrate", daemon=True).start()
+    return True
 
 # ── Table names ──
 TBL_PIPELINES    = "wf_pipeline_metadata"
@@ -1108,7 +1171,7 @@ def get_metadata_status() -> dict:
     all_exist = all(v["exists"] for v in tables_status.values())
     return {
         "success": True,
-        "initialized": all_exist and _metadata_initialized,
+        "initialized": all_exist and _ensure_metadata_ready(),
         "host": _dbr_host,
         "catalog": _dbr_catalog,
         "schema": _dbr_schema,
@@ -1163,10 +1226,11 @@ def _exec_sql_checked(sql: str, context: str, attempts: int = 3) -> bool:
     return False
 
 
-def _sync_pipeline_to_dbr(group: dict):
-    """Upsert a pipeline group to Databricks."""
-    if not _metadata_initialized:
-        return
+def _sync_pipeline_to_dbr(group: dict) -> bool:
+    """Upsert a pipeline group to Databricks. Returns True if it was written."""
+    if not _ensure_metadata_ready():
+        logger.error("Pipeline %s NOT saved to Databricks: metadata connection unavailable", group.get("group_id"))
+        return False
     try:
         sql = f"""MERGE INTO {_fqn(TBL_PIPELINES)} AS t
         USING (SELECT {_esc(group['group_id'])} AS group_id) AS s
@@ -1190,14 +1254,16 @@ def _sync_pipeline_to_dbr(group: dict):
             {_esc(json.dumps(group.get('target_config') or {}))},
             current_timestamp(), current_timestamp()
         )"""
-        _exec_sql_checked(sql, f"pipeline {group.get('group_id')}")
+        return _exec_sql_checked(sql, f"pipeline {group.get('group_id')}")
     except Exception as exc:
         logger.error("_sync_pipeline_to_dbr(%s) raised: %s", group.get('group_id'), exc)
+        return False
 
-def _sync_job_to_dbr(job: dict):
-    """Upsert a job to Databricks."""
-    if not _metadata_initialized:
-        return
+def _sync_job_to_dbr(job: dict) -> bool:
+    """Upsert a job to Databricks. Returns True if it was written."""
+    if not _ensure_metadata_ready():
+        logger.error("Job %s NOT saved to Databricks: metadata connection unavailable", job.get("job_id"))
+        return False
     try:
         sql = f"""MERGE INTO {_fqn(TBL_JOBS)} AS t
         USING (SELECT {_esc(job['job_id'])} AS job_id) AS s
@@ -1230,9 +1296,10 @@ def _sync_job_to_dbr(job: dict):
             {_esc(json.dumps(job.get('target_config') or {}))},
             current_timestamp(), current_timestamp()
         )"""
-        _exec_sql_checked(sql, f"job {job.get('job_id')} status={job.get('status')}")
+        return _exec_sql_checked(sql, f"job {job.get('job_id')} status={job.get('status')}")
     except Exception as exc:
         logger.error("_sync_job_to_dbr(%s) raised: %s", job.get('job_id'), exc)
+        return False
 
 def _sync_run_to_dbr(run: dict):
     """Append the current state of a run to Databricks as a new row.
@@ -1249,7 +1316,7 @@ def _sync_run_to_dbr(run: dict):
     changed since last sync"; every row this function writes carries the
     full current snapshot, and wf_run_history (the view) picks the latest.
     """
-    if not _metadata_initialized:
+    if not _ensure_metadata_ready():
         return
     try:
         logs_str = json.dumps(run.get("logs", []))
@@ -1277,7 +1344,7 @@ def _sync_run_to_dbr(run: dict):
 
 def _delete_pipeline_from_dbr(group_id: str):
     """Delete pipeline and associated jobs from Databricks."""
-    if not _metadata_initialized:
+    if not _ensure_metadata_ready():
         return
     try:
         _exec_sql(f"DELETE FROM {_fqn(TBL_JOBS)} WHERE group_id = {_esc(group_id)}")
@@ -1287,7 +1354,7 @@ def _delete_pipeline_from_dbr(group_id: str):
 
 def _delete_job_from_dbr(job_id: str):
     """Delete a single job from Databricks."""
-    if not _metadata_initialized:
+    if not _ensure_metadata_ready():
         return
     try:
         _exec_sql(f"DELETE FROM {_fqn(TBL_JOBS)} WHERE job_id = {_esc(job_id)}")
@@ -1298,7 +1365,7 @@ def _delete_job_from_dbr(job_id: str):
 
 def sync_source_tables_to_dbr(tables: list, source_config: dict) -> dict:
     """Store discovered source tables to Databricks."""
-    if not _metadata_initialized:
+    if not _ensure_metadata_ready():
         return {"success": False, "error": "MetadataFlow not initialized"}
     try:
         # Clear old entries for this source
@@ -1353,7 +1420,7 @@ def sync_source_tables_to_dbr(tables: list, source_config: dict) -> dict:
 def load_metadata_from_dbr() -> dict:
     """Load all metadata from Databricks Delta tables into in-memory stores."""
     global JOB_REGISTRY, JOB_RUNS, WATERMARKS, PIPELINE_GROUPS
-    if not _metadata_initialized:
+    if not _ensure_metadata_ready():
         return {"success": False, "error": "MetadataFlow not initialized"}
 
     loaded = {"pipelines": 0, "jobs": 0, "runs": 0, "watermarks": 0}
@@ -1502,7 +1569,7 @@ def _run_full_sync(task_id: str):
 
     synced = {"pipelines": 0, "jobs": 0, "runs": 0, "watermarks": 0}
     try:
-        if not _metadata_initialized:
+        if not _ensure_metadata_ready():
             _set(status="failed", error="MetadataFlow not initialized",
                  completed_at=datetime.now().isoformat())
             return
@@ -1541,7 +1608,7 @@ def _run_full_sync(task_id: str):
 
 def start_full_sync_to_dbr() -> dict:
     """Fix 3: dispatch a full sync in the background. Returns task_id for polling."""
-    if not _metadata_initialized:
+    if not _ensure_metadata_ready():
         return {"success": False, "error": "MetadataFlow not initialized"}
     task_id = f"sync-{uuid.uuid4().hex[:12]}"
     with _sync_tasks_lock:
@@ -1576,7 +1643,7 @@ def full_sync_to_dbr() -> dict:
     Synchronous version — blocks caller until complete. Prefer
     start_full_sync_to_dbr() for HTTP callers to avoid request timeout.
     """
-    if not _metadata_initialized:
+    if not _ensure_metadata_ready():
         return {"success": False, "error": "MetadataFlow not initialized"}
     synced = {"pipelines": 0, "jobs": 0, "runs": 0, "watermarks": 0}
     for gid, grp in PIPELINE_GROUPS.items():
@@ -1651,7 +1718,7 @@ def _job_name(stage: str, table_name: str, target_config: dict = None, source_ta
 # ─────────────────────────────────────────────────────────────────────────────
 def scheduler_upsert_config(entry: dict):
     """Insert or update a schedule in wf_scheduler_config."""
-    if not _metadata_initialized:
+    if not _ensure_metadata_ready():
         return
     sid = entry.get("schedule_id", "")
     job_names_str = json.dumps(entry.get("job_names", []))
@@ -1690,14 +1757,14 @@ def scheduler_upsert_config(entry: dict):
 
 def scheduler_delete_config(schedule_id: str):
     """Delete a schedule from wf_scheduler_config."""
-    if not _metadata_initialized:
+    if not _ensure_metadata_ready():
         return
     _exec_sql(f"DELETE FROM {_fqn(TBL_SCH_CONFIG)} WHERE schedule_id = {_esc(schedule_id)}")
 
 
 def scheduler_insert_history(entry: dict):
     """Insert a scheduler execution history record."""
-    if not _metadata_initialized:
+    if not _ensure_metadata_ready():
         return
     import uuid as _uuid
     hid = _uuid.uuid4().hex[:12]
@@ -1717,7 +1784,7 @@ def scheduler_insert_history(entry: dict):
 
 def scheduler_update_history_result(schedule_id: str, timestamp: str, new_result: str):
     """Update the result of an existing scheduler history entry (reconciliation)."""
-    if not _metadata_initialized:
+    if not _ensure_metadata_ready():
         return
     if not schedule_id or not timestamp or not new_result:
         return
@@ -1734,7 +1801,7 @@ def scheduler_update_history_result(schedule_id: str, timestamp: str, new_result
 
 def scheduler_load_all() -> dict:
     """Load all schedules and history from Databricks tables. Returns {schedules:[], history:[]}."""
-    if not _metadata_initialized:
+    if not _ensure_metadata_ready():
         return {"schedules": [], "history": []}
 
     result = {"schedules": [], "history": []}
@@ -1891,7 +1958,7 @@ def _archive_existing_jobs(table_name: str, reason: str = "load_type_change", ma
     Also removes from in-memory JOB_REGISTRY and PIPELINE_GROUPS.
     """
     archived = []
-    if not _metadata_initialized:
+    if not _ensure_metadata_ready():
         return archived
 
     _extra_filter = ""
@@ -2003,7 +2070,7 @@ def create_pipeline_for_table(
         cat = tc.get(key, "")
         if cat:
             catalogs_to_check.add(cat)
-    if catalogs_to_check and _metadata_initialized:
+    if catalogs_to_check and _ensure_metadata_ready():
         try:
             from unity_catalog_executor import execute_sql
             existing_cats_df = execute_sql("SHOW CATALOGS", max_wait=30)
@@ -2044,7 +2111,7 @@ def create_pipeline_for_table(
     # validation, then fall back to deployconfig.json defaults.
     if not target_config.get("bronze_catalog"):
         _auto_populated = False
-        if _metadata_initialized:
+        if _ensure_metadata_ready():
             try:
                 from unity_catalog_executor import execute_sql
                 cats_resp = execute_sql("SHOW CATALOGS", max_wait=20)
@@ -2197,9 +2264,30 @@ def create_pipeline_for_table(
         PIPELINE_GROUPS[group_id] = group
 
     # ── Sync to Databricks ──
-    _sync_pipeline_to_dbr(group)
+    # The orchestrator reads ONLY the Delta metadata, so a pipeline that isn't
+    # saved there can never run -- fail loudly and roll back instead of
+    # leaving a memory-only pipeline that "succeeds" with nothing extracted.
+    saved = _sync_pipeline_to_dbr(group)
     for j in jobs:
-        _sync_job_to_dbr(j)
+        saved = _sync_job_to_dbr(j) and saved
+    if not saved:
+        with _lock:
+            PIPELINE_GROUPS.pop(group_id, None)
+            for j in jobs:
+                JOB_REGISTRY.pop(j["job_id"], None)
+        _delete_pipeline_from_dbr(group_id)
+        for j in jobs:
+            _delete_job_from_dbr(j["job_id"])
+        return {
+            "success":  False,
+            "group_id": group_id,
+            "error": (
+                f"Pipeline for {full_table} was NOT saved to the Databricks metadata tables "
+                f"({_dbr_catalog or '?'}.{_dbr_schema or '?'}), so it could not run. Check that "
+                "MetadataFlow is created and the SQL warehouse is reachable, then create the "
+                "pipeline again."
+            ),
+        }
 
     return {
         "success":       True,
@@ -2249,12 +2337,20 @@ def create_pipelines_bulk(
         )
         results.append(r)
 
-    return {
-        "success":    True,
-        "created":    len(results),
-        "groups":     [{**r["group"], "archived_jobs": r.get("archived_jobs", [])} for r in results],
-        "total_jobs": sum(len(r["jobs"]) for r in results),
+    ok = [r for r in results if r.get("success")]
+    failed = [r for r in results if not r.get("success")]
+    out = {
+        "success":    not failed,
+        "created":    len(ok),
+        "failed":     len(failed),
+        "groups":     [{**r["group"], "archived_jobs": r.get("archived_jobs", [])} for r in ok],
+        "total_jobs": sum(len(r["jobs"]) for r in ok),
     }
+    if failed:
+        out["errors"] = [r.get("error", "unknown error") for r in failed]
+        out["error"] = (f"{len(failed)} of {len(results)} pipeline(s) failed"
+                        + (f" ({len(ok)} created)" if ok else "") + ": " + " | ".join(out["errors"]))
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2272,7 +2368,7 @@ def list_jobs(group_id: str = None, stage: str = None, status: str = None) -> di
     otherwise a real query failure (e.g. a USE CATALOG permission error)
     is returned as an error instead of being masked by stale data.
     """
-    if _metadata_initialized:
+    if _ensure_metadata_ready():
         try:
             where = []
             if group_id:
@@ -2340,7 +2436,7 @@ def list_pipeline_groups() -> dict:
 
 def list_pipeline_groups_live() -> dict:
     """Query pipeline/job status directly from Databricks metadata tables (real-time)."""
-    if not _metadata_initialized:
+    if not _ensure_metadata_ready():
         # Fallback to in-memory if not connected
         return list_pipeline_groups()
 
@@ -3217,7 +3313,7 @@ def get_recent_failed_runs_context(limit: int = 8) -> str:
     from PIPELINE_GROUPS/JOB_REGISTRY.  Non-blocking: any failure here just
     means Genie answers without this extra context, never a broken chat.
     """
-    if not _metadata_initialized:
+    if not _ensure_metadata_ready():
         return ""
     try:
         sql = (
@@ -3351,7 +3447,7 @@ def get_migrated_tables() -> set:
     set when metadata isn't initialized or the query fails; callers MUST treat
     an empty set as 'don't filter' so a transient error never hides everything.
     """
-    if not _metadata_initialized:
+    if not _ensure_metadata_ready():
         names = {j.get("full_table") for j in JOB_REGISTRY.values()
                  if j.get("status") == "success" and j.get("full_table")}
         return {_normalize_table_name(n) for n in names if n}
@@ -3385,7 +3481,7 @@ def get_dashboard_stats() -> dict:
     data from whatever catalog happened to be configured when this
     process last hydrated.
     """
-    if _metadata_initialized:
+    if _ensure_metadata_ready():
         try:
             jobs = _rows_from_exec(_exec_sql(
                 f"SELECT status, enabled, stage, full_table FROM {_fqn(TBL_JOBS)}"

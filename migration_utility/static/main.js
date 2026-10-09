@@ -2403,7 +2403,7 @@ async function wfQuickCreate(){
     const r=await fetch('/api/v1/workflow/create-pipelines-bulk',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({tables:tables,source_config:_wfSourceConfig(),target_config:_wfTargetConfig(),pipeline_mode:(G('wfNbPipelineMode')||{}).value||'standard',cdc_mode:(G('cfgCdcMode')||{}).value||'watermark',primary_keys:(G('cfgPrimaryKeys')||{}).value?G('cfgPrimaryKeys').value.split(',').map(s=>s.trim()).filter(Boolean):[],use_layer_mapping:!!(G('wfQUseLayerMapping')&&G('wfQUseLayerMapping').checked)})});
     const d=await r.json();
-    if(!d.success)throw new Error(d.error||'Failed');
+    if(!d.success){if(d.created>0)wfRefreshAll();throw new Error(d.error||'Failed');}
     const archCount=(d.groups||[]).reduce((s,g)=>(s+(g.archived_jobs||[]).length),0);
     let msg='Created '+d.created+' pipeline(s) with '+d.total_jobs+' jobs';
     if(archCount>0) msg+=' ('+archCount+' old job(s) archived to history)';
