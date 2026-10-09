@@ -1417,6 +1417,108 @@ def sync_source_tables_to_dbr(tables: list, source_config: dict) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 #  LOAD FROM DATABRICKS → IN-MEMORY (hydrate on connect)
 # ─────────────────────────────────────────────────────────────────────────────
+def _json_or_empty(v) -> dict:
+    try:
+        return json.loads(v or "{}")
+    except Exception:
+        return {}
+
+
+def _group_from_row(rec: dict) -> dict:
+    """In-memory pipeline group built from a wf_pipeline_metadata row (job_ids filled by the caller)."""
+    return {
+        "group_id": rec["group_id"],
+        "table_schema": rec.get("table_schema", ""),
+        "table_name": rec.get("table_name", ""),
+        "full_table": rec.get("full_table", ""),
+        "load_type": rec.get("load_type", "full"),
+        "watermark_column": rec.get("watermark_column", ""),
+        "job_ids": [],
+        "status": rec.get("status", "created"),
+        "source_config": _json_or_empty(rec.get("source_config")),
+        "target_config": _json_or_empty(rec.get("target_config")),
+        "created_at": rec.get("created_at", ""),
+    }
+
+
+def _job_from_row(rec: dict) -> dict:
+    """In-memory job built from a wf_job_metadata row."""
+    return {
+        "job_id": rec["job_id"],
+        "job_name": rec.get("job_name", ""),
+        "stage": rec.get("stage", ""),
+        "group_id": rec.get("group_id", ""),
+        "table_schema": rec.get("table_schema", ""),
+        "table_name": rec.get("table_name", ""),
+        "full_table": rec.get("full_table", ""),
+        "load_type": rec.get("load_type", "full"),
+        "watermark_column": rec.get("watermark_column", ""),
+        "status": rec.get("status", "created"),
+        "last_run_id": rec.get("last_run_id"),
+        "last_run_at": rec.get("last_run_at"),
+        "last_status": rec.get("last_status"),
+        "run_count": int(rec.get("run_count", 0) or 0),
+        "fail_count": int(rec.get("fail_count", 0) or 0),
+        "created_at": rec.get("created_at", ""),
+        "updated_at": rec.get("updated_at", ""),
+        "source_config": _json_or_empty(rec.get("source_config")),
+        "target_config": _json_or_empty(rec.get("target_config")),
+        "order": int(rec.get("job_order", 1) or 1),
+        "enabled": str(rec.get("enabled", "true")).lower() in ("true", "1", "yes"),
+    }
+
+
+def _load_group_from_dbr(group_id: str):
+    """Load ONE pipeline group and its jobs from Delta into this worker's memory.
+
+    Each gunicorn worker has its own PIPELINE_GROUPS/JOB_REGISTRY; a group
+    created via another worker is missing here, and a run started from this
+    worker used to go untracked (status stuck at "created"/"in progress").
+    """
+    if not group_id or not _ensure_metadata_ready():
+        return None
+    try:
+        rows = _rows_from_exec(_exec_sql(
+            f"SELECT * FROM {_fqn(TBL_PIPELINES)} WHERE group_id = {_esc(group_id)} LIMIT 1"))
+        if not rows:
+            return None
+        job_rows = _rows_from_exec(_exec_sql(
+            f"SELECT * FROM {_fqn(TBL_JOBS)} WHERE group_id = {_esc(group_id)} ORDER BY job_order"))
+    except Exception as exc:
+        logger.warning("Could not load pipeline group %s from Databricks: %s", group_id, exc)
+        return None
+    grp = _group_from_row(rows[0])
+    jobs = [_job_from_row(r) for r in job_rows]
+    grp["job_ids"] = [j["job_id"] for j in jobs]
+    grp["pipeline_mode"] = "dlt" if any(j["stage"] == "dlt_bronze_silver" for j in jobs) else "standard"
+    with _lock:
+        for j in jobs:
+            JOB_REGISTRY[j["job_id"]] = j
+        PIPELINE_GROUPS[group_id] = grp
+    logger.info("Loaded pipeline group %s (%s, %d jobs) from Databricks into this worker",
+                group_id, grp["full_table"], len(jobs))
+    return grp
+
+
+def _get_group(group_id: str):
+    return PIPELINE_GROUPS.get(group_id) or _load_group_from_dbr(group_id)
+
+
+def _get_job(job_id: str):
+    job = JOB_REGISTRY.get(job_id)
+    if job or not job_id or not _ensure_metadata_ready():
+        return job
+    try:
+        rows = _rows_from_exec(_exec_sql(
+            f"SELECT group_id FROM {_fqn(TBL_JOBS)} WHERE job_id = {_esc(job_id)} LIMIT 1"))
+    except Exception as exc:
+        logger.warning("Could not look up job %s in Databricks: %s", job_id, exc)
+        return None
+    if rows and rows[0].get("group_id"):
+        _load_group_from_dbr(rows[0]["group_id"])
+    return JOB_REGISTRY.get(job_id)
+
+
 def load_metadata_from_dbr() -> dict:
     """Load all metadata from Databricks Delta tables into in-memory stores."""
     global JOB_REGISTRY, JOB_RUNS, WATERMARKS, PIPELINE_GROUPS
@@ -1431,28 +1533,9 @@ def load_metadata_from_dbr() -> dict:
         if r.get("status", {}).get("state") == "SUCCEEDED":
             cols = [c["name"] for c in r.get("manifest", {}).get("schema", {}).get("columns", [])]
             for row in r.get("result", {}).get("data_array", []):
-                rec = dict(zip(cols, row))
-                gid = rec["group_id"]
-                src_cfg = {}
-                tgt_cfg = {}
-                try: src_cfg = json.loads(rec.get("source_config") or "{}")
-                except: pass
-                try: tgt_cfg = json.loads(rec.get("target_config") or "{}")
-                except: pass
+                grp = _group_from_row(dict(zip(cols, row)))
                 with _lock:
-                    PIPELINE_GROUPS[gid] = {
-                        "group_id": gid,
-                        "table_schema": rec.get("table_schema", ""),
-                        "table_name": rec.get("table_name", ""),
-                        "full_table": rec.get("full_table", ""),
-                        "load_type": rec.get("load_type", "full"),
-                        "watermark_column": rec.get("watermark_column", ""),
-                        "job_ids": [],
-                        "status": rec.get("status", "created"),
-                        "source_config": src_cfg,
-                        "target_config": tgt_cfg,
-                        "created_at": rec.get("created_at", ""),
-                    }
+                    PIPELINE_GROUPS[grp["group_id"]] = grp
                 loaded["pipelines"] += 1
 
         # Load jobs
@@ -1460,38 +1543,8 @@ def load_metadata_from_dbr() -> dict:
         if r.get("status", {}).get("state") == "SUCCEEDED":
             cols = [c["name"] for c in r.get("manifest", {}).get("schema", {}).get("columns", [])]
             for row in r.get("result", {}).get("data_array", []):
-                rec = dict(zip(cols, row))
-                jid = rec["job_id"]
-                gid = rec.get("group_id", "")
-                src_cfg = {}
-                tgt_cfg = {}
-                try: src_cfg = json.loads(rec.get("source_config") or "{}")
-                except: pass
-                try: tgt_cfg = json.loads(rec.get("target_config") or "{}")
-                except: pass
-                job = {
-                    "job_id": jid,
-                    "job_name": rec.get("job_name", ""),
-                    "stage": rec.get("stage", ""),
-                    "group_id": gid,
-                    "table_schema": rec.get("table_schema", ""),
-                    "table_name": rec.get("table_name", ""),
-                    "full_table": rec.get("full_table", ""),
-                    "load_type": rec.get("load_type", "full"),
-                    "watermark_column": rec.get("watermark_column", ""),
-                    "status": rec.get("status", "created"),
-                    "last_run_id": rec.get("last_run_id"),
-                    "last_run_at": rec.get("last_run_at"),
-                    "last_status": rec.get("last_status"),
-                    "run_count": int(rec.get("run_count", 0) or 0),
-                    "fail_count": int(rec.get("fail_count", 0) or 0),
-                    "created_at": rec.get("created_at", ""),
-                    "updated_at": rec.get("updated_at", ""),
-                    "source_config": src_cfg,
-                    "target_config": tgt_cfg,
-                    "order": int(rec.get("job_order", 1) or 1),
-                    "enabled": str(rec.get("enabled", "true")).lower() in ("true", "1", "yes"),
-                }
+                job = _job_from_row(dict(zip(cols, row)))
+                jid, gid = job["job_id"], job["group_id"]
                 with _lock:
                     JOB_REGISTRY[jid] = job
                     if gid in PIPELINE_GROUPS:
@@ -2561,7 +2614,7 @@ def list_pipeline_groups_live() -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 def get_job(job_id: str) -> dict:
     """Get details of a single job."""
-    job = JOB_REGISTRY.get(job_id)
+    job = _get_job(job_id)
     if not job:
         return {"success": False, "error": f"Job '{job_id}' not found"}
     # Include run history
@@ -2575,7 +2628,7 @@ def get_job(job_id: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 def update_job(job_id: str, updates: dict) -> dict:
     """Update job metadata (load_type, watermark_column, enabled, etc.)."""
-    job = JOB_REGISTRY.get(job_id)
+    job = _get_job(job_id)
     if not job:
         return {"success": False, "error": f"Job '{job_id}' not found"}
 
@@ -2600,7 +2653,7 @@ def update_job(job_id: str, updates: dict) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 def delete_job(job_id: str) -> dict:
     """Delete a job from registry."""
-    job = JOB_REGISTRY.get(job_id)
+    job = _get_job(job_id)
     if not job:
         return {"success": False, "error": f"Job '{job_id}' not found"}
 
@@ -2629,7 +2682,7 @@ def delete_job(job_id: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 def delete_pipeline_group(group_id: str) -> dict:
     """Delete an entire pipeline group and all its jobs."""
-    grp = PIPELINE_GROUPS.get(group_id)
+    grp = _get_group(group_id)
     if not grp:
         return {"success": False, "error": f"Pipeline group '{group_id}' not found"}
 
@@ -2655,7 +2708,7 @@ def delete_pipeline_group(group_id: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 def run_job(job_id: str, force_full: bool = False) -> dict:
     """Start a job run. Returns run details immediately (background execution)."""
-    job = JOB_REGISTRY.get(job_id)
+    job = _get_job(job_id)
     if not job:
         return {"success": False, "error": f"Job '{job_id}' not found"}
     if not job.get("enabled", True):
@@ -2726,7 +2779,7 @@ def _execute_job_run(run_id: str, job_id: str):
     import time
 
     run = JOB_RUNS.get(run_id)
-    job = JOB_REGISTRY.get(job_id)
+    job = _get_job(job_id)
     if not run or not job:
         return
 
@@ -2744,7 +2797,7 @@ def _execute_job_run(run_id: str, job_id: str):
         token = _resolve_databricks_token(dcfg) or _dbr_token
         cat   = _dbr_catalog or dcfg.get("metadata_catalog", "") or "main"
         sch   = _dbr_schema or dcfg.get("metadata_schema", "") or "default"
-        ws    = _notebooks_workspace_path or "/Shared/MetadataPipeline"
+        ws    = _deployed_workspace_path() or "/Shared/MetadataPipeline"
         password = _resolve_source_password(dcfg)
 
         if not host or not token:
@@ -3167,7 +3220,7 @@ def run_pipeline_group(group_id: str, force_full: bool = False) -> dict:
     """
     import time as _time
 
-    grp = PIPELINE_GROUPS.get(group_id)
+    grp = _get_group(group_id)
     if not grp:
         return {"success": False, "error": f"Pipeline group '{group_id}' not found"}
 
@@ -3207,7 +3260,7 @@ def run_pipeline_group(group_id: str, force_full: bool = False) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 def rerun_from_failure(group_id: str) -> dict:
     """Rerun a pipeline group starting from the first failed job."""
-    grp = PIPELINE_GROUPS.get(group_id)
+    grp = _get_group(group_id)
     if not grp:
         return {"success": False, "error": f"Pipeline group '{group_id}' not found"}
 
@@ -3629,6 +3682,17 @@ _notebooks_workspace_path = ""       # e.g. "/Shared/MetadataPipeline"
 _pipeline_jobs = {}                  # {"workspace_path": ..., "jobs": {notebook_name: job_id}}
 
 
+def _deployed_workspace_path() -> str:
+    """Workspace folder the metadata notebooks were last deployed to. Durable
+    config first: the module global is per worker and can be stale."""
+    try:
+        from config_cache import get_config as _gc_ws
+        p = ((_gc_ws() or {}).get("notebooks_workspace_path") or "").strip()
+    except Exception:
+        p = ""
+    return p or _notebooks_workspace_path or ""
+
+
 def _group_display_name(group_id: str) -> str:
     """Source table name for a pipeline group, ASCII-only (Jobs API rejects
     non-ASCII run parameters). Falls back to the Delta metadata because this
@@ -3680,6 +3744,12 @@ def deploy_metadata_notebooks(
     token = token or _dbr_token
     if not host or not token:
         return {"success": False, "error": "Databricks host and token required. Initialise MetadataFlow first."}
+    workspace_path = (workspace_path or "").strip().rstrip("/")
+    if not workspace_path.startswith("/"):
+        return {"success": False, "error": (
+            f"Workspace Path '{workspace_path}' is not a Databricks workspace folder — it must start with '/' "
+            "(e.g. /Shared/DBX/MetadataPipeline). It looks like a storage path; storage locations belong "
+            "in the Layer Mapping, not here.")}
 
     # 1. Generate notebooks
     from metadata_notebooks import generate_metadata_notebooks
@@ -3793,7 +3863,7 @@ def _poll_databricks_run(connector, dbr_run_id, group_id: str):
     """
     import time
     terminal_states = {"TERMINATED", "SKIPPED", "INTERNAL_ERROR"}
-    grp = PIPELINE_GROUPS.get(group_id)
+    grp = _get_group(group_id)
     grp_job_ids = set(grp["job_ids"]) if grp else set()
     dbr_run_str = str(dbr_run_id)        # normalise once for comparisons
     consecutive_errors = 0
@@ -4008,14 +4078,19 @@ def run_pipeline_on_databricks(
     # global is per-process, so also read the durable config — a run handled by
     # a worker that didn't deploy (or after a restart) must still use the right
     # path so the pipeline library + sub-notebooks resolve correctly.
-    ws = workspace_path or _notebooks_workspace_path
-    if not ws:
-        try:
-            from config_cache import get_config as _gc_ws
-            ws = ((_gc_ws() or {}).get("notebooks_workspace_path") or "").strip()
-        except Exception:
-            ws = ""
-    ws = ws or dcfg.get("notebooks_workspace_path") or "/Shared/MetadataPipeline"
+    # Run from where the notebooks were actually DEPLOYED. The request's value
+    # comes from an editable UI box (it once held a storage path,
+    # "dev/uc-managed/bronze", and every run failed with "Invalid notebook path").
+    deployed_ws = _deployed_workspace_path()
+    if workspace_path and deployed_ws and workspace_path.rstrip("/") != deployed_ws.rstrip("/"):
+        logger.warning("Ignoring requested workspace_path %r; notebooks are deployed at %r",
+                       workspace_path, deployed_ws)
+    ws = (deployed_ws or workspace_path or dcfg.get("notebooks_workspace_path")
+          or "/Shared/MetadataPipeline").rstrip("/")
+    if not ws.startswith("/"):
+        return {"success": False, "error": (
+            f"Notebook Workspace Path '{ws}' is not a workspace folder — it must start with '/' "
+            "(e.g. /Shared/DBX/MetadataPipeline). Fix it on the MetadataFlow page and click Deploy Notebooks.")}
     cat   = catalog or _dbr_catalog or dcfg.get("metadata_catalog", "") or "main"
     sch   = schema or _dbr_schema or dcfg.get("metadata_schema", "") or "default"
     if not password:
@@ -4044,7 +4119,7 @@ def run_pipeline_on_databricks(
 
     # Pass explicit data catalog params from the pipeline group's target_config
     # so the DLT orchestrator doesn't rely on querying wf_job_metadata
-    grp_pre = PIPELINE_GROUPS.get(group_id, {})
+    grp_pre = (_get_group(group_id) if group_id else None) or {}
     tgt_cfg = grp_pre.get("target_config") or {}
 
     # ── Fallback: after app restart PIPELINE_GROUPS is empty.  Read
@@ -4189,7 +4264,7 @@ def run_pipeline_on_databricks(
         result["error"] = result["message"]
 
     ts = datetime.now().isoformat()
-    grp = PIPELINE_GROUPS.get(group_id)
+    grp = _get_group(group_id)
 
     if result.get("success"):
         # Update group status

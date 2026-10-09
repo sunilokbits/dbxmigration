@@ -2122,8 +2122,7 @@ if not numeric_cols:
 
 # COMMAND ----------
 
-# One query: COUNT(*) plus SUM of each numeric column. Aliases are quoted so
-# Snowflake keeps them lowercase (unquoted aliases come back UPPERCASE there).
+# One query: COUNT(*) plus SUM of each numeric column, in numeric_cols order.
 agg_exprs = [f"COUNT(*) AS {{_qcol('__row_count')}}"]
 for cn, _ in numeric_cols:
     agg_exprs.append(f"SUM(CAST({{_qcol(cn)}} AS FLOAT)) AS {{_qcol('sum_' + cn)}}")
@@ -2131,8 +2130,11 @@ for cn, _ in numeric_cols:
 src_query = f"SELECT {{', '.join(agg_exprs)}} FROM {{_qtbl(TABLE_SCHEMA, TABLE_NAME)}}"
 
 try:
-    src_row = _read_source(src_query).collect()[0]
-    src_count = int(src_row["__row_count"])
+    # Read by position, not alias: connectors differ in how they case
+    # returned column names (Snowflake returned no "__row_count" column).
+    _src_vals = list(_read_source(src_query).collect()[0])
+    src_count = int(_src_vals[0] or 0)
+    src_sums = {{cn: _src_vals[i + 1] for i, (cn, _) in enumerate(numeric_cols)}}
     print(f"📊 Source row count: {{src_count:,}}")
 except Exception as e:
     print(f"❌ Failed to compute source aggregates: {{e}}")
@@ -2192,7 +2194,7 @@ results.append({{
 
 # Per-column SUM reconciliation
 for cn, ct in numeric_cols:
-    src_val = src_row[f"sum_{{cn}}"]
+    src_val = src_sums[cn]
     brz_val = brz_row[f"sum_{{cn}}"]
     s = float(src_val) if src_val is not None else 0.0
     b = float(brz_val) if brz_val is not None else 0.0
@@ -3229,6 +3231,8 @@ with ThreadPoolExecutor(max_workers=_max_workers) as pool:
 
 extract_ok   = len([r for r in extract_results if r["status"] == "OK"])
 extract_fail = len([r for r in extract_results if r["status"] == "FAILED"])
+# Any SDP update created after this moment will pick up this run's landing files.
+_EXTRACT_DONE_MS = int(time.time() * 1000)
 if extract_fail:
     print(f"\\n⚠️ {{extract_fail}} extract(s) failed — Spark Declarative Pipeline will process remaining tables")
 
@@ -3647,63 +3651,55 @@ if verify_before.status_code == 404:
     raise Exception(f"Spark Declarative Pipeline {{pipeline_id}} not found (404). It may have been deleted. Please re-run to recreate.")
 verify_before.raise_for_status()
 
-# Check if pipeline already has an active update — wait or stop it
-pipe_info = verify_before.json()
-pipe_state = pipe_info.get("state", "")
-if pipe_state not in ("IDLE", ""):
-    print(f"⏳ Pipeline is currently {{pipe_state}} — waiting for it to finish…")
-    wait_count = 0
-    while pipe_state not in ("IDLE", "FAILED", ""):
-        if wait_count >= 60:  # 60 × 10s = 10 min max wait
-            # Stop the running update so we can start a fresh one
-            print(f"⏳ Pipeline still busy after 10 min — stopping active update…")
-            try:
-                requests.post(f"{{HOST}}/api/2.0/pipelines/{{pipeline_id}}/stop", headers=_hdrs)
-                time.sleep(15)
-            except Exception:
-                pass
-            break
-        time.sleep(10)
-        wait_count += 1
-        try:
-            wr = requests.get(f"{{HOST}}/api/2.0/pipelines/{{pipeline_id}}", headers=_hdrs)
-            if wr.ok:
-                pipe_state = wr.json().get("state", "")
-                if wait_count % 3 == 0:
-                    print(f"  ⏳ Pipeline state: {{pipe_state}} ({{wait_count * 10}}s)")
-        except Exception:
-            break
-    print(f"✅ Pipeline is now {{pipe_state}} — ready to trigger.")
+# Several orchestrators share this pipeline (one per catalog.schema) and can
+# run at the same time. NEVER stop another run's update -- that canceled the
+# concurrent runs and reported them FAILED although their tables were loaded.
+# Join an in-flight update that started after this run's extracts finished
+# (it picks up our landing files); otherwise wait for it, then start our own.
+_ACTIVE_UPDATE_STATES = {{"QUEUED", "CREATED", "WAITING_FOR_RESOURCES", "INITIALIZING", "RESETTING",
+                         "SETTING_UP_TABLES", "RUNNING", "STOPPING"}}
+_JOIN_AFTER_MS = _EXTRACT_DONE_MS + 10000  # margin for driver vs control-plane clock skew
 
-trigger_resp = requests.post(
-    f"{{HOST}}/api/2.0/pipelines/{{pipeline_id}}/updates",
-    json={{"full_refresh": _force_full}},
-    headers=_hdrs,
-)
-# Handle 409 Conflict: pipeline still has an active update — exponential backoff
-if trigger_resp.status_code == 409:
-    _max_409_retries = 4
-    _backoff_secs = [20, 40, 80, 120]
-    for _retry_idx in range(_max_409_retries):
-        _wait = _backoff_secs[_retry_idx] if _retry_idx < len(_backoff_secs) else 120
-        print(f"⚠️ 409 Conflict (attempt {{_retry_idx + 1}}/{{_max_409_retries}}). Stopping pipeline, waiting {{_wait}}s…")
-        try:
-            requests.post(f"{{HOST}}/api/2.0/pipelines/{{pipeline_id}}/stop", headers=_hdrs)
-        except Exception:
-            pass
-        time.sleep(_wait)
-        trigger_resp = requests.post(
-            f"{{HOST}}/api/2.0/pipelines/{{pipeline_id}}/updates",
-            json={{"full_refresh": _force_full}},
-            headers=_hdrs,
-        )
-        if trigger_resp.status_code != 409:
-            break
+def _inflight_update():
+    try:
+        _r = requests.get(f"{{HOST}}/api/2.0/pipelines/{{pipeline_id}}/updates",
+                          params={{"max_results": 10}}, headers=_hdrs)
+        if _r.ok:
+            for _u in _r.json().get("updates", []):
+                if _u.get("state") in _ACTIVE_UPDATE_STATES:
+                    return _u
+    except Exception as _ie:
+        print(f"  ⚠️ Could not list pipeline updates: {{_ie}}")
+    return None
+
+update_id, _joined_update = "", False
+_busy_deadline = time.time() + 60 * 60
+while not update_id:
+    if time.time() > _busy_deadline:
+        raise Exception(f"Spark Declarative Pipeline {{pipeline_id}} stayed busy for 60 min. Another run's "
+                        "update was NOT stopped — check the pipeline in the Databricks UI and re-run.")
+    _u = _inflight_update()
+    if _u and not _force_full and int(_u.get("creation_time", 0) or 0) >= _JOIN_AFTER_MS:
+        update_id, _joined_update = _u["update_id"], True
+        print(f"🤝 Joining in-flight pipeline update {{update_id}} — it started after this run's extracts, "
+              "so it includes this run's tables")
+        break
+    if _u:
+        print(f"⏳ Pipeline busy with update {{_u.get('update_id')}} ({{_u.get('state')}}) — waiting for it to finish…")
+        time.sleep(15)
+        continue
+    trigger_resp = requests.post(
+        f"{{HOST}}/api/2.0/pipelines/{{pipeline_id}}/updates",
+        json={{"full_refresh": _force_full}},
+        headers=_hdrs,
+    )
     if trigger_resp.status_code == 409:
-        raise Exception(f"Spark Declarative Pipeline {{pipeline_id}} still has an active update after {{_max_409_retries}} retries. Check Databricks UI.")
-trigger_resp.raise_for_status()
-update_id = trigger_resp.json().get("update_id", "")
-print(f"📋 Update ID: {{update_id}}")
+        # Another run started an update between our check and our trigger — re-check (likely join it).
+        time.sleep(5)
+        continue
+    trigger_resp.raise_for_status()
+    update_id = trigger_resp.json().get("update_id", "")
+print(f"📋 Update ID: {{update_id}}" + (" (joined)" if _joined_update else ""))
 
 # COMMAND ----------
 
@@ -3726,7 +3722,7 @@ while dlt_status not in terminal_states and poll_count < MAX_POLLS:
     time.sleep(POLL_INTERVAL)
     poll_count += 1
     try:
-        pr = requests.get(f"{{HOST}}/api/2.0/pipelines/{{pipeline_id}}", headers=_hdrs)
+        pr = requests.get(f"{{HOST}}/api/2.0/pipelines/{{pipeline_id}}/updates/{{update_id}}", headers=_hdrs)
         if pr.status_code == 404:
             consecutive_404 += 1
             print(f"  ⚠️ Pipeline not found (404) — attempt {{consecutive_404}}/{{MAX_404}}")
@@ -3737,16 +3733,12 @@ while dlt_status not in terminal_states and poll_count < MAX_POLLS:
             continue
         consecutive_404 = 0
         pr.raise_for_status()
-        pipe_data = pr.json()
-        latest = (pipe_data.get("latest_updates") or [{{}}])[0]
-        update_state = latest.get("state", "")
+        update_state = pr.json().get("update", {{}}).get("state", "")
         if update_state in terminal_states:
             dlt_status = update_state
-        elif pipe_data.get("state") in terminal_states:
-            dlt_status = pipe_data["state"]
         if poll_count % 3 == 0:
             elapsed = poll_count * POLL_INTERVAL
-            print(f"  ⏳ DLT status: {{update_state or pipe_data.get('state','UNKNOWN')}} ({{elapsed}}s)")
+            print(f"  ⏳ DLT status: {{update_state or 'UNKNOWN'}} ({{elapsed}}s)")
     except Exception as e:
         print(f"  ⚠️ Poll error: {{e}}")
 
