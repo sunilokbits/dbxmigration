@@ -28,7 +28,7 @@ function _discToast(msg, type){
 function _discReadSourceConfig(){
   const pick = (...ids) => { for(const id of ids){ const el=G(id); if(el && (el.value||'').trim()) return el.value.trim(); } return ''; };
   const st = pick('cfgSrcType','srcType','wfSrcType') || 'sqlserver';
-  const _nonSql = (st==='sharepoint'||st==='api');
+  const _nonSql = (typeof _NON_SQL_SRC==='function') ? _NON_SQL_SRC(st) : (st==='sharepoint'||st==='api');
   const cfg = {
     source_type: st,
     server:      pick('cfgSrcServer','srcServer','wfSrcServer'),
@@ -49,8 +49,12 @@ function _discReadSourceConfig(){
     cfg.api_auth_type = (_authSel && _authSel.value) || 'none';
     cfg.api_key_header = pick('cfgSrcApiKeyHeader','srcApiKeyHeader','wfSrcApiKeyHeader');
   }
+  if(typeof srcRegistryExtras==='function') Object.assign(cfg, srcRegistryExtras(st));
   return cfg;
 }
+
+/* Connector for a source type (registry-aware; built-in types map to themselves). */
+const _discUi = st => (typeof srcUi==='function') ? srcUi(st) : st;
 
 /* Supported source systems for live Discovery scan. The backend
    sql_pool.get_connection() currently uses pyodbc, so only ODBC-compatible
@@ -71,16 +75,17 @@ function _discUpdateSourceBadge(){
     return;
   }
   const cfg = _discReadSourceConfig();
-  const label = ({azuresql:'Azure SQL',sqlserver:'SQL Server',synapse:'Synapse',mysql:'MySQL',postgresql:'PostgreSQL',oracle:'Oracle',snowflake:'Snowflake',sharepoint:'SharePoint',api:'REST API'})[cfg.source_type] || cfg.source_type;
-  const _needsDb = !(cfg.source_type==='snowflake'||_DISC_NON_SQL.has(cfg.source_type));
+  const _ui = _discUi(cfg.source_type);
+  const label = ((typeof srcInfo==='function' && srcInfo(cfg.source_type)) || {}).label || ({azuresql:'Azure SQL',sqlserver:'SQL Server',synapse:'Synapse',mysql:'MySQL',postgresql:'PostgreSQL',oracle:'Oracle',snowflake:'Snowflake',sharepoint:'SharePoint',api:'REST API'})[cfg.source_type] || cfg.source_type;
+  const _needsDb = !(_ui==='snowflake'||_DISC_NON_SQL.has(_ui));
   const _srvRaw = cfg.source_type==='snowflake' ? (cfg.account||'') : (cfg.server||'');
   const srv = _srvRaw ? (_srvRaw.length>32?_srvRaw.slice(0,32)+'…':_srvRaw) : '<not set>';
   const db  = _needsDb ? (cfg.database || '<no db>') : '—';
-  const ok  = _DISC_LIVE_SUPPORTED.has(cfg.source_type) && (cfg.source_type==='snowflake' ? cfg.account : cfg.server) && (!_needsDb || cfg.database);
-  const warn = !_DISC_LIVE_SUPPORTED.has(cfg.source_type)
+  const ok  = _DISC_LIVE_SUPPORTED.has(_ui) && (_ui==='snowflake' ? cfg.account : cfg.server) && (!_needsDb || cfg.database);
+  const warn = !_DISC_LIVE_SUPPORTED.has(_ui)
     ? ' ⚠ live scan supports Azure SQL / SQL Server / Synapse / Snowflake / SharePoint / API'
     : (cfg.source_type==='snowflake' ? (!cfg.account ? ' ⚠ set Account in Settings' : '')
-      : (_DISC_NON_SQL.has(cfg.source_type) ? (!cfg.server ? ' ⚠ set the URL in Settings' : '')
+      : (_DISC_NON_SQL.has(_ui) ? (!cfg.server ? ' ⚠ set the URL in Settings' : '')
       : (!cfg.server || !cfg.database ? ' ⚠ set Server & Database in Settings' : '')));
   badge.innerHTML = '<b style="color:'+(ok?'#3B82F6':'#F59E0B')+';">'+label+'</b> · <code style="font-size:10px;">'+srv+' / '+db+'</code>'+
     (warn?'<span style="color:#F59E0B;font-weight:600;">'+warn+'</span>':'');
@@ -143,16 +148,16 @@ async function discRunScan(){
   // connects using whatever the user configured (e.g. Azure SQL).
   if(srcType === 'live' || srcType === 'both'){
     const cfg = _discReadSourceConfig();
-    if(!_DISC_LIVE_SUPPORTED.has(cfg.source_type)){
+    if(!_DISC_LIVE_SUPPORTED.has(_discUi(cfg.source_type))){
       btn.disabled = false;
       btn.innerHTML = '<svg viewBox="0 0 24 24" style="width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2.5;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> Run Discovery Scan';
       G('discStatus').textContent = 'Unsupported'; G('discStatus').className = 'disc-status fail';
-      _discToast('Live Discovery scan currently supports Azure SQL, SQL Server, Synapse, Snowflake, Redshift, SharePoint and REST API. Your Settings source is "'+cfg.source_type+'". Switch to Static Demo Objects to preview.', 'err');
+      _discToast('Live Discovery scan analyses database and API objects (Azure SQL, SQL Server, Synapse, Snowflake, Redshift, SharePoint, REST APIs). Your Settings source "'+cfg.source_type+'" is file- or connector-based: use Pipeline Studio to list and ingest its objects, or switch to Static Demo Objects to preview.', 'err');
       return;
     }
-    const _isNonSql = _DISC_NON_SQL.has(cfg.source_type);
-    const _needsServer = cfg.source_type!=='snowflake' && !_isNonSql && !cfg.server;
-    const _needsAccount = cfg.source_type==='snowflake' && !cfg.account;
+    const _isNonSql = _DISC_NON_SQL.has(_discUi(cfg.source_type));
+    const _needsServer = _discUi(cfg.source_type)!=='snowflake' && !_isNonSql && !cfg.server;
+    const _needsAccount = _discUi(cfg.source_type)==='snowflake' && !cfg.account;
     const _needsUrl = _isNonSql && !cfg.server;
     const _needsDb = !cfg.database && !_isNonSql;
     if(_needsServer || _needsAccount || _needsUrl || _needsDb){

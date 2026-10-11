@@ -2,12 +2,13 @@
 import os
 import socket
 import threading
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, Response, request, jsonify
 
 from .auth import login_required
 from log_config import get_logger
 from config_cache import get_source_password
 from keyvault_helper import is_masked
+from source_registry import connector_type
 
 logger = get_logger(__name__)
 source_bp = Blueprint("source", __name__, url_prefix="/api/v1")
@@ -78,18 +79,36 @@ def _test_via_sql_warehouse(server: str, database: str, username: str, password:
         return {"success": False, "error": f"SQL Warehouse JDBC test failed: {str(e)[:300]}", "method": "jdbc_via_sql_warehouse"}
 
 
+@source_bp.route("/sources/registry.js", methods=["GET"])
+def sources_registry_js():
+    """Source catalogue as a script (window.SOURCE_REGISTRY), loaded before
+    main.js so every screen has it synchronously. Metadata only, no secrets."""
+    import json
+    from source_registry import client_payload
+    return Response("window.SOURCE_REGISTRY = " + json.dumps(client_payload(), ensure_ascii=False) + ";",
+                    mimetype="application/javascript")
+
+
 @source_bp.route("/source/test-connection", methods=["POST"])
 @login_required
 def source_test_connection():
     try:
         data = request.get_json(silent=True) or {}
-        source_type = data.get("source_type", "sqlserver")
+        raw_type = data.get("source_type", "sqlserver")
+        # Branch on HOW to connect; built-in types map to themselves.
+        source_type = connector_type(data)
         server = (data.get("server") or "").strip()
         database = (data.get("database") or "").strip()
         username = (data.get("username") or "").strip()
         password = data.get("password", "")
         if not password or is_masked(password):
-            password = get_source_password(source_type=source_type)
+            password = get_source_password(source_type=raw_type)
+
+        if source_type == "unknown":
+            return jsonify({"success": False, "error": f"Unknown source type '{raw_type}'"}), 400
+        if source_type in ("adls", "lakeflow"):
+            from enterprise_sources import test_connection as ent_test
+            return jsonify(ent_test(source_type, data))
 
         # ── Snowflake path ──
         if source_type == "snowflake":
@@ -222,13 +241,21 @@ def source_test_connection():
 def source_load_objects():
     try:
         data = request.get_json()
-        source_type = data.get("source_type", "sqlserver")
+        raw_type = data.get("source_type", "sqlserver")
+        source_type = connector_type(data)
         server = data.get("server", "").strip()
         database = data.get("database", "").strip()
         username = data.get("username", "").strip()
         password = data.get("password", "")
         if not password or is_masked(password):
-            password = get_source_password(source_type=source_type)
+            password = get_source_password(source_type=raw_type)
+
+        if source_type == "unknown":
+            return jsonify({"success": False, "error": f"Unknown source type '{raw_type}'"}), 400
+        if source_type in ("adls", "lakeflow"):
+            from enterprise_sources import load_objects as ent_load
+            result = ent_load(source_type, data)
+            return jsonify(result) if result.get("success") else (jsonify(result), 500)
 
         # ── Snowflake path ──
         if source_type == "snowflake":

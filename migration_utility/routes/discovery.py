@@ -54,7 +54,13 @@ def discovery_scan():
             analyses.extend(da.scan_static_objects())
 
         if source in ("live", "both"):
-            src_type = source_config.get("source_type", "sqlserver")
+            from source_registry import connector_type, get as _src_get
+            src_type = connector_type(source_config)
+            if src_type in ("adls", "lakeflow", "unknown"):
+                _lbl = (_src_get(source_config.get("source_type", "")) or {}).get("label", source_config.get("source_type", ""))
+                return jsonify({"success": False, "error": (
+                    f"Live code discovery analyses database objects (procedures, views) and doesn't apply to "
+                    f"{_lbl}. Use Pipeline Studio to list and ingest its objects.")}), 400
             if src_type == "snowflake":
                 if not source_config.get("account") or not source_config.get("username"):
                     return jsonify({"success": False, "error": "account and username required for Snowflake scan"}), 400
@@ -105,16 +111,23 @@ def discovery_schemas():
     try:
         data = request.get_json(silent=True) or {}
         src_cfg = data.get("source_config", {})
-        src_type = src_cfg.get("source_type", "sqlserver")
+        from source_registry import connector_type
+        raw_type = src_cfg.get("source_type", "sqlserver")
+        src_type = connector_type(src_cfg)
 
         from config_cache import get_source_password
         from keyvault_helper import is_masked
         _pw = src_cfg.get("password", "")
         if not _pw or is_masked(_pw):
-            _pw = get_source_password(source_type=src_type)
+            _pw = get_source_password(source_type=raw_type)
 
         schemas = []
-        if src_type == "sharepoint":
+        if src_type == "unknown":
+            return jsonify({"success": False, "error": f"Unknown source type '{raw_type}'"}), 400
+        if src_type in ("adls", "lakeflow"):
+            # File / managed-connector sources have one logical namespace
+            schemas = ["default"]
+        elif src_type == "sharepoint":
             # SharePoint has a single logical namespace — its lists
             schemas = ["default"]
         elif src_type == "api":

@@ -313,7 +313,10 @@ function toggleIDD(){}
 function pickSrcType(){}
 
 /* ── Source-type aware helpers ── */
-const _NON_SQL_SRC = v => v==='sharepoint'||v==='api';
+const _NON_SQL_SRC = v => {
+  const u=(typeof srcUi==='function')?srcUi(v):v;
+  return u==='sharepoint'||u==='api'||u==='adls'||u==='lakeflow';
+};
 function _setLbl(id, txt){
   const el=G(id); if(!el) return;
   el.innerHTML = txt;
@@ -323,7 +326,9 @@ function _setLbl(id, txt){
 function _applySrcLabels(prefix, v){
   let srv='Server / Host', user='Username', pass='Password';
   if(v==='sharepoint'){ srv='SharePoint Site URL'; user='Client ID'; pass='Client Secret'; }
-  else if(v==='api'){ srv='API Base URL'; }
+  else if(v==='api'){ srv='API Base URL'; pass='Secret / Token'; }
+  else if(v==='adls'){ srv='Landing Folder (abfss://… or /Volumes/…)'; }
+  else if(v==='lakeflow'){ srv='Unity Catalog Connection'; }
   _setLbl(prefix+'ServerLabel', srv+' <span class="cfg-req">*</span>');
   _setLbl(prefix+'UserLabel', user);
   _setLbl(prefix+'PassLabel', pass);
@@ -371,7 +376,7 @@ async function _srcSyncFromConfig(){
   // Update info bar
   if(G('srcCfgServer'))G('srcCfgServer').textContent=src.source_type==='snowflake'?(src.account||'—'):(src.server||'—');
   if(G('srcCfgDb'))G('srcCfgDb').textContent=src.database||'—';
-  if(G('srcCfgType'))G('srcCfgType').textContent=(IDD_OPTS[src.source_type]||{}).label||src.source_type||'—';
+  if(G('srcCfgType'))G('srcCfgType').textContent=(IDD_OPTS[src.source_type]||{}).label||((typeof srcInfo==='function'&&srcInfo(src.source_type))||{}).label||src.source_type||'—';
   if(G('srcCfgUser'))G('srcCfgUser').textContent=src.username||'—';
   // Toggle field visibility
   onSrcTypeChange(G('srcType'));
@@ -424,6 +429,7 @@ async function testSourceConn(){
       payload.api_auth_type=(G('srcApiAuthType')||{}).value||'none';
       payload.api_key_header=(G('srcApiKeyHeader')||{}).value||'';
     }
+    if(typeof srcRegistryExtras==='function') Object.assign(payload, srcRegistryExtras(srcType));
     const r=await fetch('/api/v1/source/test-connection',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const d=await r.json();
     msg.style.display='';
@@ -1430,6 +1436,7 @@ function _wfSourceConfig(){
     cfg.api_auth_type=(G('wfSrcApiAuthType')||{}).value||'none';
     cfg.api_key_header=G('wfSrcApiKeyHeader')?.value?.trim()||'';
   }
+  if(typeof srcRegistryExtras==='function') Object.assign(cfg, srcRegistryExtras(st));
   return cfg;
 }
 function _wfTargetConfig(){
@@ -1847,6 +1854,7 @@ function _wfSrcCreds(){
     creds.api_auth_type=(G('wfSrcApiAuthType')||{}).value||'none';
     creds.api_key_header=(G('wfSrcApiKeyHeader')||{}).value||'';
   }
+  if(typeof srcRegistryExtras==='function') Object.assign(creds, srcRegistryExtras(st));
   return creds;
 }
 
@@ -1876,6 +1884,8 @@ async function _wfSaveSourceToConfig(){
       cfg.source.api_auth_type=(G('wfSrcApiAuthType')||{}).value||'none';
       cfg.source.api_key_header=(G('wfSrcApiKeyHeader')||{}).value?.trim()||'';
     }
+    // Keep enterprise-only keys (ingestion method, file format, objects, ...)
+    if(typeof srcRegistryExtras==='function') Object.assign(cfg.source, srcRegistryExtras(_st));
     await fetch('/api/v1/deploy-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
   }catch(e){console.warn('Could not save source to config:',e);}
 }
@@ -3240,7 +3250,22 @@ async function wfResetWatermark(table){
 
 /* Settings page: toggle source fields per selected source type */
 function cfgOnSrcTypeChange(selectEl){
-  const v=(selectEl||G('cfgSrcType')).value;
+  const raw=(selectEl||G('cfgSrcType')).value;
+  if(typeof cfgSyncMethodOptions==='function') cfgSyncMethodOptions(raw);
+  // Branch on the connector (built-in types are their own connector)
+  const v=(typeof srcUi==='function')?srcUi(raw):raw;
+  const _info=(typeof srcInfo==='function')?srcInfo(raw):null;
+  const _isEnt=!!(_info&&!_info.builtin);
+  const isFile=(v==='adls'), isLf=(v==='lakeflow');
+  const _show=(id,on)=>{const el=G(id);if(el)el.style.display=on?'':'none';};
+  _show('cfgSrcMethodRow',_isEnt);
+  _show('cfgSrcEngineRow',_isEnt&&typeof srcMethod==='function'&&srcMethod(raw,(G('cfgSrcMethod')||{}).value)==='jdbc');
+  _show('cfgSrcFormatRow',isFile);
+  _show('cfgSrcObjectsRow',isLf);
+  // File and Lakeflow sources carry no username/password here (ADLS access is
+  // via the workspace; Lakeflow credentials live in the UC connection).
+  [G('cfgSrcUser'),G('cfgSrcPass')].forEach(el=>{if(el&&el.parentElement)el.parentElement.style.display=(isFile||isLf)?'none':'';});
+  if(typeof cfgRenderSourceInfo==='function') cfgRenderSourceInfo(raw);
   const isSf=(v==='snowflake');
   const nonSql=_NON_SQL_SRC(v);
   const isSp=(v==='sharepoint');
@@ -3714,6 +3739,7 @@ function _collectConfig(){
         s.api_auth_type=(G('cfgSrcApiAuthType')||{}).value||(G('wfSrcApiAuthType')||{}).value||'none';
         s.api_key_header=G('cfgSrcApiKeyHeader')?.value?.trim()||(G('wfSrcApiKeyHeader')||{}).value?.trim()||'';
       }
+      if(typeof srcRegistryExtras==='function') Object.assign(s, srcRegistryExtras(_st));
       return s;
     })(),
     metadata_catalog: G('cfgMetaCatalog')?.value?.trim()||'',
@@ -3803,6 +3829,7 @@ function _populateConfig(c){
   if(G('cfgSrcSpTenantId'))    G('cfgSrcSpTenantId').value=src.tenant_id||'';
   if(G('cfgSrcApiAuthType'))   G('cfgSrcApiAuthType').value=src.api_auth_type||'none';
   if(G('cfgSrcApiKeyHeader'))  G('cfgSrcApiKeyHeader').value=src.api_key_header||'';
+  if(typeof cfgSyncSourceExtras==='function') cfgSyncSourceExtras(src);
   // Toggle visibility based on source type
   if(typeof cfgOnSrcTypeChange==='function') cfgOnSrcTypeChange(G('cfgSrcType'));
   // Programmatic .value assignments above don't fire change/input events —
@@ -3868,9 +3895,12 @@ window.cfgUpdateStatus=function(){
   const filled=id=>{const e=G(id);return e&&e.value.trim().length>0;};
   const dot=(pillId,ok)=>{const p=G(pillId);if(!p)return;const d=p.querySelector('.cfg-dot');if(d){d.className='cfg-dot'+(ok?' ok':'');}};
   dot('cfgStatAzure',filled('cfgSubId')&&filled('cfgDbrHost')&&filled('cfgDbrToken'));
-  const _stCfg=(G('cfgSrcType')||{}).value||'sqlserver';
+  const _stRaw=(G('cfgSrcType')||{}).value||'sqlserver';
+  const _stCfg=(typeof srcUi==='function')?srcUi(_stRaw):_stRaw;
   let _srcOk;
-  if(_stCfg==='snowflake')      _srcOk=filled('cfgSrcAccount');
+  if(_stCfg==='adls')           _srcOk=filled('cfgSrcServer');
+  else if(_stCfg==='lakeflow')  _srcOk=filled('cfgSrcServer')&&filled('cfgSrcObjects');
+  else if(_stCfg==='snowflake') _srcOk=filled('cfgSrcAccount');
   else if(_stCfg==='sharepoint')_srcOk=filled('cfgSrcServer')&&filled('cfgSrcSpTenantId')&&filled('cfgSrcUser');
   else if(_stCfg==='api')       _srcOk=filled('cfgSrcServer');
   else                          _srcOk=filled('cfgSrcServer')&&filled('cfgSrcDb');
@@ -4047,15 +4077,19 @@ async function cfgTestSourceConn(){
   const pwd=G('cfgSrcPass')?.value||'';
   const srcType=G('cfgSrcType')?.value||'sqlserver';
   const nonSql=_NON_SQL_SRC(srcType);
-  // Snowflake validation
-  if(srcType==='snowflake'){
+  const _ui=(typeof srcUi==='function')?srcUi(srcType):srcType;
+  if(_ui==='adls'){
+    if(!server){toast('Fill in the landing folder (abfss:// or /Volumes/…)','terr');return;}
+  } else if(_ui==='lakeflow'){
+    if(!server){toast('Fill in the Unity Catalog connection name','terr');return;}
+  } else if(_ui==='snowflake'){
     const account=G('cfgSrcAccount')?.value?.trim();
     if(!account||!user){toast('Fill in account identifier and username','terr');return;}
   } else if(srcType==='sharepoint'){
     const tenantId=G('cfgSrcSpTenantId')?.value?.trim();
     if(!server){toast('Fill in the SharePoint Site URL','terr');return;}
     if(!tenantId||!user){toast('Fill in Tenant ID and Client ID','terr');return;}
-  } else if(srcType==='api'){
+  } else if(_ui==='api'){
     if(!server){toast('Fill in the API Base URL','terr');return;}
     const at=(G('cfgSrcApiAuthType')||{}).value||'none';
     if(at==='basic'&&!user){toast('Fill in a username for Basic Auth','terr');return;}
@@ -4081,6 +4115,7 @@ async function cfgTestSourceConn(){
       payload.api_auth_type=(G('cfgSrcApiAuthType')||{}).value||'none';
       payload.api_key_header=G('cfgSrcApiKeyHeader')?.value?.trim()||'';
     }
+    if(typeof srcRegistryExtras==='function') Object.assign(payload, srcRegistryExtras(srcType));
     const r=await fetch('/api/v1/source/test-connection',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify(payload),signal:controller.signal});
     clearTimeout(tid);

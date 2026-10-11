@@ -199,14 +199,16 @@ def profile_table_live(source_config: dict, table: str, schema: str = "dbo",
     from keyvault_helper import is_masked
 
     t0 = time.time()
-    src_type = source_config.get("source_type", "sqlserver")
-    if src_type in ("sharepoint", "api"):
+    from source_registry import connector_type
+    raw_type = source_config.get("source_type", "sqlserver")
+    src_type = connector_type(source_config)
+    if src_type in ("sharepoint", "api", "adls", "lakeflow", "unknown"):
         raise ValueError(
-            f"Live profiling is not supported for {src_type} sources yet."
+            f"Live profiling is not supported for {raw_type} sources yet."
         )
     _pw = source_config.get("password", "")
     if not _pw or is_masked(_pw):
-        _pw = get_source_password(source_type=src_type)
+        _pw = get_source_password(source_type=raw_type)
 
     # ── Snowflake path: basic column profiling via INFORMATION_SCHEMA ──
     if src_type == "snowflake":
@@ -588,14 +590,16 @@ def list_profilable_tables(source_config: dict = None, mode: str = "demo", schem
     if mode == "live" and source_config:
         from config_cache import get_source_password
         from keyvault_helper import is_masked
-        src_type = source_config.get("source_type", "sqlserver")
-        if src_type in ("sharepoint", "api"):
+        from source_registry import connector_type
+        raw_type = source_config.get("source_type", "sqlserver")
+        src_type = connector_type(source_config)
+        if src_type in ("sharepoint", "api", "adls", "lakeflow", "unknown"):
             raise ValueError(
-                f"Live profiling is not supported for {src_type} sources yet."
+                f"Live profiling is not supported for {raw_type} sources yet."
             )
         _pw = source_config.get("password", "")
         if not _pw or is_masked(_pw):
-            _pw = get_source_password(source_type=src_type)
+            _pw = get_source_password(source_type=raw_type)
         schema_filter = schema_filter.replace("'", "''") if schema_filter else ""
 
         # ── Snowflake path ──

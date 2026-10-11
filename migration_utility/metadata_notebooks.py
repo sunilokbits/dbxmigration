@@ -276,7 +276,13 @@ def _resolve_bronze_table(target_config, metadata_catalog, metadata_schema, tabl
 def _source_connection(source_config, password):
     """Returns (format, options, qtbl, qcol); qtbl/qcol quote identifiers in
     the SOURCE's SQL dialect (not Spark SQL)."""
-    src_type = source_config.get("source_type", "sqlserver")
+    # "connector" is stamped by the app (source_registry); older pipelines
+    # don't have it and keep using source_type exactly as before.
+    src_type = source_config.get("connector") or source_config.get("source_type", "sqlserver")
+    if src_type not in ("snowflake", "sqlserver", "azuresql", "synapse"):
+        raise ValueError(
+            f"Source '{{source_config.get('source_type')}}' (connector '{{src_type}}') is not a database "
+            "this notebook can query directly.")
     server = source_config.get("server", "") or (source_config.get("account", "") if src_type == "snowflake" else "")
     database = source_config.get("database", "")
     user = source_config.get("username", "")
@@ -317,6 +323,17 @@ def _read_source_with(fmt, options, sql_query=None, table=None):
     r = spark.read.format(fmt).options(**options)
     r = r.option("query", sql_query) if sql_query else r.option("dbtable", table)
     return r.load()
+
+def _read_files_with(path, fmt="parquet"):
+    """Read one source object's files (SNP Glue landing / file drops in ADLS
+    or a UC Volume). Each object is a sub-folder of the landing folder."""
+    fmt = (fmt or "parquet").lower()
+    r = spark.read.format(fmt)
+    if fmt == "csv":
+        r = r.option("header", "true").option("inferSchema", "true")
+    elif fmt == "json":
+        r = r.option("multiLine", "true")
+    return r.load(path)
 
 # COMMAND ----------
 
@@ -588,17 +605,28 @@ print(f"🔧 Load Type: {{LOAD_TYPE}}")
 
 # COMMAND ----------
 
-# Native serverless-supported connector + source-dialect quoting, shared with
-# Reconciliation via _Meta_CommonFunctions.
-_SRC_FORMAT, _SRC_OPTIONS, _qtbl, _qcol = _source_connection(source_config, PASSWORD)
+# "adls" = files landed by SNP Glue or dropped in ADLS / a UC Volume: each
+# source object is a sub-folder of the configured landing folder. Everything
+# else is a database read through the shared native connector.
+_CONNECTOR     = source_config.get("connector") or SRC_TYPE
+IS_FILE_SOURCE = (_CONNECTOR == "adls")
+_FILE_FORMAT   = (source_config.get("file_format") or "parquet").lower()
+_SRC_OBJECT_PATH = f"{{SERVER.rstrip('/')}}/{{TABLE_NAME}}" if IS_FILE_SOURCE else ""
 
 def _read_source(sql_query=None, table=None):
     return _read_source_with(_SRC_FORMAT, _SRC_OPTIONS, sql_query=sql_query, table=table)
 
 # Verify source connectivity
 try:
-    test_df = _read_source(sql_query="SELECT 1 AS ok")
-    test_df.collect()
+    if IS_FILE_SOURCE:
+        print(f"🔧 Source: {{_FILE_FORMAT}} files at {{_SRC_OBJECT_PATH}}")
+        dbutils.fs.ls(_SRC_OBJECT_PATH)
+    else:
+        # Native serverless-supported connector + source-dialect quoting,
+        # shared with Reconciliation via _Meta_CommonFunctions.
+        _SRC_FORMAT, _SRC_OPTIONS, _qtbl, _qcol = _source_connection(source_config, PASSWORD)
+        test_df = _read_source(sql_query="SELECT 1 AS ok")
+        test_df.collect()
     print("✅ Source connection verified")
 except Exception as e:
     msg = f"❌ Source connection failed: {{e}}"
@@ -659,14 +687,19 @@ landing_dest = f"{{LANDING_PATH}}/{{TABLE_NAME}}"
 # Build query -- a plain SELECT statement for the `query` option (the native
 # connectors push this straight to the source, no wrapping parens/alias
 # needed the way the old spark.read.jdbc() subquery convention required).
-_qualified_table = _qtbl(TABLE_SCHEMA, TABLE_NAME)
-if use_incremental and watermark:
-    _esc_wm = _sql_esc(watermark)
-    _query_sql = f"SELECT * FROM {{_qualified_table}} WHERE {{_qcol(WM_COL)}} > '{{_esc_wm}}'"
-    print(f"📥 Incremental extract: {{WM_COL}} > '{{_esc_wm}}'")
+if IS_FILE_SOURCE:
+    _qualified_table, _query_sql = _SRC_OBJECT_PATH, None
+    print(f"📥 {{'Incremental' if (use_incremental and watermark) else 'Full'}} read of "
+          f"{{_FILE_FORMAT}} files from {{_qualified_table}}")
 else:
-    _query_sql = None  # full load -- read the table directly via dbtable
-    print(f"📥 Full extract from {{_qualified_table}}")
+    _qualified_table = _qtbl(TABLE_SCHEMA, TABLE_NAME)
+    if use_incremental and watermark:
+        _esc_wm = _sql_esc(watermark)
+        _query_sql = f"SELECT * FROM {{_qualified_table}} WHERE {{_qcol(WM_COL)}} > '{{_esc_wm}}'"
+        print(f"📥 Incremental extract: {{WM_COL}} > '{{_esc_wm}}'")
+    else:
+        _query_sql = None  # full load -- read the table directly via dbtable
+        print(f"📥 Full extract from {{_qualified_table}}")
 
 # Read from source
 try:
@@ -674,14 +707,19 @@ try:
     # their own read parallelism, unlike raw JDBC's numPartitions tuning
     # this notebook used to do (dropped along with spark.read.jdbc() itself,
     # since numPartitions isn't a guaranteed option on these connectors).
-    try:
-        _cnt_sql = f"SELECT COUNT(1) AS cnt FROM ({{_query_sql}}) q" if _query_sql else f"SELECT COUNT(1) AS cnt FROM {{_qualified_table}}"
-        _est_count = _read_source(sql_query=_cnt_sql).collect()[0][0]
-        print(f"📊 Estimated row count: {{_est_count:,}}")
-    except Exception:
-        pass
+    if IS_FILE_SOURCE:
+        df = _read_files_with(_SRC_OBJECT_PATH, _FILE_FORMAT)
+        if use_incremental and watermark:
+            df = df.filter(F.col(WM_COL) > F.lit(watermark))
+    else:
+        try:
+            _cnt_sql = f"SELECT COUNT(1) AS cnt FROM ({{_query_sql}}) q" if _query_sql else f"SELECT COUNT(1) AS cnt FROM {{_qualified_table}}"
+            _est_count = _read_source(sql_query=_cnt_sql).collect()[0][0]
+            print(f"📊 Estimated row count: {{_est_count:,}}")
+        except Exception:
+            pass
 
-    df = _read_source(sql_query=_query_sql, table=_qualified_table)
+        df = _read_source(sql_query=_query_sql, table=_qualified_table)
 
     # Add audit columns
     df = (df
@@ -2067,16 +2105,31 @@ print(f"📋 Bronze: {{BRONZE_TABLE}}")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 🔌 Source Connection (Snowflake / SQL Server)
+# MAGIC ## 🔌 Source Connection
 
 # COMMAND ----------
 
-# Same native, serverless-supported connector Extract uses (shared via
-# _Meta_CommonFunctions) -- this notebook used to hard-code SQL Server JDBC,
-# so every Snowflake source failed trying to reach the Snowflake account as
-# a SQL Server host on port 1433.
-_SRC_TYPE = source_config.get("source_type", "sqlserver")
-_SRC_FORMAT, _SRC_OPTIONS, _qtbl, _qcol = _source_connection(source_config, PASSWORD)
+# Database sources use the same native, serverless-supported connector as
+# Extract (shared via _Meta_CommonFunctions). File sources (SNP Glue / file
+# drops, connector "adls") are reconciled against their own files. API and
+# Lakeflow Connect sources have nothing to aggregate here and are skipped.
+_SRC_TYPE  = source_config.get("source_type", "sqlserver")
+_CONNECTOR = source_config.get("connector") or _SRC_TYPE
+IS_FILE_SOURCE = (_CONNECTOR == "adls")
+if not IS_FILE_SOURCE and _CONNECTOR not in ("snowflake", "sqlserver", "azuresql", "synapse"):
+    print(f"⏭️ Aggregate reconciliation needs a database or file source — {{_SRC_TYPE}} uses '{{_CONNECTOR}}'")
+    dbutils.notebook.exit(json.dumps({{"status": "SKIPPED",
+                                      "reason": f"Not applicable to {{_SRC_TYPE}} ({{_CONNECTOR}} connector)"}}))
+
+try:
+    if IS_FILE_SOURCE:
+        _src_files_df = _read_files_with(f"{{SERVER.rstrip('/')}}/{{TABLE_NAME}}",
+                                         source_config.get("file_format") or "parquet")
+    else:
+        _SRC_FORMAT, _SRC_OPTIONS, _qtbl, _qcol = _source_connection(source_config, PASSWORD)
+except Exception as e:
+    print(f"❌ Source connection failed: {{e}}")
+    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 def _read_source(sql_query):
     return _read_source_with(_SRC_FORMAT, _SRC_OPTIONS, sql_query=sql_query)
@@ -2088,22 +2141,25 @@ def _read_source(sql_query):
 
 # COMMAND ----------
 
-# INFORMATION_SCHEMA.COLUMNS exists on both sources; only the reported type names differ.
-if _SRC_TYPE == "snowflake":
-    numeric_types_sql = ("('NUMBER','DECIMAL','NUMERIC','INT','INTEGER','BIGINT','SMALLINT','TINYINT',"
-                         "'BYTEINT','FLOAT','FLOAT4','FLOAT8','DOUBLE','DOUBLE PRECISION','REAL')")
-else:
-    numeric_types_sql = "('int','bigint','smallint','tinyint','float','real','decimal','numeric','money','smallmoney')"
-_sch_lit = str(TABLE_SCHEMA).replace("'", "''")
-_tbl_lit = str(TABLE_NAME).replace("'", "''")
-col_query = (
-    "SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
-    f"WHERE TABLE_SCHEMA = '{{_sch_lit}}' AND TABLE_NAME = '{{_tbl_lit}}' AND DATA_TYPE IN {{numeric_types_sql}}"
-)
-
 try:
-    cols_df = _read_source(col_query)
-    numeric_cols = [(r["COLUMN_NAME"], r["DATA_TYPE"]) for r in cols_df.collect()]
+    if IS_FILE_SOURCE:
+        from pyspark.sql.types import NumericType
+        numeric_cols = [(f.name, f.dataType.simpleString()) for f in _src_files_df.schema.fields
+                        if isinstance(f.dataType, NumericType)]
+    else:
+        # INFORMATION_SCHEMA.COLUMNS exists on both databases; only the type names differ.
+        if _CONNECTOR == "snowflake":
+            numeric_types_sql = ("('NUMBER','DECIMAL','NUMERIC','INT','INTEGER','BIGINT','SMALLINT','TINYINT',"
+                                 "'BYTEINT','FLOAT','FLOAT4','FLOAT8','DOUBLE','DOUBLE PRECISION','REAL')")
+        else:
+            numeric_types_sql = "('int','bigint','smallint','tinyint','float','real','decimal','numeric','money','smallmoney')"
+        _sch_lit = str(TABLE_SCHEMA).replace("'", "''")
+        _tbl_lit = str(TABLE_NAME).replace("'", "''")
+        col_query = (
+            "SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
+            f"WHERE TABLE_SCHEMA = '{{_sch_lit}}' AND TABLE_NAME = '{{_tbl_lit}}' AND DATA_TYPE IN {{numeric_types_sql}}"
+        )
+        numeric_cols = [(r["COLUMN_NAME"], r["DATA_TYPE"]) for r in _read_source(col_query).collect()]
     print(f"🔢 Found {{len(numeric_cols)}} numeric columns:")
     for cn, ct in numeric_cols:
         print(f"   • {{cn}} ({{ct}})")
@@ -2122,17 +2178,19 @@ if not numeric_cols:
 
 # COMMAND ----------
 
-# One query: COUNT(*) plus SUM of each numeric column, in numeric_cols order.
-agg_exprs = [f"COUNT(*) AS {{_qcol('__row_count')}}"]
-for cn, _ in numeric_cols:
-    agg_exprs.append(f"SUM(CAST({{_qcol(cn)}} AS FLOAT)) AS {{_qcol('sum_' + cn)}}")
-
-src_query = f"SELECT {{', '.join(agg_exprs)}} FROM {{_qtbl(TABLE_SCHEMA, TABLE_NAME)}}"
-
 try:
-    # Read by position, not alias: connectors differ in how they case
-    # returned column names (Snowflake returned no "__row_count" column).
-    _src_vals = list(_read_source(src_query).collect()[0])
+    if IS_FILE_SOURCE:
+        _src_vals = list(_src_files_df.agg(
+            F.count("*"), *[F.sum(F.col(f"`{{cn}}`").cast("double")) for cn, _ in numeric_cols]).collect()[0])
+    else:
+        # One query: COUNT(*) plus SUM of each numeric column, in numeric_cols order.
+        agg_exprs = [f"COUNT(*) AS {{_qcol('__row_count')}}"]
+        for cn, _ in numeric_cols:
+            agg_exprs.append(f"SUM(CAST({{_qcol(cn)}} AS FLOAT)) AS {{_qcol('sum_' + cn)}}")
+        src_query = f"SELECT {{', '.join(agg_exprs)}} FROM {{_qtbl(TABLE_SCHEMA, TABLE_NAME)}}"
+        # Read by position, not alias: connectors differ in how they case
+        # returned column names (Snowflake returned no "__row_count" column).
+        _src_vals = list(_read_source(src_query).collect()[0])
     src_count = int(_src_vals[0] or 0)
     src_sums = {{cn: _src_vals[i + 1] for i, (cn, _) in enumerate(numeric_cols)}}
     print(f"📊 Source row count: {{src_count:,}}")

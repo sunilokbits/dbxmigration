@@ -57,13 +57,15 @@ def _fetch_source_columns(source_cfg, schema_name):
     """Return {table_name: [{column, data_type, is_nullable}, ...]} from the source DB."""
     password = source_cfg.get("password", "")
     from keyvault_helper import is_masked
-    src_type = source_cfg.get("source_type", "sqlserver")
+    from source_registry import connector_type
+    raw_type = source_cfg.get("source_type", "sqlserver")
+    src_type = connector_type(source_cfg)
     if not password or is_masked(password):
-        password = get_source_password(source_type=src_type)
+        password = get_source_password(source_type=raw_type)
 
-    if src_type in ("sharepoint", "api"):
+    if src_type in ("sharepoint", "api", "adls", "lakeflow", "unknown"):
         raise ValueError(
-            f"Schema comparison is not supported for {src_type} sources — "
+            f"Schema comparison is not supported for {raw_type} sources — "
             "use Discovery or Pipeline Studio instead."
         )
 
@@ -230,7 +232,8 @@ def compare_schemas():
     dbx_host = cfg.get("databricks_host", "").rstrip("/")
     dbx_token = get_databricks_token()
 
-    _src_type = source_cfg.get("source_type", "sqlserver")
+    from source_registry import connector_type as _ct
+    _src_type = _ct(source_cfg)
     _has_src_conn = source_cfg.get("account") if _src_type == "snowflake" else source_cfg.get("server")
     if not _has_src_conn or not source_cfg.get("database"):
         return jsonify({"tables": [], "error": "Source connection not configured. Go to Settings → Source Database and set your connection first."}), 400

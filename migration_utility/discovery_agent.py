@@ -899,10 +899,14 @@ def scan_live_source(source_config: dict, schema_filter: str = "") -> list:
     from config_cache import get_source_password
     from keyvault_helper import is_masked
 
-    src_type = source_config.get('source_type', 'sqlserver')
+    from source_registry import connector_type
+    raw_type = source_config.get('source_type', 'sqlserver')
+    src_type = connector_type(source_config)
     _pw = source_config.get('password', '')
     if not _pw or is_masked(_pw):
-        _pw = get_source_password(source_type=src_type)
+        _pw = get_source_password(source_type=raw_type)
+    if src_type in ('adls', 'lakeflow', 'unknown'):
+        raise ValueError(f"Live code discovery is not available for source type '{raw_type}'")
 
     # ── Snowflake path ──
     if src_type == 'snowflake':

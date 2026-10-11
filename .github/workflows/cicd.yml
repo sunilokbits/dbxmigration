@@ -222,7 +222,11 @@ jobs:
           # Never overwriting a value a client already set via the app's
           # Settings page.
           EXISTING=$(databricks secrets list-secrets migration-studio -o json 2>/dev/null | python3 -c "import json,sys; print(' '.join(s['key'] for s in json.load(sys.stdin)))" 2>/dev/null || echo "")
-          for key in databricks-token devops-pat source-sql-password source-azuresql-password source-snowflake-password source-bigquery-password source-redshift-password source-synapse-password source-sharepoint-password source-api-password; do
+          # Plus one separate secret per source system in source_registry.py
+          # (each enterprise source -- SAP ECC, ServiceNow, ... -- has its own key).
+          REGISTRY_KEYS=$(python3 -c "import sys; sys.path.insert(0, 'migration_utility'); import source_registry as r; print(' '.join(r.all_secret_keys()))")
+          ALL_KEYS=$(echo "databricks-token devops-pat source-sql-password source-azuresql-password source-snowflake-password source-bigquery-password source-redshift-password source-synapse-password source-sharepoint-password source-api-password $REGISTRY_KEYS" | tr ' ' '\n' | awk 'NF && !seen[$0]++')
+          for key in $ALL_KEYS; do
             if ! echo " $EXISTING " | grep -q " $key "; then
               if [ "$key" = "databricks-token" ]; then
                 echo "Seeding databricks-token with deploy identity's PAT (first deploy only)"

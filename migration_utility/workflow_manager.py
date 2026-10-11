@@ -101,17 +101,24 @@ def _resolve_databricks_token(dcfg=None):
     return ""
 
 
-def _resolve_source_password(dcfg=None):
-    """Resolve source password from Key Vault, then fall back to config."""
+def _resolve_source_password(dcfg=None, source_type: str = ""):
+    """Resolve the source password from the secret scope, then fall back to config.
+
+    source_type should be the JOB's source type: with several sources
+    configured, each has its own secret, and the currently selected Settings
+    source may be a different system.
+    """
     try:
         from config_cache import get_source_password
-        val = get_source_password()
+        val = get_source_password(source_type=source_type)
         if val:
             return val
     except Exception:
         pass
     if dcfg:
-        return dcfg.get("source", {}).get("password", "")
+        src = dcfg.get("source", {}) or {}
+        if not source_type or src.get("source_type") == source_type:
+            return src.get("password", "")
     return ""
 
 def _load_deploy_config() -> dict:
@@ -1942,6 +1949,11 @@ def _derive_source_tag(source_config: dict) -> str:
     table of the same name, since archiving only matched on table_name.
     """
     sc = source_config or {}
+    from source_registry import ENTERPRISE
+    if sc.get("source_type") in ENTERPRISE:
+        # Enterprise sources are identified by system (a landing path or UC
+        # connection name makes an unreadable tag).
+        return sc["source_type"]
     ident = sc.get("server") or sc.get("account") or ""
     db = sc.get("database", "")
     if ident and db:
@@ -2115,6 +2127,21 @@ def create_pipeline_for_table(
     to wf_job_metadatahis before new jobs are created (one active set per table).
     """
     full_table = f"{table_schema}.{table_name}"
+
+    # ── Source readiness (enterprise sources only; built-in types unchanged) ──
+    from source_registry import can_extract, connector_type, method_for
+    _ok, _why = can_extract(source_config or {})
+    if not _ok:
+        return {"success": False, "error": _why}
+    if source_config and (source_config.get("source_type") or "") not in ("", None):
+        source_config = dict(source_config)
+        # Tells the generated notebooks HOW to read this source (see
+        # source_registry.connector_type); absent on older pipelines, where
+        # the notebooks fall back to source_type exactly as before.
+        source_config["connector"] = connector_type(source_config)
+        _m = method_for(source_config)
+        if _m:
+            source_config["ingestion_method"] = _m
 
     # ── Validate catalogs exist on Databricks before creating pipeline ──
     tc = target_config or {}
@@ -2798,7 +2825,7 @@ def _execute_job_run(run_id: str, job_id: str):
         cat   = _dbr_catalog or dcfg.get("metadata_catalog", "") or "main"
         sch   = _dbr_schema or dcfg.get("metadata_schema", "") or "default"
         ws    = _deployed_workspace_path() or "/Shared/MetadataPipeline"
-        password = _resolve_source_password(dcfg)
+        password = _resolve_source_password(dcfg, (job.get("source_config") or {}).get("source_type", ""))
 
         if not host or not token:
             raise RuntimeError(
@@ -4093,8 +4120,19 @@ def run_pipeline_on_databricks(
             "(e.g. /Shared/DBX/MetadataPipeline). Fix it on the MetadataFlow page and click Deploy Notebooks.")}
     cat   = catalog or _dbr_catalog or dcfg.get("metadata_catalog", "") or "main"
     sch   = schema or _dbr_schema or dcfg.get("metadata_schema", "") or "default"
+    # Each source system has its own secret: use the GROUP's source type, and
+    # only trust a request-supplied password typed for that same source type.
+    _grp_src = ((_get_group(group_id) if group_id else None) or {}).get("source_config") or {}
+    _grp_type = _grp_src.get("source_type", "")
+    try:
+        from config_cache import get_config as _gc_src
+        _cfg_type = ((_gc_src() or {}).get("source") or {}).get("source_type", "")
+    except Exception:
+        _cfg_type = ""
+    if password and _grp_type and _cfg_type and _grp_type != _cfg_type:
+        password = ""
     if not password:
-        password = _resolve_source_password(dcfg)
+        password = _resolve_source_password(dcfg, _grp_type)
 
     if not host or not token:
         return {"success": False, "error": "Databricks host and token required"}

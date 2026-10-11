@@ -33,13 +33,22 @@ def wf_list_tables():
     """
     try:
         d = request.get_json()
-        source_type = d.get("source_type", "sqlserver")
+        raw_type = d.get("source_type", "sqlserver")
+        from source_registry import connector_type
+        source_type = connector_type(d)
         server = d.get("server", "").strip()
         database = d.get("database", "").strip()
         username = d.get("username", "").strip()
         password = d.get("password", "")
         if not password or is_masked(password):
-            password = get_source_password(source_type=source_type)
+            password = get_source_password(source_type=raw_type)
+
+        if source_type == "unknown":
+            return jsonify({"success": False, "error": f"Unknown source type '{raw_type}'"}), 400
+        if source_type in ("adls", "lakeflow"):
+            from enterprise_sources import list_tables as ent_tables
+            result = ent_tables(source_type, d)
+            return jsonify(result) if result.get("success") else (jsonify(result), 500)
         # ── Snowflake path ──
         if source_type == "snowflake":
             account = (d.get("account") or "").strip()
@@ -124,9 +133,9 @@ def wf_list_tables():
                     return jsonify({"success": False, "error": result.get("error", "API load failed")}), 500
                 tables = [
                     {
-                        "schema":       "api",
+                        "schema":       raw_type,
                         "table":        o["name"],
-                        "full_name":    f"api.{o['name']}",
+                        "full_name":    f"{raw_type}.{o['name']}",
                         "col_count":    0,
                         "row_estimate": 0,
                     }
@@ -364,7 +373,7 @@ def wf_run_on_databricks(group_id):
         token = get_databricks_token()
     password = d.get("password", "")
     if not password or is_masked(password):
-        password = get_source_password()
+        password = ""  # resolved per pipeline group's own source secret
     result = wfm.run_pipeline_on_databricks(
         group_id=group_id, host=d.get("host", "").strip(),
         token=token,

@@ -36,6 +36,10 @@ ALLOWED_SECRET_KEYS = {
     "source-sharepoint-password": "SharePoint source password",
     "source-api-password": "Generic API source password",
 }
+# One separate secret per enterprise source system (see source_registry).
+from source_registry import all_secret_keys as _registry_secret_keys
+for _k, _desc in _registry_secret_keys().items():
+    ALLOWED_SECRET_KEYS.setdefault(_k, _desc)
 
 
 @settings_bp.route("/deploy-config", methods=["GET"])

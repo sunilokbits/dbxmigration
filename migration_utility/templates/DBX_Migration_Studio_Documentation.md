@@ -427,6 +427,37 @@ Every stage runs as its own job run with its own serverless driver and executors
 
 ---
 
+## Enterprise Source Systems (Project Bedrock Phase I)
+
+All source systems are defined in one registry (`migration_utility/source_registry.py`) that drives the Settings source picker, connection tests, Discovery, Pipeline Studio, the Extract/Reconciliation notebooks and the secret scope. **Settings → Source Database Connection → Enterprise Source Catalog** lists the 17 RFP systems; click one to configure it. Every system has its **own secret** in the `migration-studio` scope.
+
+| # | System | Ingestion method | Status | Secret key |
+|---|---|---|---|---|
+| 1 | SAP ECC | SNP Glue → ADLS landing | Ready | `source-sap-ecc-password` |
+| 2 | ServiceNow | Lakeflow Connect | Configure & test | `source-servicenow-password` |
+| 3 | Microsoft SharePoint | Built-in SharePoint connector | Ready (metadata) | `source-sharepoint-password` |
+| 4 | MS Dynamics CRM | Lakeflow Connect | Configure & test | `source-ms-dynamics-crm-password` |
+| 5 | SuccessFactors | REST API | Configure & test | `source-successfactors-password` |
+| 6 | MS Defender for Endpoint | REST API | Configure & test | `source-ms-defender-password` |
+| 7 | Arkieva (via NDP) | JDBC connector | Ready | `source-arkieva-password` |
+| 8 | Project44 | REST API | Configure & test | `source-project44-password` |
+| 9 | Outpost24 | REST API | Configure & test | `source-outpost24-password` |
+| 10 | Onapsis | REST API | Configure & test | `source-onapsis-password` |
+| 11 | EPI Historian | API / streaming | Planned | `source-epi-historian-password` |
+| 12 | SAP Ariba | REST API | Configure & test | `source-sap-ariba-password` |
+| 13 | Anaplan | REST API | Configure & test | `source-anaplan-password` |
+| 14 | SAP TMS | SNP Glue → ADLS landing | Ready | `source-sap-tms-password` |
+| 15 | Price Navigator | File drop (ADLS / Volume) / REST API | Ready / Configure & test | `source-price-navigator-password` |
+| 16 | SAP EHS | SNP Glue → ADLS landing | Ready | `source-sap-ehs-password` |
+| 17 | Adobe | File drop (ADLS / Volume) / REST API | Ready / Configure & test | `source-adobe-password` |
+
+- **Ready** — pipelines extract data end to end. SNP Glue / file sources: each source object is a sub-folder of the configured landing folder (`abfss://…` or `/Volumes/…`, Parquet/Delta/CSV/JSON); Extract copies it into the landing zone and Bronze/Silver run unchanged; Reconciliation compares the files against Bronze. Arkieva runs on the SQL Server connector.
+- **Configure & test** — connection form and connection test (REST base URL + auth, or the Unity Catalog connection for Lakeflow Connect) and object listing work; creating a pipeline is blocked with a clear message until automated extraction for that method is built.
+- **Planned** — configuration only.
+- New systems have not yet been verified against live client systems.
+
+---
+
 ## Data Flow (Medallion Architecture)
 
 ```

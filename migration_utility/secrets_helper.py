@@ -131,8 +131,16 @@ _SOURCE_PASSWORD_SECRET_KEYS = {
 def get_source_password(source_type: str = "sqlserver") -> str:
     """Return the source password based on source type, using the secret key
     convention shared with the rest of the workspace (see _SOURCE_PASSWORD_SECRET_KEYS)."""
-    key = _SOURCE_PASSWORD_SECRET_KEYS.get(source_type, "source-sql-password")
-    return get_secret(key)
+    return get_secret(source_secret_key(source_type))
+
+
+def source_secret_key(source_type: str) -> str:
+    """Secret key for a source type. Existing keys are kept as-is; each
+    enterprise source (source_registry.ENTERPRISE) has its own key."""
+    if source_type in _SOURCE_PASSWORD_SECRET_KEYS:
+        return _SOURCE_PASSWORD_SECRET_KEYS[source_type]
+    from source_registry import secret_key
+    return secret_key(source_type)
 
 
 def get_databricks_token() -> str:
@@ -252,10 +260,7 @@ def ensure_scope_exists(scope: str | None = None) -> dict:
 
 
 def set_source_password(value: str, source_type: str = "sqlserver") -> bool:
-    if source_type == "snowflake":
-        return set_secret("source-snowflake-password", value)
-    key = _SOURCE_PASSWORD_SECRET_KEYS.get(source_type, "source-sql-password")
-    return set_secret(key, value)
+    return set_secret(source_secret_key(source_type), value)
 
 
 def set_databricks_token(value: str) -> bool:

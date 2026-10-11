@@ -1311,6 +1311,11 @@
               <option value="basic">Basic Auth</option>
             </select></div>
             <div id="cfgSrcApiKeyHeaderRow" style="display:none;"><label class="lbl">Key Header Name</label><input class="inp" id="cfgSrcApiKeyHeader" placeholder="X-API-Key" oninput="cfgUpdateStatus()"></div>
+            <!-- Enterprise-source fields (source registry; hidden unless needed) -->
+            <div id="cfgSrcMethodRow" style="display:none;"><label class="lbl">Ingestion Method</label><select class="inp" id="cfgSrcMethod" onchange="cfgOnSrcTypeChange(G('cfgSrcType'));cfgUpdateStatus()"></select></div>
+            <div id="cfgSrcEngineRow" style="display:none;"><label class="lbl">Database Engine</label><select class="inp" id="cfgSrcEngine" onchange="cfgOnSrcTypeChange(G('cfgSrcType'))"></select></div>
+            <div id="cfgSrcFormatRow" style="display:none;"><label class="lbl">File Format</label><select class="inp" id="cfgSrcFileFormat"></select></div>
+            <div id="cfgSrcObjectsRow" style="display:none;"><label class="lbl">Source Objects <span class="cfg-req">*</span></label><input class="inp" id="cfgSrcObjects" placeholder="incident, change_request, cmdb_ci" oninput="cfgUpdateStatus()"></div>
           </div>
           <!-- Snowflake extra fields (warehouse & role) -->
           <div id="cfgSrcSnowExtraRow" style="display:none;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;">
@@ -1327,6 +1332,14 @@
               Test Connection
             </button>
           </div>
+          <div id="cfgSrcInfo" style="display:none;margin-top:10px;padding:8px 10px;border:1px solid var(--b2);border-radius:8px;background:var(--surface-2);"></div>
+          <details id="cfgSrcCatalogWrap" style="margin-top:12px;">
+            <summary style="cursor:pointer;font-size:11.5px;font-weight:600;color:var(--t2);">
+              Enterprise Source Catalog — Project Bedrock Phase I (<span id="cfgSrcCatalogCount">17</span> systems)
+              <span style="font-weight:400;color:var(--t4);"> · click a system to configure it</span>
+            </summary>
+            <div id="cfgSrcCatalog" style="margin-top:8px;overflow-x:auto;"></div>
+          </details>
         </div>
       </div>
 
@@ -4385,8 +4398,10 @@
 <!-- ════════════════════════════════════════════════════════════════════════════
      JAVASCRIPT — all logic unchanged, just the file
      ════════════════════════════════════════════════════════════════════════════ -->
-<script src="/static/main.js?v=27072026n"></script>
-<script src="/static/discovery.js?v=33"></script>
+<script src="/api/v1/sources/registry.js"></script>
+<script src="/static/sources.js?v=1"></script>
+<script src="/static/main.js?v=11102026a"></script>
+<script src="/static/discovery.js?v=34"></script>
 
 <!-- Post-diagnostic: runs AFTER the main script to verify & add fallback listeners -->
 <script src="/static/charts.js?v=19"></script>

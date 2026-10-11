@@ -54,7 +54,12 @@ class TestSecretsSettingsRoutes(unittest.TestCase):
         keys = {k["key"] for k in data["keys"]}
         self.assertIn("databricks-token", keys)
         self.assertIn("source-sql-password", keys)
-        self.assertEqual(len(keys), 10)
+        # 10 original keys + one separate secret per enterprise source system
+        # (16 new; Microsoft SharePoint reuses source-sharepoint-password).
+        import source_registry
+        for src in source_registry.ENTERPRISE:
+            self.assertIn(source_registry.secret_key(src), keys)
+        self.assertEqual(len(keys), 10 + len(source_registry.ENTERPRISE))
         self.assertNotIn("value", str(data))
 
     @patch("routes.auth.get_current_user", return_value={"email": "admin@test.com", "role": "Admin", "display_name": "A"})
