@@ -701,59 +701,193 @@ else:
         _query_sql = None  # full load -- read the table directly via dbtable
         print(f"📥 Full extract from {{_qualified_table}}")
 
+# ── Chunked extraction for large database tables ──────────────────────────
+# One SELECT * of a very large table makes the source materialise the whole
+# result before Spark receives a single row, and nothing is saved until the
+# end -- a timeout throws away all of it. Large tables are instead split on an
+# integer column into ~_CHUNK_ROWS-row ranges, read _PARALLELISM at a time,
+# and each chunk is committed to landing as soon as it is written. A rerun of
+# the same plan skips completed chunks. Optional source_config settings:
+# chunk_rows, extract_parallelism, split_column.
+import hashlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+_CHUNK_ROWS  = int(source_config.get("chunk_rows") or 100000000)
+_PARALLELISM = max(1, int(source_config.get("extract_parallelism") or 4))
+_MAX_CHUNKS  = 400
+_STAGE_ROOT  = f"{{LANDING_PATH}}/_staging/{{TABLE_NAME}}"
+_PLAN_PATH   = f"{{_STAGE_ROOT}}/_plan.json"
+_base_where  = (f"{{_qcol(WM_COL)}} > '{{_sql_esc(watermark)}}'"
+                if (not IS_FILE_SOURCE and use_incremental and watermark) else "")
+
+def _add_audit(d):
+    return (d
+            .withColumn("__landing_ts", F.current_timestamp())
+            .withColumn("__source_system", F.lit(f"{{SERVER}}/{{DATABASE}}"))
+            .withColumn("__load_type", F.lit("incremental" if use_incremental and watermark else "full"))
+            .withColumn("__batch_id", F.lit(run_ts))
+            .withColumn("__job_id", F.lit(JOB_ID))
+            .withColumn("__run_id", F.lit(RUN_ID)))
+
+def _split_column():
+    """split_column setting, else the watermark column if it is an integer,
+    else the first *_SK / *_ID / *_KEY-style integer column, else any integer column."""
+    chosen = (source_config.get("split_column") or "").strip()
+    if chosen:
+        return chosen
+    _s = str(TABLE_SCHEMA).replace("'", "''")
+    _t = str(TABLE_NAME).replace("'", "''")
+    if _CONNECTOR == "snowflake":
+        _types = "DATA_TYPE IN ('NUMBER','INTEGER','INT','BIGINT','SMALLINT') AND COALESCE(NUMERIC_SCALE, 0) = 0"
+    else:
+        _types = "DATA_TYPE IN ('int','bigint','smallint','tinyint')"
+    try:
+        cols = [r[0] for r in _read_source(sql_query=(
+            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+            f"WHERE TABLE_SCHEMA = '{{_s}}' AND TABLE_NAME = '{{_t}}' AND {{_types}} ORDER BY ORDINAL_POSITION")).collect()]
+    except Exception as _ce:
+        print(f"⚠️ Could not list integer columns for chunking: {{_ce}}")
+        cols = []
+    if WM_COL and WM_COL in cols:
+        return WM_COL
+    keyish = [c for c in cols if str(c).upper().endswith(("_SK", "_ID", "ID", "_KEY", "KEY", "_NO", "_NUMBER"))]
+    return (keyish or cols or [None])[0]
+
+def _plan_chunks(est_rows):
+    col = _split_column()
+    if not col:
+        print("ℹ️ No integer column to split on — extracting in one pass")
+        return None
+    qc = _qcol(col)
+    _w = f" WHERE {{_base_where}}" if _base_where else ""
+    mn, mx, nn = list(_read_source(
+        sql_query=f"SELECT MIN({{qc}}), MAX({{qc}}), COUNT({{qc}}) FROM {{_qualified_table}}{{_w}}").collect()[0])
+    if mn is None:
+        return None
+    mn, mx, nn = int(mn), int(mx), int(nn)
+    span = mx - mn + 1
+    n = min(_MAX_CHUNKS, -(-int(est_rows) // _CHUNK_ROWS), span)
+    if n < 2:
+        return None
+    bounds = [mn + (span * i) // n for i in range(n)] + [mx + 1]
+    _and = f" AND {{_base_where}}" if _base_where else ""
+    chunks = [(f"chunk_{{i:05d}}", f"{{qc}} >= {{bounds[i]}} AND {{qc}} < {{bounds[i + 1]}}{{_and}}") for i in range(n)]
+    if int(est_rows) - nn > 0:
+        chunks.append(("chunk_nulls", f"{{qc}} IS NULL{{_and}}"))
+    sig = hashlib.sha256(json.dumps([FULL_TABLE, col, bounds, _base_where, int(est_rows)]).encode()).hexdigest()[:16]
+    return {{"column": col, "chunks": chunks, "sig": sig}}
+
+def _save_plan(plan, status):
+    dbutils.fs.put(_PLAN_PATH, json.dumps({{"sig": plan["sig"], "status": status, "batch_id": run_ts,
+                                            "column": plan["column"], "chunks": len(plan["chunks"]),
+                                            "run_id": RUN_ID}}), True)
+
+def _extract_chunked(plan, est_rows):
+    global run_ts
+    try:
+        prev = json.loads(dbutils.fs.head(_PLAN_PATH, 1024 * 1024))
+    except Exception:
+        prev = None
+    resume = bool(prev and prev.get("sig") == plan["sig"] and prev.get("status") == "running")
+    if resume:
+        run_ts = prev.get("batch_id") or run_ts  # one batch id for the whole logical extract
+        try:
+            done = {{f.name.rstrip("/") for f in dbutils.fs.ls(landing_dest)}}
+        except Exception:
+            done = set()
+    else:
+        for _p in (landing_dest, _STAGE_ROOT):
+            try:
+                dbutils.fs.rm(_p, True)
+            except Exception:
+                pass
+        done = set()
+    dbutils.fs.mkdirs(_STAGE_ROOT)
+    _save_plan(plan, "running")
+    total = len(plan["chunks"])
+    todo = [(cid, w) for cid, w in plan["chunks"] if cid not in done]
+    print(f"🧩 Chunked extract on {{plan['column']}}: {{total}} chunks of ~{{_CHUNK_ROWS:,}} rows, "
+          f"{{_PARALLELISM}} in parallel" + (f" — resuming, {{total - len(todo)}} already done" if resume else ""))
+
+    def _one(cid, where):
+        stage = f"{{_STAGE_ROOT}}/{{cid}}"
+        try:
+            dbutils.fs.rm(stage, True)
+        except Exception:
+            pass
+        _add_audit(_read_source(sql_query=f"SELECT * FROM {{_qualified_table}} WHERE {{where}}")) \
+            .write.mode("overwrite").parquet(stage)
+        # Moved into landing only once complete, so Bronze never ingests a partial chunk.
+        dbutils.fs.mv(stage, f"{{landing_dest}}/{{cid}}", True)
+
+    errors, finished = [], total - len(todo)
+    with ThreadPoolExecutor(max_workers=_PARALLELISM) as pool:
+        futs = {{pool.submit(_one, cid, w): cid for cid, w in todo}}
+        for fut in as_completed(futs):
+            try:
+                fut.result()
+                finished += 1
+                print(f"   ✅ {{futs[fut]}} ({{finished}}/{{total}})")
+            except Exception as _ce:
+                errors.append(f"{{futs[fut]}}: {{_ce}}")
+                print(f"   ❌ {{futs[fut]}}: {{str(_ce)[:300]}}")
+    if errors:
+        raise RuntimeError(f"{{len(errors)}} of {{total}} chunk(s) failed — completed chunks are kept and the next "
+                           f"run resumes from here. First error: {{errors[0][:1500]}}")
+
+    landed = spark.read.option("recursiveFileLookup", "true").parquet(landing_dest).count()
+    src_now = int(_read_source(sql_query=_cnt_sql).collect()[0][0])
+    if src_now == int(est_rows) and landed != src_now:
+        _save_plan(plan, "invalid")  # next run re-extracts from scratch
+        raise RuntimeError(f"Row count mismatch after chunked extract: landing {{landed:,}} vs source {{src_now:,}}")
+    if src_now != int(est_rows):
+        print(f"⚠️ Source row count changed during extraction ({{int(est_rows):,}} → {{src_now:,}}); landed {{landed:,}}")
+    _save_plan(plan, "complete")
+    return landed
+
 # Read from source
 try:
-    # Row count is informational only here -- the native connectors manage
-    # their own read parallelism, unlike raw JDBC's numPartitions tuning
-    # this notebook used to do (dropped along with spark.read.jdbc() itself,
-    # since numPartitions isn't a guaranteed option on these connectors).
+    _est_count = None
     if IS_FILE_SOURCE:
         df = _read_files_with(_SRC_OBJECT_PATH, _FILE_FORMAT)
         if use_incremental and watermark:
             df = df.filter(F.col(WM_COL) > F.lit(watermark))
     else:
+        _cnt_sql = f"SELECT COUNT(1) AS cnt FROM ({{_query_sql}}) q" if _query_sql else f"SELECT COUNT(1) AS cnt FROM {{_qualified_table}}"
         try:
-            _cnt_sql = f"SELECT COUNT(1) AS cnt FROM ({{_query_sql}}) q" if _query_sql else f"SELECT COUNT(1) AS cnt FROM {{_qualified_table}}"
-            _est_count = _read_source(sql_query=_cnt_sql).collect()[0][0]
+            _est_count = int(_read_source(sql_query=_cnt_sql).collect()[0][0])
             print(f"📊 Estimated row count: {{_est_count:,}}")
         except Exception:
             pass
 
-        df = _read_source(sql_query=_query_sql, table=_qualified_table)
-
-    # Add audit columns
-    df = (df
-          .withColumn("__landing_ts", F.current_timestamp())
-          .withColumn("__source_system", F.lit(f"{{SERVER}}/{{DATABASE}}"))
-          .withColumn("__load_type", F.lit("incremental" if use_incremental and watermark else "full"))
-          .withColumn("__batch_id", F.lit(run_ts))
-          .withColumn("__job_id", F.lit(JOB_ID))
-          .withColumn("__run_id", F.lit(RUN_ID)))
-
-    row_count = df.count()
-    print(f"📊 Rows extracted: {{row_count:,}}")
-
-    # Pre-compute watermark BEFORE writing so we capture the exact max
-    # from this batch.  Saved AFTER write succeeds to avoid data gaps.
-    new_wm = None
-    if use_incremental and WM_COL and row_count > 0:
+    _plan = None
+    if not IS_FILE_SOURCE and _est_count and _est_count > _CHUNK_ROWS:
         try:
-            new_wm = df.agg(F.max(F.col(WM_COL)).cast("string")).collect()[0][0]
-            if new_wm:
-                print(f"📏 Pre-computed watermark: {{WM_COL}} → {{new_wm}}")
-        except Exception as wm_err:
-            print(f"⚠️ Watermark pre-compute failed (will skip update): {{wm_err}}")
+            _plan = _plan_chunks(_est_count)
+        except Exception as _pe:
+            print(f"⚠️ Chunk planning failed ({{_pe}}) — extracting in one pass")
 
-    # Write to landing zone
-    if LOAD_TYPE == "full" or not (use_incremental and watermark):
+    if _plan:
+        row_count = _extract_chunked(_plan, _est_count)
+        print(f"📊 Rows extracted: {{row_count:,}}")
+        print(f"✅ Written to {{landing_dest}} ({{len(_plan['chunks'])}} chunks)")
+    else:
+        if not IS_FILE_SOURCE:
+            df = _read_source(sql_query=_query_sql, table=_qualified_table)
+            try:
+                dbutils.fs.rm(_STAGE_ROOT, True)  # drop any earlier chunk plan for this table
+            except Exception:
+                pass
+        df = _add_audit(df)
+
+        row_count = df.count()
+        print(f"📊 Rows extracted: {{row_count:,}}")
+
+        # Overwrite landing even for incremental — the watermark guarantees only
+        # new rows are pulled, so landing is a transient staging area; appending
+        # would duplicate rows when Bronze reads all files.
         df.write.mode("overwrite").option("overwriteSchema", "true").parquet(landing_dest)
         print(f"✅ Written to {{landing_dest}} (overwrite)")
-    else:
-        # Overwrite landing even for incremental — watermark guarantees we
-        # only pull new rows, so landing is a transient staging area.
-        # Appending would cause duplication when Bronze reads all files.
-        df.write.mode("overwrite").option("overwriteSchema", "true").parquet(landing_dest)
-        print(f"✅ Written to {{landing_dest}} (overwrite — watermark controls incrementality)")
 
 except Exception as e:
     msg = f"❌ Extract failed: {{e}}"
@@ -964,7 +1098,8 @@ landing_src = f"{{LANDING_PATH}}/{{TABLE_NAME}}"
 print(f"📂 Reading from: {{landing_src}}")
 
 try:
-    df = spark.read.parquet(landing_src)
+    # recursiveFileLookup: large extracts land as chunk_NNNNN/ sub-folders
+    df = spark.read.option("recursiveFileLookup", "true").parquet(landing_src)
     row_count = df.count()
     print(f"📊 Rows in landing: {{row_count:,}}")
 except Exception as e:
@@ -2846,7 +2981,7 @@ for _j in bronze_jobs:
         continue
     _landing = f"{{LANDING_PATH}}/{{_j['table_name']}}"
     try:
-        _check = spark.read.format("parquet").load(_landing).limit(1).count()
+        _check = spark.read.format("parquet").option("recursiveFileLookup", "true").load(_landing).limit(1).count()
         if _check > 0:
             _make_bronze(_j)
             _bronze_registered.append(_j["table_name"])
