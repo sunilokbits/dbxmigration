@@ -3182,6 +3182,7 @@ def _execute_job_run(run_id: str, job_id: str):
                             job["updated_at"] = end_ts
                 else:
                     err = (output_info or {}).get("error") or error_trace[:500] or state_msg or result_state
+                    err = _split_orchestrator_error(err)[0] or err
                     with _lock:
                         run["status"] = "failed"
                         run["error"] = err
@@ -3709,6 +3710,26 @@ _notebooks_workspace_path = ""       # e.g. "/Shared/MetadataPipeline"
 _pipeline_jobs = {}                  # {"workspace_path": ..., "jobs": {notebook_name: job_id}}
 
 
+_RESULT_MARKER = "MIGRATION_STUDIO_RESULT="
+
+
+def _split_orchestrator_error(text: str):
+    """(readable message, result JSON or "") for an orchestrator that failed its
+    run deliberately and attached its result JSON to the error."""
+    text = text or ""
+    i = text.find(_RESULT_MARKER)
+    if i < 0:
+        return text, ""
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(text[i + len(_RESULT_MARKER):])
+    except Exception:
+        return text, ""
+    # Drop the "[task_key] " tag and exception class the run output prepends.
+    human = re.sub(r"^\[[^\]]*\]\s*", "", text[:i].strip())
+    human = re.sub(r"^\w*(Error|Exception):\s*", "", human)
+    return human, json.dumps(obj)
+
+
 def _deployed_workspace_path() -> str:
     """Workspace folder the metadata notebooks were last deployed to. Durable
     config first: the module global is per worker and can be stale."""
@@ -3951,10 +3972,18 @@ def _poll_databricks_run(connector, dbr_run_id, group_id: str):
             # need internal verification (extract succeeded? DLT pipeline
             # actually completed?) must NOT silently default to success below.
             _internal_verified = False
+            # True when the orchestrator failed the run on purpose (so the Jobs UI
+            # shows red) and attached its result: per-stage status then still
+            # comes from that result instead of failing every stage blindly.
+            _structured_failure = False
+            _human_err = ""
             if output_info.get("success"):
                 nb_result = output_info.get("notebook_result", "")
                 error_trace = output_info.get("error_trace", "")
                 error_msg = output_info.get("error", "")
+                _human_err, _attached = _split_orchestrator_error(error_msg)
+                if not nb_result and _attached:
+                    nb_result, error_msg, _structured_failure = _attached, _human_err, True
                 tasks = output_info.get("tasks", [])
                 if nb_result:
                     output_lines.append(f"[{ts}] 📄 Notebook result: {nb_result[:500]}")
@@ -4004,7 +4033,7 @@ def _poll_databricks_run(connector, dbr_run_id, group_id: str):
                 for rid, run in _runs_for_dbr(dbr_run_str, grp_job_ids):
                         # Set per-job status based on actual stage results
                         stage = run.get("stage", "")
-                        if local_status != "success":
+                        if local_status != "success" and not _structured_failure:
                             # Databricks-level failure (the run itself didn't
                             # even reach a clean SUCCESS result_state) always
                             # wins -- previously the extract/dlt-stage branches
@@ -4035,7 +4064,10 @@ def _poll_databricks_run(connector, dbr_run_id, group_id: str):
                         )
                         run["logs"].append(f"[{ts}] {emoji} Databricks run {lifecycle} — {result_state or state_msg}")
                         run["logs"].extend(output_lines)
-                        if local_status == "failed":
+                        if _structured_failure:
+                            if run["status"] == "failed":
+                                run["error"] = _human_err[:1000]
+                        elif local_status == "failed":
                             run["error"] = output_info.get("error") or output_info.get("error_trace", "")[:500] or state_msg
                         _sync_run_to_dbr(run)
 

@@ -324,6 +324,29 @@ def _read_source_with(fmt, options, sql_query=None, table=None):
     r = r.option("query", sql_query) if sql_query else r.option("dbtable", table)
     return r.load()
 
+def _landing_dir_for(job, landing_path):
+    """Landing folder Extract writes this job's table to (mirrors Extract's path rule)."""
+    tc = job.get("target_config") or {{}}
+    tc = json.loads(tc) if isinstance(tc, str) else dict(tc)
+    vc, ts = tc.get("volumes_catalog", ""), tc.get("target_schema", "")
+    base = f"/Volumes/{{vc}}/{{ts}}/landing" if (vc and ts) else landing_path
+    return f"{{base.rstrip('/')}}/{{job['table_name']}}"
+
+def _clear_landing(job, landing_path):
+    """Landing is transit only. Once Bronze has loaded a batch, replace the
+    table's landing files with ONE zero-row file of the same schema: Auto
+    Loader cannot infer a schema from an empty folder, and a table whose
+    landing has no files would drop out of the SDP pipeline (inactive)."""
+    d = _landing_dir_for(job, landing_path)
+    try:
+        schema = spark.read.parquet(d).schema
+        spark.createDataFrame([], schema).write.mode("overwrite").parquet(d)
+        print(f"   🧹 Landing cleaned: {{d}}")
+        return True
+    except Exception as e:
+        print(f"   ⚠️ Could not clean landing {{d}}: {{str(e)[:200]}}")
+        return False
+
 def _read_files_with(path, fmt="parquet"):
     """Read one source object's files (SNP Glue landing / file drops in ADLS
     or a UC Volume). Each object is a sub-folder of the landing folder."""
@@ -1861,6 +1884,12 @@ for group in groups:
             print(f"   ⛔ Stopping pipeline for {{group['full_table']}} due to failure")
             break
 
+    # Landing is transit only: once every stage of the group succeeded, Bronze
+    # holds the data. A failed group keeps its files for the re-run.
+    _extract_job = next((j for j in jobs if j.get("stage") == "extract"), None)
+    if group_ok and _extract_job and any(j.get("stage") != "extract" for j in jobs):
+        _clear_landing(_extract_job, LANDING_PATH)
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -1908,6 +1937,13 @@ exit_payload = json.dumps({{
     "groups":     len(groups),
     "errors":     error_details,
 }})
+
+# Any failed stage must show FAILED in the Jobs UI; the result JSON rides along.
+if failed:
+    _brief = json.dumps({{"status": "PARTIAL", "succeeded": len(succeeded), "failed": len(failed)}})
+    raise RuntimeError(
+        f"Pipeline run PARTIAL: {{len(failed)}} of {{len(succeeded) + len(failed)}} job(s) failed. Failed: "
+        + "; ".join(error_details[:3]) + f" MIGRATION_STUDIO_RESULT={{_brief}}")
 
 dbutils.notebook.exit(exit_payload)
 '''
@@ -2790,6 +2826,10 @@ def _make_bronze(job):
         comment=f"Bronze — raw ingestion of {{full}} via Auto Loader",
         table_properties={{
             "quality": "bronze",
+            # Landing is cleaned after each successful load, so a full refresh
+            # (which clears a streaming table and re-reads its source files)
+            # would wipe Bronze. Bronze is the system of record: never reset.
+            "pipelines.reset.allowed": "false",
         }},
     )
     @dlt.expect_or_drop("dq01_valid_landing_ts",   "__landing_ts IS NOT NULL")
@@ -2847,7 +2887,9 @@ for _j in bronze_jobs:
     _landing = f"{{LANDING_PATH}}/{{_j['table_name']}}"
     try:
         _check = spark.read.format("parquet").load(_landing).limit(1).count()
-        if _check > 0:
+        # 0 rows + an existing Bronze table = landing was cleaned after a
+        # successful load: keep the table defined (active); no new rows to read.
+        if _check > 0 or spark.catalog.tableExists(_btbl):
             _make_bronze(_j)
             _bronze_registered.append(_j["table_name"])
             print(f"  ✅ Registered bronze: {{_j['table_name']}}")
@@ -4189,6 +4231,24 @@ else:
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## 🧹 Phase 6 — Clean Up Landing
+
+# COMMAND ----------
+
+# Bronze has loaded this run's files once the pipeline update completed (this
+# run's own update, or one it joined that started after its extracts), so the
+# landing Parquet for THIS run's successfully extracted tables is no longer needed.
+landing_cleaned = 0
+if dlt_status == "COMPLETED":
+    for _idx, _job in enumerate(extract_jobs):
+        if extract_results[_idx] and extract_results[_idx].get("status") == "OK":
+            landing_cleaned += 1 if _clear_landing(_job, LANDING_PATH) else 0
+else:
+    print("⏭️ Landing kept — the pipeline update did not complete, so Bronze may still need these files")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## 📊 Orchestration Summary
 
 # COMMAND ----------
@@ -4225,5 +4285,17 @@ exit_payload = json.dumps({{
     "pipeline_id":     pipeline_id,
     "total_rows":      total_rows,
 }})
+
+# A run with any failed stage must show FAILED in the Jobs UI, not green. The
+# result JSON rides along in the error so the app still sees per-stage detail.
+if _overall != "COMPLETED":
+    _failed = [f"{{r['job']}}: {{str(r.get('error', ''))[:150]}}" for r in extract_results
+               if r and r.get("status") == "FAILED"]
+    _brief = json.dumps({{k: json.loads(exit_payload)[k] for k in
+                         ("status", "extract_ok", "extract_failed", "dlt_status", "silver_failed", "pipeline_id")}})
+    raise RuntimeError(
+        f"Pipeline run {{_overall}}: extracts {{extract_ok}} ok / {{extract_fail}} failed, SDP {{dlt_status}}, "
+        f"silver {{silver_failed}} failed" + (". Failed: " + "; ".join(_failed[:3]) if _failed else "")
+        + f" MIGRATION_STUDIO_RESULT={{_brief}}")
 dbutils.notebook.exit(exit_payload)
 '''
