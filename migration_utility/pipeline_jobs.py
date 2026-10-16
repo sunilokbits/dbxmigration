@@ -150,6 +150,160 @@ def _upsert(connector, settings: dict, notebook_path: str) -> dict:
     return {"success": True, "job_id": jid, "action": action, "job_name": settings["name"]}
 
 
+# ── One Databricks Job (and, in SDP mode, one pipeline) per table ───────────
+# Each table runs in its own job with its own task graph and compute, so one
+# table's failure, memory pressure or slow source can never affect another.
+
+# Pipeline-group stage -> task key in the table's job.
+STAGE_TASK = {
+    "extract":           "extract",
+    "dlt_bronze_silver": "bronze_silver",
+    "landing_to_bronze": "bronze",
+    "bronze_to_silver":  "silver",
+}
+
+TABLE_JOB_PARAMETERS = ("password_b64", "load_type", "extract_run_id", "bronze_run_id", "silver_run_id")
+
+
+def table_job_name(source_label: str, full_table: str) -> str:
+    return f"{JOB_NAME_PREFIX} - {source_label} - {full_table}"
+
+
+def table_pipeline_name(source_label: str, full_table: str) -> str:
+    return f"{table_job_name(source_label, full_table)} (Bronze & Silver)"
+
+
+def build_table_pipeline_spec(*, name, group_id, workspace_path, meta_catalog, meta_schema, landing_path,
+                              bronze_catalog, silver_catalog, target_schema) -> dict:
+    return {
+        "name": name,
+        "catalog": bronze_catalog,
+        "schema": target_schema,
+        "configuration": {
+            "pipeline.meta_catalog":   meta_catalog,
+            "pipeline.meta_schema":    meta_schema,
+            "pipeline.landing_path":   landing_path,
+            "pipeline.group_id":       group_id,
+            # Only this pipeline group's table (not every table in the schema).
+            "pipeline.scope":          "group",
+            "pipeline.bronze_catalog": bronze_catalog,
+            "pipeline.silver_catalog": silver_catalog or bronze_catalog,
+            "pipeline.target_schema":  target_schema,
+            "pipelines.tableManagedByMultiplePipelinesCheck.enabled": "false",
+        },
+        "libraries": [{"notebook": {"path": f"{workspace_path}/02_Meta_SDP_Pipeline"}}],
+        "continuous": False,
+        "development": True,
+        "channel": "CURRENT",
+        "serverless": True,
+    }
+
+
+def build_table_job_settings(*, name, group_id, full_table, workspace_path, mode, stage_jobs,
+                             meta_catalog, meta_schema, landing_path, pipeline_id=None,
+                             serverless_env=True, bronze_catalog="", silver_catalog="",
+                             target_schema="") -> dict:
+    """Task graph for one table.
+
+    SDP:      extract -> bronze_silver (pipeline task) -> reconciliation, dq_metrics, cleanup
+    standard: extract -> bronze -> silver; reconciliation after bronze; cleanup after silver
+    stage_jobs maps pipeline-group stage -> wf_job_metadata job_id.
+    """
+    ws = workspace_path.rstrip("/")
+    jp = lambda p: "{{job.parameters." + p + "}}"
+    common = {"catalog": meta_catalog, "schema": meta_schema, "landing_path": landing_path, "table": full_table}
+
+    def nb_task(key, notebook, params, depends=None, timeout=3600):
+        t = {"task_key": key, "timeout_seconds": timeout,
+             "notebook_task": {"notebook_path": f"{ws}/{notebook}", "source": "WORKSPACE",
+                               "base_parameters": dict(common, **params)}}
+        if depends:
+            t["depends_on"] = [{"task_key": depends}]
+        if serverless_env:
+            t["environment_key"] = "Default"
+        return t
+
+    extract_id = stage_jobs["extract"]
+    tasks = [nb_task("extract", "01_Meta_Extract", {
+        "job_id": extract_id, "run_id": jp("extract_run_id"), "load_type": jp("load_type"),
+        "password_b64": jp("password_b64"), "pipeline_mode": "dlt" if mode == "dlt" else "standard"})]
+    if mode == "dlt":
+        if not pipeline_id:
+            raise ValueError("SDP mode needs the table's pipeline_id")
+        tasks.append({"task_key": "bronze_silver", "depends_on": [{"task_key": "extract"}],
+                      "pipeline_task": {"pipeline_id": pipeline_id, "full_refresh": False}})
+        loaded, final = "bronze_silver", "bronze_silver"
+        tasks.append(nb_task("dq_metrics", "07_Meta_SDP_DQMetrics", {
+            "group_id": group_id, "pipeline_id": pipeline_id, "run_id": jp("extract_run_id"),
+            "bronze_catalog": bronze_catalog, "silver_catalog": silver_catalog or bronze_catalog,
+            "target_schema": target_schema}, depends="bronze_silver", timeout=900))
+    else:
+        tasks.append(nb_task("bronze", "02_Meta_Bronze", {
+            "job_id": stage_jobs["landing_to_bronze"], "run_id": jp("bronze_run_id")}, depends="extract"))
+        tasks.append(nb_task("silver", "03_Meta_Silver", {
+            "job_id": stage_jobs["bronze_to_silver"], "run_id": jp("silver_run_id")}, depends="bronze"))
+        loaded, final = "bronze", "silver"
+    tasks.append(nb_task("reconciliation", "04_Meta_Reconciliation", {
+        "job_id": extract_id, "run_id": jp("extract_run_id"), "password_b64": jp("password_b64")},
+        depends=loaded, timeout=1800))
+    tasks.append(nb_task("cleanup", "06_Meta_Cleanup", {"job_id": extract_id}, depends=final, timeout=900))
+
+    settings = {
+        "name": name,
+        "description": (f"Migration Studio pipeline for {full_table}: extract, Bronze/Silver load, "
+                        "reconciliation and landing cleanup, each task on its own serverless compute."
+                        + _MANAGED_NOTE),
+        "tags": {"application": "migration-studio", "managed_by": "migration-studio-app",
+                 "layer": "table", "migration_studio_group": group_id},
+        # One run per table at a time; a second request queues instead of
+        # racing the first over the same landing folder and Bronze table.
+        "max_concurrent_runs": 1,
+        "queue": {"enabled": True},
+        "timeout_seconds": 0,
+        "parameters": [{"name": p, "default": ""} for p in TABLE_JOB_PARAMETERS],
+        "tasks": tasks,
+    }
+    if serverless_env:
+        settings["environments"] = _SERVERLESS_ENV
+    return settings
+
+
+def _without_env(settings: dict) -> dict:
+    bare = {k: v for k, v in settings.items() if k != "environments"}
+    bare["tasks"] = [{k: v for k, v in t.items() if k != "environment_key"} for t in settings["tasks"]]
+    return bare
+
+
+def ensure_table_pipeline(connector, name: str, spec: dict) -> dict:
+    found = connector.find_pipeline_by_name(name)
+    if not found.get("success"):
+        return {"success": False, "error": found.get("error", "pipeline lookup failed")}
+    pid = found.get("pipeline_id")
+    r = connector.update_pipeline(pid, spec) if pid else connector.create_pipeline(spec)
+    if not r.get("success"):
+        return {"success": False, "error": r.get("error", "pipeline create/update failed")}
+    return {"success": True, "pipeline_id": pid or r.get("pipeline_id"), "created": not pid}
+
+
+def ensure_table_job(connector, settings: dict) -> dict:
+    """Find the table's job by name and update it in place (keeps run history
+    and permissions), or create it."""
+    found = connector.list_jobs_by_name(settings["name"])
+    if not found.get("success"):
+        return {"success": False, "error": found.get("error", "job lookup failed")}
+    job_id = (found["jobs"][0]["job_id"] if found["jobs"] else None)
+
+    def _write(s):
+        return connector.reset_job(job_id, s) if job_id is not None else connector.create_job(s)
+
+    r = _write(settings)
+    if not r.get("success") and "environment" in str(r.get("error", "")).lower():
+        r = _write(_without_env(settings))
+    if not r.get("success"):
+        return {"success": False, "error": r.get("error", "job create/update failed")}
+    return {"success": True, "job_id": job_id if job_id is not None else r.get("job_id"), "created": job_id is None}
+
+
 def ensure_pipeline_jobs(connector, workspace_path: str, notebook_names) -> dict:
     """Create or update the persistent job for every deployed stage notebook.
 

@@ -28,6 +28,17 @@ def _sdp_trigger_block():
     return code[start:end] + "result = (update_id, _joined_update)\n"
 
 
+def _table_job_conn(run_result=None):
+    """Connector mock for the per-table job path (no job/pipeline exists yet)."""
+    conn = mock.MagicMock()
+    conn.list_jobs_by_name.return_value = {"success": True, "jobs": []}
+    conn.create_job.return_value = {"success": True, "job_id": 500}
+    conn.find_pipeline_by_name.return_value = {"success": True, "pipeline_id": None}
+    conn.create_pipeline.return_value = {"success": True, "pipeline_id": "p-table"}
+    conn.run_job_with_parameters.return_value = run_result or {"success": True, "run_id": 77, "run_url": "u"}
+    return conn
+
+
 class _Resp:
     def __init__(self, status, body=None):
         self.status_code, self._body, self.ok = status, body or {}, 200 <= status < 300
@@ -156,12 +167,12 @@ class TestGroupLoadedFromDelta(unittest.TestCase):
         self.assertIn("9a48", wfm.PIPELINE_GROUPS)
 
     def test_run_pipeline_on_databricks_tracks_a_group_from_another_worker(self):
-        conn = mock.MagicMock()
-        conn.run_notebook.return_value = {"success": True, "run_id": 77, "run_url": "u"}
+        conn = _table_job_conn()
         with mock.patch("databricks_connector.DatabricksConnector", return_value=conn), \
              mock.patch.object(wfm, "_load_deploy_config", return_value={}), \
              mock.patch.object(wfm, "_deployed_workspace_path", return_value=WS), \
              mock.patch.object(wfm, "_sync_run_to_dbr"), mock.patch.object(wfm, "_sync_job_to_dbr"), \
+             mock.patch.object(wfm, "_resolve_source_password", return_value=""), \
              mock.patch.object(wfm, "_sync_pipeline_to_dbr"), mock.patch.object(wfm, "_spawn_worker") as spawn:
             r = wfm.run_pipeline_on_databricks("9a48", host="https://h", token="dapi-xxxxxxxxxx",
                                                catalog="c", schema="s")
@@ -169,7 +180,12 @@ class TestGroupLoadedFromDelta(unittest.TestCase):
         tracked = [x for x in wfm.JOB_RUNS.values() if x.get("dbr_run_id") == 77]
         self.assertEqual(sorted(x["job_id"] for x in tracked), ["j1", "j2"])
         spawn.assert_called_once()
-        self.assertEqual(conn.run_notebook.call_args[1]["params"]["table"], "TPCDS_SF100TCL.SHIP_MODE")
+        conn.run_notebook.assert_not_called()  # no shared orchestrator
+        self.assertEqual(conn.create_job.call_args[0][0]["name"],
+                         "Migration Studio - SQL Server - TPCDS_SF100TCL.SHIP_MODE")
+        jp = conn.run_job_with_parameters.call_args[0][1]
+        self.assertEqual(conn.run_job_with_parameters.call_args[0][0], 500)
+        self.assertEqual({x["run_id"] for x in tracked if x["stage"] == "extract"}, {jp["extract_run_id"]})
 
 
 class TestReconciliationReadsAggregatesByPosition(unittest.TestCase):
@@ -188,16 +204,24 @@ class TestNotebookWorkspacePath(unittest.TestCase):
         self.assertIn("must start with '/'", r["error"])
 
     def test_run_uses_deployed_path_not_the_request_box(self):
-        conn = mock.MagicMock()
-        conn.run_notebook.return_value = {"success": False, "message": "stop"}
+        conn = _table_job_conn({"success": False, "message": "stop"})
+        jobs = {"e1": {"job_id": "e1", "job_name": "e1", "stage": "extract", "group_id": "g"},
+                "b1": {"job_id": "b1", "job_name": "b1", "stage": "landing_to_bronze", "group_id": "g"},
+                "s1": {"job_id": "s1", "job_name": "s1", "stage": "bronze_to_silver", "group_id": "g"}}
         with mock.patch("databricks_connector.DatabricksConnector", return_value=conn), \
              mock.patch.object(wfm, "_load_deploy_config", return_value={}), \
              mock.patch.object(wfm, "_deployed_workspace_path", return_value=WS), \
-             mock.patch.dict(wfm.PIPELINE_GROUPS, {"g": {"full_table": "A.B", "job_ids": [],
+             mock.patch.object(wfm, "_sync_run_to_dbr"), mock.patch.object(wfm, "_sync_job_to_dbr"), \
+             mock.patch.object(wfm, "_resolve_source_password", return_value=""), \
+             mock.patch.dict(wfm.JOB_REGISTRY, jobs), \
+             mock.patch.dict(wfm.PIPELINE_GROUPS, {"g": {"group_id": "g", "full_table": "A.B",
+                                                         "table_name": "B", "job_ids": list(jobs),
                                                          "target_config": {"bronze_catalog": "b"}}}):
             wfm.run_pipeline_on_databricks("g", host="https://h", token="dapi-xxxxxxxxxx", catalog="c",
                                            schema="s", workspace_path="dev/uc-managed/bronze")
-        self.assertEqual(conn.run_notebook.call_args[1]["notebook_path"], f"{WS}/00_Meta_Orchestrator")
+        paths = [t["notebook_task"]["notebook_path"] for t in conn.create_job.call_args[0][0]["tasks"]]
+        self.assertEqual(paths[0], f"{WS}/01_Meta_Extract")
+        self.assertTrue(all(p.startswith(WS + "/") for p in paths))
 
     def test_run_rejects_relative_path_when_nothing_deployed(self):
         with mock.patch.object(wfm, "_load_deploy_config", return_value={}), \

@@ -2727,6 +2727,7 @@ def delete_pipeline_group(group_id: str) -> dict:
         del PIPELINE_GROUPS[group_id]
 
     _delete_pipeline_from_dbr(group_id)
+    _delete_table_job(grp)
     return {"success": True, "deleted_group": group_id, "deleted_jobs": deleted_jobs}
 
 
@@ -2740,6 +2741,15 @@ def run_job(job_id: str, force_full: bool = False) -> dict:
         return {"success": False, "error": f"Job '{job_id}' not found"}
     if not job.get("enabled", True):
         return {"success": False, "error": f"Job '{job['job_name']}' is disabled"}
+
+    # A pipeline-group stage runs as just that task of the table's own job.
+    if job.get("group_id") and _get_group(job["group_id"]):
+        r = run_pipeline_on_databricks(job["group_id"], load_type="full" if force_full else "",
+                                       only_stages=[job["stage"]])
+        local_id = (r.get("local_run_ids") or {}).get(job["stage"])
+        if not r.get("success") or not local_id:
+            return {"success": False, "error": r.get("error") or r.get("message") or "Could not start the table job"}
+        return {"success": True, "run_id": local_id, "run": JOB_RUNS.get(local_id)}
 
     run_id = uuid.uuid4().hex[:12]
     ts = datetime.now().isoformat()
@@ -3710,6 +3720,155 @@ _notebooks_workspace_path = ""       # e.g. "/Shared/MetadataPipeline"
 _pipeline_jobs = {}                  # {"workspace_path": ..., "jobs": {notebook_name: job_id}}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  ONE DATABRICKS JOB (AND SDP PIPELINE) PER TABLE
+# ─────────────────────────────────────────────────────────────────────────────
+def _source_label(source_config: dict) -> str:
+    from source_registry import get as _src_get
+    st = (source_config or {}).get("source_type") or "sqlserver"
+    return (_src_get(st) or {}).get("label") or st
+
+
+def _sdp_table_names(table_name: str, bronze_cat: str, silver_cat: str, target_schema: str):
+    """Bronze/Silver names exactly as the SDP notebook publishes them."""
+    t = (table_name or "").lower()
+    bronze = f"{bronze_cat}.{target_schema}.{t}"
+    if silver_cat and silver_cat != bronze_cat:
+        return bronze, f"{silver_cat}.{target_schema}.{t}"
+    return bronze, f"{bronze_cat}.{target_schema}.silver_{t}"
+
+
+def _q3(fqn: str) -> str:
+    return ".".join(f"`{p}`" for p in fqn.split("."))
+
+
+def _move_tables_to_pipeline(connector, pipeline_id: str, tables) -> list:
+    """Move existing SDP-managed tables to the table's own pipeline with the
+    documented ALTER ... SET TBLPROPERTIES("pipelines.pipelineId") -- the table
+    and its data stay in place; only the owning pipeline changes."""
+    moved = []
+    for fqn, kind in tables:
+        try:
+            rows = _rows_from_exec(_exec_sql(f"SHOW TBLPROPERTIES {_q3(fqn)} ('pipelines.pipelineId')"))
+        except Exception:
+            continue  # not created yet -- the new pipeline creates it
+        owner = str((rows[0].get("value") if rows else "") or "")
+        if not re.fullmatch(r"[0-9a-fA-F-]{36}", owner) or owner == pipeline_id:
+            continue
+        state = (connector.get_pipeline(owner) or {}).get("state") or ""
+        if state not in ("", "IDLE", "FAILED", "CANCELED", "DELETED"):
+            connector.stop_pipeline(owner)
+            for _ in range(24):
+                time.sleep(5)
+                if (connector.get_pipeline(owner) or {}).get("state") in ("IDLE", "FAILED", "CANCELED", None):
+                    break
+        r = _exec_sql(f"ALTER {kind} {_q3(fqn)} SET TBLPROPERTIES ('pipelines.pipelineId' = '{pipeline_id}')")
+        if r.get("status", {}).get("state") != "SUCCEEDED":
+            err = r.get("status", {}).get("error", {}).get("message") or r.get("error") or "unknown error"
+            raise RuntimeError(f"Could not move {fqn} to its own pipeline: {err}")
+        logger.info("Moved %s from pipeline %s to %s", fqn, owner, pipeline_id)
+        moved.append(fqn)
+    return moved
+
+
+def _ensure_table_job(connector, group: dict, params: dict, ws: str) -> dict:
+    """Create/update this table's Databricks Job (and its SDP pipeline)."""
+    from pipeline_jobs import (build_table_job_settings, build_table_pipeline_spec, ensure_table_job,
+                               ensure_table_pipeline, table_job_name, table_pipeline_name)
+    stage_jobs = {}
+    for jid in group.get("job_ids", []):
+        j = _get_job(jid)
+        if j and j.get("enabled", True):
+            stage_jobs[j["stage"]] = jid
+    mode = "dlt" if "dlt_bronze_silver" in stage_jobs else "standard"
+    needed = ("extract", "dlt_bronze_silver") if mode == "dlt" else ("extract", "landing_to_bronze", "bronze_to_silver")
+    missing = [st for st in needed if st not in stage_jobs]
+    if missing:
+        return {"success": False, "error": f"Pipeline group is missing enabled job(s) for {missing} — re-create the pipeline"}
+    label = _source_label(group.get("source_config"))
+    full_table = group.get("full_table", "")
+    pipeline_id = None
+    if mode == "dlt":
+        bronze_cat = params.get("bronze_catalog", "")
+        if not bronze_cat:
+            return {"success": False, "error": "bronze_catalog is empty — configure the Layer Mapping first"}
+        silver_cat = params.get("silver_catalog") or bronze_cat
+        tgt_schema = params.get("target_schema") or params.get("schema")
+        for _c in {bronze_cat, silver_cat}:
+            try:
+                _exec_sql(f"CREATE SCHEMA IF NOT EXISTS `{_c}`.`{tgt_schema}`")
+            except Exception as exc:
+                logger.warning("Could not ensure schema %s.%s: %s", _c, tgt_schema, exc)
+        spec = build_table_pipeline_spec(
+            name=table_pipeline_name(label, full_table), group_id=group["group_id"], workspace_path=ws,
+            meta_catalog=params["catalog"], meta_schema=params["schema"], landing_path=params["landing_path"],
+            bronze_catalog=bronze_cat, silver_catalog=silver_cat, target_schema=tgt_schema)
+        pr = ensure_table_pipeline(connector, spec["name"], spec)
+        if not pr.get("success"):
+            return {"success": False, "error": f"Could not create the table's pipeline: {pr.get('error')}"}
+        pipeline_id = pr["pipeline_id"]
+        bronze, silver = _sdp_table_names(group.get("table_name", ""), bronze_cat, silver_cat, tgt_schema)
+        try:
+            _move_tables_to_pipeline(connector, pipeline_id,
+                                     [(bronze, "STREAMING TABLE"), (silver, "MATERIALIZED VIEW")])
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+    settings = build_table_job_settings(
+        name=table_job_name(label, full_table), group_id=group["group_id"], full_table=full_table,
+        workspace_path=ws, mode=mode, stage_jobs=stage_jobs, meta_catalog=params["catalog"],
+        meta_schema=params["schema"], landing_path=params["landing_path"], pipeline_id=pipeline_id,
+        bronze_catalog=params.get("bronze_catalog", ""), silver_catalog=params.get("silver_catalog", ""),
+        target_schema=params.get("target_schema") or params.get("schema", ""))
+    jr = ensure_table_job(connector, settings)
+    if not jr.get("success"):
+        return {"success": False, "error": f"Could not create the table's job: {jr.get('error')}"}
+    return {"success": True, "job_id": jr["job_id"], "pipeline_id": pipeline_id, "mode": mode,
+            "stage_jobs": stage_jobs, "job_name": settings["name"]}
+
+
+def _submit_table_job(connector, group: dict, params: dict, ws: str, only_stages=None):
+    """Run the table's job (or only some of its tasks). Returns (result, run_ids by stage)."""
+    from pipeline_jobs import STAGE_TASK
+    tj = _ensure_table_job(connector, group, params, ws)
+    if not tj.get("success"):
+        return {"success": False, "error": tj.get("error")}, {}
+    stages = [st for st in tj["stage_jobs"] if not only_stages or st in only_stages]
+    run_ids = {st: uuid.uuid4().hex[:12] for st in stages}
+    job_params = {
+        "password_b64":   params.get("password_b64", ""),
+        "load_type":      params.get("load_type", ""),
+        "extract_run_id": run_ids.get("extract", ""),
+        "bronze_run_id":  run_ids.get("landing_to_bronze", ""),
+        "silver_run_id":  run_ids.get("bronze_to_silver", ""),
+    }
+    only = [STAGE_TASK[st] for st in stages] if only_stages else None
+    result = connector.run_job_with_parameters(tj["job_id"], job_params, only=only)
+    if result.get("success"):
+        result.update({"table_job_id": tj["job_id"], "table_job_name": tj["job_name"],
+                       "pipeline_id": tj.get("pipeline_id"), "local_run_ids": run_ids})
+    return result, run_ids
+
+
+def _delete_table_job(group: dict):
+    """Best effort: remove the table's job. Its SDP pipeline is kept on purpose --
+    it owns the table's Bronze/Silver tables, and loaded data is never dropped here."""
+    try:
+        from databricks_connector import DatabricksConnector
+        from pipeline_jobs import table_job_name
+        dcfg = _load_deploy_config()
+        host = _dbr_host or dcfg.get("databricks_host", "")
+        token = _resolve_databricks_token(dcfg) or _dbr_token
+        if not host or not token:
+            return
+        conn = DatabricksConnector(host, token)
+        label = _source_label(group.get("source_config"))
+        full_table = group.get("full_table", "")
+        for j in (conn.list_jobs_by_name(table_job_name(label, full_table)) or {}).get("jobs", []):
+            conn.delete_job(j["job_id"])
+    except Exception as exc:
+        logger.warning("Could not delete table job/pipeline for %s: %s", group.get("group_id"), exc)
+
+
 _RESULT_MARKER = "MIGRATION_STUDIO_RESULT="
 
 
@@ -3857,29 +4016,11 @@ def deploy_metadata_notebooks(
         except Exception as _cfg_err:
             logger.warning("Could not persist notebooks_workspace_path to config: %s", _cfg_err)
 
-    # 3. Register one persistent, named Databricks Job per stage notebook so
-    #    every stage runs isolated and is visible in the Jobs UI. Never fails
-    #    the deploy: missing jobs just mean runs use one-time submissions.
+    # 3. No shared per-stage jobs: each table gets its own Databricks Job (and
+    #    SDP pipeline) on its first run -- see _ensure_table_job.
     job_results = []
-    if ok > 0:
-        try:
-            from pipeline_jobs import ensure_pipeline_jobs
-            jr = ensure_pipeline_jobs(connector, workspace_path,
-                                      [r["name"] for r in results if r["success"]])
-            job_results = jr["results"]
-            _pipeline_jobs = {"workspace_path": workspace_path, "jobs": jr["jobs"]}
-            try:
-                from config_cache import save_config
-                save_config({"pipeline_jobs": _pipeline_jobs})
-            except Exception as _cfg_err:
-                logger.warning("Could not persist pipeline job ids to config: %s", _cfg_err)
-        except Exception as _job_err:
-            logger.warning("Could not register pipeline Databricks Jobs: %s", _job_err)
-
-    jobs_ok = sum(1 for j in job_results if j["success"])
-    message = f"Deployed {ok}/{len(results)} metadata notebooks to {workspace_path}"
-    if job_results:
-        message += f" · {jobs_ok}/{len(job_results)} Databricks Jobs registered"
+    message = (f"Deployed {ok}/{len(results)} metadata notebooks to {workspace_path}"
+               " · each table's Databricks Job is created on its first run")
 
     return {
         "success":        ok > 0,
@@ -3977,6 +4118,7 @@ def _poll_databricks_run(connector, dbr_run_id, group_id: str):
             # comes from that result instead of failing every stage blindly.
             _structured_failure = False
             _human_err = ""
+            _table_tasks = None
             if output_info.get("success"):
                 nb_result = output_info.get("notebook_result", "")
                 error_trace = output_info.get("error_trace", "")
@@ -3985,7 +4127,11 @@ def _poll_databricks_run(connector, dbr_run_id, group_id: str):
                 if not nb_result and _attached:
                     nb_result, error_msg, _structured_failure = _attached, _human_err, True
                 tasks = output_info.get("tasks", [])
-                if nb_result:
+                from pipeline_jobs import STAGE_TASK as _STAGE_TASK
+                _tt = {t.get("task_key"): t for t in tasks}
+                if any(k in _tt for k in _STAGE_TASK.values()):
+                    _table_tasks = _tt  # per-table job: each stage has its own task
+                if nb_result and _table_tasks is None:
                     output_lines.append(f"[{ts}] 📄 Notebook result: {nb_result[:500]}")
                     # Parse per-stage status from notebook result JSON
                     try:
@@ -4017,7 +4163,7 @@ def _poll_databricks_run(connector, dbr_run_id, group_id: str):
                             output_lines.append(f"[{ts}] ⚠️ silver_failed={_actual_silver_fail}")
                     except Exception as _parse_exc:
                         output_lines.append(f"[{ts}] ⚠️ Could not verify SDP pipeline outcome — notebook result was not valid JSON: {_parse_exc}")
-                else:
+                elif _table_tasks is None:
                     output_lines.append(f"[{ts}] ⚠️ Could not verify SDP pipeline outcome — notebook returned no result")
                 if error_msg:
                     output_lines.append(f"[{ts}] 🔴 Error: {error_msg[:500]}")
@@ -4033,7 +4179,21 @@ def _poll_databricks_run(connector, dbr_run_id, group_id: str):
                 for rid, run in _runs_for_dbr(dbr_run_str, grp_job_ids):
                         # Set per-job status based on actual stage results
                         stage = run.get("stage", "")
-                        if local_status != "success" and not _structured_failure:
+                        _task = (_table_tasks or {}).get(_STAGE_TASK.get(stage, "")) if _table_tasks is not None else None
+                        if _table_tasks is not None:
+                            if _task is None:
+                                run["status"] = local_status
+                            elif _task.get("result_state") == "SUCCESS":
+                                run["status"] = "success"
+                                try:
+                                    run["rows_processed"] = int(json.loads(_task.get("notebook_result") or "{}").get("rows", 0))
+                                except Exception:
+                                    pass
+                            else:
+                                run["status"] = "failed"
+                                run["error"] = (_task.get("error") or _task.get("state_message")
+                                                or f"Task {_task.get('task_key')} {_task.get('result_state') or 'did not run'}")[:1000]
+                        elif local_status != "success" and not _structured_failure:
                             # Databricks-level failure (the run itself didn't
                             # even reach a clean SUCCESS result_state) always
                             # wins -- previously the extract/dlt-stage branches
@@ -4064,7 +4224,9 @@ def _poll_databricks_run(connector, dbr_run_id, group_id: str):
                         )
                         run["logs"].append(f"[{ts}] {emoji} Databricks run {lifecycle} — {result_state or state_msg}")
                         run["logs"].extend(output_lines)
-                        if _structured_failure:
+                        if _table_tasks is not None:
+                            pass  # error already taken from the stage's own task
+                        elif _structured_failure:
                             if run["status"] == "failed":
                                 run["error"] = _human_err[:1000]
                         elif local_status == "failed":
@@ -4081,6 +4243,13 @@ def _poll_databricks_run(connector, dbr_run_id, group_id: str):
                             _sync_job_to_dbr(job)
 
                 _group_failed = local_status != "success" or dlt_failed or extract_failed or not _internal_verified
+                if _table_tasks is not None:
+                    # Stage tasks decide; a reconciliation/cleanup failure shows red in
+                    # Databricks and in the logs but doesn't fail the table's load.
+                    _group_failed = any(_table_tasks[k].get("result_state") != "SUCCESS"
+                                        for k in _STAGE_TASK.values() if k in _table_tasks)
+                    if not _group_failed:
+                        local_status = "success"
                 if grp:
                     grp["status"] = "failed" if _group_failed else local_status
                     _sync_pipeline_to_dbr(grp)
@@ -4123,6 +4292,7 @@ def run_pipeline_on_databricks(
     catalog: str = "",
     schema: str = "",
     landing_path: str = "/mnt/landing",
+    only_stages: list = None,
 ) -> dict:
     """
     Submit the 00_Meta_Orchestrator notebook on Databricks to run a pipeline
@@ -4314,20 +4484,22 @@ def run_pipeline_on_databricks(
                 "Cannot run pipeline: bronze_catalog is empty. "
                 "Configure bronze/silver/volumes catalogs in Pipeline Studio settings."}
 
-    # Select orchestrator based on mode
-    orchestrator_nb = f"{ws}/00_Meta_Orchestrator"
-    logger.info("run_pipeline_on_databricks: mode=%s, orchestrator=%s", _pipeline_mode, orchestrator_nb)
-
-    _jobs = _pipeline_job_map(ws)
-    params["child_jobs"] = json.dumps(_jobs)
-    # First parameter is what the Jobs UI "Run parameters" column shows.
-    _label = _group_display_name(group_id) if group_id else "all pipeline groups"
-    params = {"table": _label, **params}
-    result = connector.run_notebook(
-        notebook_path=orchestrator_nb,
-        params=params,
-        job_id=_jobs.get("00_Meta_Orchestrator"),
-    )
+    run_ids = {}
+    grp_run = _get_group(group_id) if group_id else None
+    if grp_run:
+        # One Databricks Job (and SDP pipeline) per table: its own tasks and compute.
+        result, run_ids = _submit_table_job(connector, grp_run, params, ws, only_stages=only_stages)
+        logger.info("run_pipeline_on_databricks: table job %s run %s", result.get("table_job_name"), result.get("run_id"))
+    elif group_id:
+        return {"success": False, "error": f"Pipeline group '{group_id}' not found"}
+    else:
+        # No group given ("run everything"): legacy shared orchestrator.
+        orchestrator_nb = f"{ws}/00_Meta_Orchestrator"
+        _jobs = _pipeline_job_map(ws)
+        params["child_jobs"] = json.dumps(_jobs)
+        params = {"table": "all pipeline groups", **params}
+        result = connector.run_notebook(notebook_path=orchestrator_nb, params=params,
+                                        job_id=_jobs.get("00_Meta_Orchestrator"))
 
     # Normalise: connector uses 'message' but frontend expects 'error'
     if not result.get("success") and "message" in result and "error" not in result:
@@ -4350,7 +4522,9 @@ def run_pipeline_on_databricks(
                 job = JOB_REGISTRY.get(jid)
                 if not job:
                     continue
-                local_run_id = uuid.uuid4().hex[:12]
+                if run_ids and job["stage"] not in run_ids:
+                    continue  # stage not part of this run (single-stage run)
+                local_run_id = run_ids.get(job["stage"]) or uuid.uuid4().hex[:12]
                 run_entry = {
                     "run_id":           local_run_id,
                     "job_id":           jid,

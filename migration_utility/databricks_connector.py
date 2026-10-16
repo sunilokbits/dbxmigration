@@ -103,6 +103,66 @@ class DatabricksConnector:
             return {"success": False, "error": d["_http_error"]}
         return {"success": True, "job_id": job_id}
 
+    def delete_job(self, job_id: int) -> dict:
+        d = self._call("POST", "/api/2.1/jobs/delete", json={"job_id": int(job_id)})
+        if "_http_error" in d:
+            return {"success": False, "error": d["_http_error"]}
+        return {"success": True}
+
+    def run_job_with_parameters(self, job_id: int, job_parameters: dict = None, only: list = None) -> dict:
+        """run-now for a job that defines job-level parameters; `only` runs just those task keys."""
+        body = {"job_id": int(job_id),
+                "job_parameters": {k: "" if v is None else str(v) for k, v in (job_parameters or {}).items()}}
+        if only:
+            body["only"] = list(only)
+        d = self._call("POST", "/api/2.1/jobs/run-now", json=body)
+        if "_http_error" in d:
+            return {"success": False, "message": d["_http_error"]}
+        run_id = d.get("run_id")
+        return {"success": True, "run_id": run_id, "job_id": job_id, "message": "Job run started",
+                "run_url": f"{self.host}/#job/{job_id}/run/{run_id}", "submitted_at": str(datetime.now())}
+
+    # ── Pipelines (Lakeflow Spark Declarative Pipelines) ──────────────────────
+    def find_pipeline_by_name(self, name: str):
+        d = self._call("GET", "/api/2.0/pipelines",
+                       params={"filter": f"name LIKE '{name.replace(chr(39), chr(39) * 2)}'", "max_results": 100})
+        if "_http_error" in d:
+            return {"success": False, "error": d["_http_error"]}
+        match = next((p for p in d.get("statuses", []) if p.get("name") == name), None)
+        return {"success": True, "pipeline_id": (match or {}).get("pipeline_id"),
+                "state": (match or {}).get("state")}
+
+    def create_pipeline(self, spec: dict) -> dict:
+        d = self._call("POST", "/api/2.0/pipelines", json=spec)
+        if "_http_error" in d:
+            return {"success": False, "error": d["_http_error"]}
+        return {"success": True, "pipeline_id": d.get("pipeline_id")}
+
+    def update_pipeline(self, pipeline_id: str, spec: dict) -> dict:
+        d = self._call("PUT", f"/api/2.0/pipelines/{pipeline_id}", json=dict(spec, id=pipeline_id))
+        if "_http_error" in d:
+            return {"success": False, "error": d["_http_error"]}
+        return {"success": True, "pipeline_id": pipeline_id}
+
+    def get_pipeline(self, pipeline_id: str) -> dict:
+        d = self._call("GET", f"/api/2.0/pipelines/{pipeline_id}")
+        if "_http_error" in d:
+            return {"success": False, "error": d["_http_error"]}
+        return {"success": True, "state": d.get("state"), "name": d.get("name")}
+
+    def stop_pipeline(self, pipeline_id: str) -> dict:
+        d = self._call("POST", f"/api/2.0/pipelines/{pipeline_id}/stop")
+        if "_http_error" in d:
+            return {"success": False, "error": d["_http_error"]}
+        return {"success": True}
+
+    def delete_pipeline(self, pipeline_id: str) -> dict:
+        # Tables are retained when a pipeline is deleted (no cascade).
+        d = self._call("DELETE", f"/api/2.0/pipelines/{pipeline_id}")
+        if "_http_error" in d:
+            return {"success": False, "error": d["_http_error"]}
+        return {"success": True}
+
     def run_job_now(self, job_id: int, notebook_params: dict = None) -> dict:
         params = {k: "" if v is None else str(v) for k, v in (notebook_params or {}).items()}
         d = self._call("POST", "/api/2.1/jobs/run-now",
@@ -346,7 +406,9 @@ class DatabricksConnector:
                     task_summaries.append({"task_key": t.get("task_key", ""),
                         "life_cycle": ts.get("life_cycle_state", ""),
                         "result_state": ts.get("result_state", ""),
-                        "state_message": ts.get("state_message", "")})
+                        "state_message": ts.get("state_message", ""),
+                        "notebook_result": t_nb_result or "",
+                        "error": t_error or ""})
                     if t_error or t_trace:
                         task_errors.append(f"[{t.get('task_key','task')}] {t_error}")
                         if t_trace:
@@ -381,7 +443,9 @@ class DatabricksConnector:
                 task_summaries.append({"task_key": t.task_key or "",
                     "life_cycle": ts.life_cycle_state.value if ts and ts.life_cycle_state else "",
                     "result_state": ts.result_state.value if ts and ts.result_state else "",
-                    "state_message": ts.state_message or "" if ts else ""})
+                    "state_message": ts.state_message or "" if ts else "",
+                    "notebook_result": t_nb_result or "",
+                    "error": t_error or ""})
                 if t_error or t_trace:
                     task_errors.append(f"[{t.task_key or 'task'}] {t_error}")
                     if t_trace:

@@ -113,6 +113,18 @@ def generate_metadata_notebooks(
                 "layer":       "validation",
             },
             {
+                "name":        "06_Meta_Cleanup",
+                "code":        _gen_cleanup(catalog, schema, landing_path, ts),
+                "description": "Final task of each table job: clears that table's landing files after Bronze loads them",
+                "layer":       "cleanup",
+            },
+            {
+                "name":        "07_Meta_SDP_DQMetrics",
+                "code":        _gen_sdp_dq_metrics(catalog, schema, ts),
+                "description": "SDP table job task: Bronze/Silver data-quality metrics from the table's pipeline event log",
+                "layer":       "dataquality",
+            },
+            {
                 "name":        "05_Meta_ExecutionLog",
                 "code":        _gen_execution_log(catalog, schema, ts),
                 "description": "Marks the dlt_bronze_silver stage complete in wf_job_metadata / wf_pipeline_metadata / wf_run_history",
@@ -156,6 +168,12 @@ def generate_metadata_notebooks(
                 "code":        _gen_reconciliation(catalog, schema, landing_path, ts),
                 "description": "Aggregate reconciliation — Source vs Bronze numeric column validation",
                 "layer":       "reconciliation",
+            },
+            {
+                "name":        "06_Meta_Cleanup",
+                "code":        _gen_cleanup(catalog, schema, landing_path, ts),
+                "description": "Final task of each table job: clears that table's landing files after Bronze loads them",
+                "layer":       "cleanup",
             },
         ]
 
@@ -323,6 +341,16 @@ def _read_source_with(fmt, options, sql_query=None, table=None):
     r = spark.read.format(fmt).options(**options)
     r = r.option("query", sql_query) if sql_query else r.option("dbtable", table)
     return r.load()
+
+def _fail_task(payload):
+    """Fail this notebook's job task: it shows Failed in the Jobs UI and
+    downstream tasks don't run. Exiting cleanly with {{"status": "FAILED"}}
+    left the task green and let later tasks run on missing data."""
+    try:
+        p = json.loads(payload) if isinstance(payload, str) else dict(payload)
+    except Exception:
+        p = {{"error": str(payload)}}
+    raise RuntimeError(f"{{p.get('stage') or 'Task'}} failed: {{p.get('error') or p}}")
 
 def _landing_dir_for(job, landing_path):
     """Landing folder Extract writes this job's table to (mirrors Extract's path rule)."""
@@ -583,7 +611,7 @@ run_log_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history_log"  # WRITE to this 
 
 job_df = spark.sql(f"SELECT * FROM {{job_tbl}} WHERE job_id = '{{_sql_esc(JOB_ID)}}'")
 if job_df.count() == 0:
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": f"Job {{JOB_ID}} not found in metadata"}}))
+    _fail_task(json.dumps({{"status": "FAILED", "error": f"Job {{JOB_ID}} not found in metadata"}}))
 
 job = job_df.collect()[0].asDict()
 print(f"📋 Job Name       : {{job['job_name']}}")
@@ -661,7 +689,7 @@ except Exception as e:
         """)
     except Exception:
         pass
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "stage": "connection", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
+    _fail_task(json.dumps({{"status": "FAILED", "stage": "connection", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 # COMMAND ----------
 
@@ -788,7 +816,7 @@ except Exception as e:
         """)
     except Exception:
         pass
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "stage": "extract", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
+    _fail_task(json.dumps({{"status": "FAILED", "stage": "extract", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 # COMMAND ----------
 
@@ -908,7 +936,7 @@ run_log_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history_log"  # WRITE to this 
 
 job_df = spark.sql(f"SELECT * FROM {{job_tbl}} WHERE job_id = '{{JOB_ID}}'")
 if job_df.count() == 0:
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": f"Job {{JOB_ID}} not found"}}))
+    _fail_task(json.dumps({{"status": "FAILED", "error": f"Job {{JOB_ID}} not found"}}))
 
 job = job_df.collect()[0].asDict()
 TABLE_NAME   = job["table_name"]
@@ -933,16 +961,13 @@ except Exception as _ce:
     _ce_msg = f"Could not auto-create bronze catalog/schema '{{BRONZE_CATALOG}}': {{_ce}}"
     print(f"❌ {{_ce_msg}}")
     # Verify the catalog exists — if not, fail fast instead of hiding the error
+    _cat_missing = False
     try:
-        _cat_check = spark.sql(f"SHOW CATALOGS LIKE '{{BRONZE_CATALOG}}'").count()
-        if _cat_check == 0:
-            dbutils.notebook.exit(json.dumps({{
-                "status": "FAILED",
-                "stage": "catalog_validation",
-                "error": _ce_msg[:500]
-            }}))
+        _cat_missing = spark.sql(f"SHOW CATALOGS LIKE '{{BRONZE_CATALOG}}'").count() == 0
     except Exception:
         pass  # If we can't even check, continue and let downstream fail with clearer error
+    if _cat_missing:
+        _fail_task({{"status": "FAILED", "stage": "catalog_validation", "error": _ce_msg[:500]}})
 
 MULTI_CATALOG   = bool(VOLUMES_CATALOG and BRONZE_CATALOG and TGT_SCHEMA)
 
@@ -1000,7 +1025,7 @@ except Exception as e:
         """)
     except Exception:
         pass
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
+    _fail_task(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 # COMMAND ----------
 
@@ -1187,7 +1212,7 @@ except Exception as e:
         """)
     except Exception:
         pass
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
+    _fail_task(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 # COMMAND ----------
 
@@ -1280,7 +1305,7 @@ run_log_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history_log"  # WRITE to this 
 
 job_df = spark.sql(f"SELECT * FROM {{job_tbl}} WHERE job_id = '{{_sql_esc(JOB_ID)}}'")
 if job_df.count() == 0:
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": f"Job {{JOB_ID}} not found"}}))
+    _fail_task(json.dumps({{"status": "FAILED", "error": f"Job {{JOB_ID}} not found"}}))
 
 job = job_df.collect()[0].asDict()
 TABLE_NAME   = job["table_name"]
@@ -1384,7 +1409,7 @@ except Exception as e:
         """)
     except Exception:
         pass
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
+    _fail_task(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 # COMMAND ----------
 
@@ -1566,7 +1591,7 @@ except Exception as e:
         """)
     except Exception:
         pass
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
+    _fail_task(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 # COMMAND ----------
 
@@ -2165,7 +2190,7 @@ try:
         _SRC_FORMAT, _SRC_OPTIONS, _qtbl, _qcol = _source_connection(source_config, PASSWORD)
 except Exception as e:
     print(f"❌ Source connection failed: {{e}}")
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
+    _fail_task(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 def _read_source(sql_query):
     return _read_source_with(_SRC_FORMAT, _SRC_OPTIONS, sql_query=sql_query)
@@ -2201,7 +2226,7 @@ try:
         print(f"   • {{cn}} ({{ct}})")
 except Exception as e:
     print(f"❌ Failed to read column metadata: {{e}}")
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
+    _fail_task(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 if not numeric_cols:
     print("⚠️ No numeric columns found — reconciliation skipped")
@@ -2232,7 +2257,7 @@ try:
     print(f"📊 Source row count: {{src_count:,}}")
 except Exception as e:
     print(f"❌ Failed to compute source aggregates: {{e}}")
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
+    _fail_task(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 # COMMAND ----------
 
@@ -2255,7 +2280,7 @@ try:
     brz_row = brz_agg_df.collect()[0]
 except Exception as e:
     print(f"❌ Failed to compute Bronze aggregates: {{e}}")
-    dbutils.notebook.exit(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
+    _fail_task(json.dumps({{"status": "FAILED", "error": (lambda _m: _m[_m.rfind("Caused by:"):] if "Caused by:" in _m else _m)(str(e))[:2000]}}))
 
 # COMMAND ----------
 
@@ -2516,6 +2541,153 @@ dbutils.notebook.exit(json.dumps({{"status": _status, "issues": issues}}))
 '''
 
 
+def _gen_cleanup(catalog, schema, landing_path, ts):
+    """Final task of a table's job: Bronze has loaded the landing files, so
+    replace them with a zero-row schema file (see _clear_landing)."""
+    return f'''# Databricks notebook source
+# MAGIC %md
+# MAGIC # 🧹 Landing Cleanup
+# MAGIC **Generated:** {ts}
+# MAGIC
+# MAGIC Runs after Bronze has loaded this table: landing is transit only.
+# MAGIC ---
+
+# COMMAND ----------
+
+# MAGIC %run ./_Meta_CommonFunctions
+
+# COMMAND ----------
+
+dbutils.widgets.text("job_id", "", "Extract job ID")
+dbutils.widgets.text("catalog", "{catalog}", "Metadata Catalog")
+dbutils.widgets.text("schema", "{schema}", "Metadata Schema")
+dbutils.widgets.text("landing_path", "{landing_path}", "Landing Base Path")
+
+JOB_ID       = dbutils.widgets.get("job_id").strip()
+CATALOG      = dbutils.widgets.get("catalog").strip()
+SCHEMA       = dbutils.widgets.get("schema").strip()
+LANDING_PATH = dbutils.widgets.get("landing_path").strip()
+
+_rows = spark.sql(
+    f"SELECT * FROM `{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata WHERE job_id = '{{_sql_esc(JOB_ID)}}'"
+).collect()
+if not _rows:
+    _fail_task({{"stage": "cleanup", "error": f"Job {{JOB_ID}} not found in metadata"}})
+_cleaned = _clear_landing(_rows[0].asDict(), LANDING_PATH)
+dbutils.notebook.exit(json.dumps({{"status": "COMPLETED" if _cleaned else "SKIPPED", "cleaned": _cleaned}}))
+'''
+
+
+def _gen_sdp_dq_metrics(catalog, schema, ts):
+    """SDP table job task: write this table's Bronze/Silver data-quality rows
+    (same rows the shared orchestrator's Phase 2b wrote) to dataquality.dq_metrics."""
+    return f'''# Databricks notebook source
+# MAGIC %md
+# MAGIC # 📊 SDP Data-Quality Metrics
+# MAGIC **Generated:** {ts}
+# MAGIC
+# MAGIC Runs after the table's pipeline update: reads expectation results from the
+# MAGIC pipeline event log and writes one row per layer to `dataquality.dq_metrics`.
+# MAGIC ---
+
+# COMMAND ----------
+
+import json, uuid, requests
+
+dbutils.widgets.text("catalog", "{catalog}", "Metadata Catalog")
+dbutils.widgets.text("schema", "{schema}", "Metadata Schema")
+dbutils.widgets.text("group_id", "", "Pipeline group")
+dbutils.widgets.text("table", "", "Source table")
+dbutils.widgets.text("pipeline_id", "", "Table pipeline ID")
+dbutils.widgets.text("bronze_catalog", "", "Bronze catalog")
+dbutils.widgets.text("silver_catalog", "", "Silver catalog")
+dbutils.widgets.text("target_schema", "", "Target schema")
+dbutils.widgets.text("run_id", "", "Run ID")
+
+CATALOG     = dbutils.widgets.get("catalog").strip()
+GROUP_ID    = dbutils.widgets.get("group_id").strip()
+PIPELINE_ID = dbutils.widgets.get("pipeline_id").strip()
+BRONZE_CAT  = dbutils.widgets.get("bronze_catalog").strip()
+SILVER_CAT  = dbutils.widgets.get("silver_catalog").strip() or BRONZE_CAT
+TGT_SCHEMA  = dbutils.widgets.get("target_schema").strip()
+RUN_ID      = dbutils.widgets.get("run_id").strip() or uuid.uuid4().hex[:12]
+TABLE       = dbutils.widgets.get("table").strip().split(".")[-1]
+_tl = TABLE.lower()
+
+ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+try:
+    HOST = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
+except Exception:
+    HOST = "https://" + ctx.browserHostName().get()
+_hdrs = {{"Authorization": f"Bearer {{ctx.apiToken().get()}}"}}
+
+# COMMAND ----------
+
+_dq_tbl = f"`{{CATALOG}}`.`dataquality`.`dq_metrics`"
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS `{{CATALOG}}`.`dataquality`")
+spark.sql(f"""
+    CREATE TABLE IF NOT EXISTS {{_dq_tbl}} (
+        run_id STRING, job_id STRING, table_name STRING, layer STRING,
+        input_rows BIGINT, output_rows BIGINT, rejected_rows BIGINT,
+        null_rows BIGINT, dupe_rows BIGINT, quarantined_rows BIGINT,
+        schema_drift BOOLEAN, dq_checks_passed INT, dq_checks_total INT,
+        dq_score DOUBLE, checked_at TIMESTAMP
+    ) USING DELTA
+""")
+
+# Latest completed flow per layer from the pipeline event log (best effort).
+_exp_by = {{}}
+try:
+    _rr = requests.get(f"{{HOST}}/api/2.0/pipelines/{{PIPELINE_ID}}/events",
+                       params={{"max_results": 250, "order_by": "timestamp desc"}}, headers=_hdrs, timeout=60)
+    for _e in (_rr.json().get("events", []) if _rr.ok else []):
+        if _e.get("event_type") != "flow_progress":
+            continue
+        _fp = (_e.get("details", {{}}) or {{}}).get("flow_progress", {{}}) or {{}}
+        if _fp.get("status") != "COMPLETED":
+            continue
+        _dsn = str((_e.get("origin", {{}}) or {{}}).get("flow_name") or (_e.get("origin", {{}}) or {{}}).get("dataset_name") or "")
+        _lyr = "silver" if "silver" in _dsn.lower() else "bronze"
+        if _lyr in _exp_by:
+            continue
+        _dq = _fp.get("data_quality", {{}}) or {{}}
+        _exps = _dq.get("expectations", []) or []
+        _exp_by[_lyr] = {{
+            "passed":  sum(int(x.get("passed_records", 0) or 0) for x in _exps),
+            "failed":  sum(int(x.get("failed_records", 0) or 0) for x in _exps),
+            "dropped": int(_dq.get("dropped_records", 0) or 0),
+            "ctot":    len(_exps),
+            "cpass":   sum(1 for x in _exps if int(x.get("failed_records", 0) or 0) == 0),
+        }}
+except Exception as _ee:
+    print(f"ℹ️ Event-log enrichment skipped: {{_ee}}")
+
+_q2 = lambda v: str(v).replace("'", "''")
+_bfqn = f"`{{BRONZE_CAT}}`.`{{TGT_SCHEMA}}`.`{{_tl}}`"
+_sfqn = (f"`{{SILVER_CAT}}`.`{{TGT_SCHEMA}}`.`{{_tl}}`" if SILVER_CAT != BRONZE_CAT
+         else f"`{{BRONZE_CAT}}`.`{{TGT_SCHEMA}}`.`silver_{{_tl}}`")
+_written = 0
+for _lyr, _fqn in (("bronze", _bfqn), ("silver", _sfqn)):
+    try:
+        _cnt = int(spark.sql(f"SELECT COUNT(*) AS c FROM {{_fqn}}").first()["c"])
+    except Exception:
+        continue  # not published
+    _ex = _exp_by.get(_lyr, {{}})
+    _passed, _failed, _dropped = _ex.get("passed", 0), _ex.get("failed", 0), _ex.get("dropped", 0)
+    _score = round(_passed / (_passed + _failed) * 100, 1) if (_passed + _failed) > 0 else 100.0
+    spark.sql(f"""
+        INSERT INTO {{_dq_tbl}} VALUES (
+            '{{_q2(RUN_ID)}}', '{{_q2(GROUP_ID)}}', '{{_q2(_tl)}}', '{{_lyr}}',
+            {{_cnt + _dropped}}, {{_cnt}}, {{_dropped}}, 0, 0, {{_dropped}},
+            false, {{_ex.get("cpass", 0)}}, {{_ex.get("ctot", 0)}}, {{_score}}, current_timestamp()
+        )
+    """)
+    _written += 1
+print(f"📊 Logged {{_written}} data-quality metric row(s) to {{_dq_tbl}}")
+dbutils.notebook.exit(json.dumps({{"status": "COMPLETED", "rows": _written}}))
+'''
+
+
 def _gen_execution_log(catalog, schema, ts):
     return f'''# Databricks notebook source
 # MAGIC %md
@@ -2766,9 +2938,14 @@ def _targets_this_pipeline(_tc_json):
         return False
     return (not TARGET_SCHEMA) or (_ts == TARGET_SCHEMA)
 
+# "group" scope = one pipeline per table (its own job and compute); the
+# shared per-schema pipeline (scope unset) keeps processing every table.
+PIPELINE_SCOPE = spark.conf.get("pipeline.scope", "").strip().lower()
 _seen = set()
 all_dlt_jobs = []
 for _j in _all_rows:
+    if PIPELINE_SCOPE == "group" and _j.get("group_id") != GROUP_ID:
+        continue
     if not _targets_this_pipeline(_j.get("target_config")):
         continue
     _tn = (_j.get("table_name") or "").lower()

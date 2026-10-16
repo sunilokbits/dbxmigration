@@ -328,20 +328,33 @@ class TestOrchestratorsUseIsolatedRuns(unittest.TestCase):
 
 
 class TestAppRunParameters(unittest.TestCase):
-    def test_orchestrator_run_lists_table_first(self):
+    def test_table_job_run_names_the_table_and_passes_run_ids(self):
         import workflow_manager as wfm
         conn = MagicMock()
-        conn.run_notebook.return_value = {"success": False, "message": "stop here"}
+        conn.list_jobs_by_name.return_value = {"success": True, "jobs": [{"job_id": 9}]}
+        conn.reset_job.return_value = {"success": True, "job_id": 9}
+        conn.run_job_with_parameters.return_value = {"success": False, "message": "stop here"}
+        jobs = {"e": {"job_id": "e", "job_name": "e", "stage": "extract"},
+                "b": {"job_id": "b", "job_name": "b", "stage": "landing_to_bronze"},
+                "s": {"job_id": "s", "job_name": "s", "stage": "bronze_to_silver"}}
         with unittest.mock.patch("databricks_connector.DatabricksConnector", return_value=conn), \
-             unittest.mock.patch.dict(wfm.PIPELINE_GROUPS, {"g1": {"full_table": "TPCH_SF1.PARTSUPP",
-                                                                  "target_config": {"bronze_catalog": "b"},
-                                                                  "job_ids": []}}), \
+             unittest.mock.patch.dict(wfm.JOB_REGISTRY, jobs), \
+             unittest.mock.patch.dict(wfm.PIPELINE_GROUPS, {"g1": {
+                 "group_id": "g1", "full_table": "TPCH_SF1.PARTSUPP", "table_name": "PARTSUPP",
+                 "source_config": {"source_type": "snowflake"},
+                 "target_config": {"bronze_catalog": "b"}, "job_ids": list(jobs)}}), \
+             unittest.mock.patch.object(wfm, "_resolve_source_password", return_value=""), \
+             unittest.mock.patch.object(wfm, "_sync_run_to_dbr"), \
              unittest.mock.patch.object(wfm, "_load_deploy_config", return_value={}):
-            wfm.run_pipeline_on_databricks("g1", host="https://h", token="dapi-xxxxxxxxxx",
-                                           catalog="c", schema="s", workspace_path=WS)
-        params = conn.run_notebook.call_args[1]["params"]
-        self.assertEqual(list(params)[0], "table")
-        self.assertEqual(params["table"], "TPCH_SF1.PARTSUPP")
+            r = wfm.run_pipeline_on_databricks("g1", host="https://h", token="dapi-xxxxxxxxxx",
+                                               catalog="c", schema="s", workspace_path=WS)
+        self.assertFalse(r["success"])
+        conn.run_notebook.assert_not_called()
+        self.assertEqual(conn.reset_job.call_args[0][1]["name"], "Migration Studio - Snowflake - TPCH_SF1.PARTSUPP")
+        job_id, params = conn.run_job_with_parameters.call_args[0][:2]
+        self.assertEqual(job_id, 9)
+        self.assertEqual(set(params), set(pipeline_jobs.TABLE_JOB_PARAMETERS))
+        self.assertTrue(params["extract_run_id"] and params["bronze_run_id"] and params["silver_run_id"])
 
 
 if __name__ == "__main__":
