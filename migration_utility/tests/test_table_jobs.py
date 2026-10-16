@@ -183,10 +183,14 @@ class TestRunPaths(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         for name, val in (("_load_deploy_config", {}), ("_deployed_workspace_path", WS),
-                          ("_resolve_source_password", "")):
+                          ("_resolve_source_password", ""), ("_resolve_databricks_token", "dapi-xxxxxxxxxx")):
             p = mock.patch.object(wfm, name, return_value=val)
             p.start()
             self.addCleanup(p.stop)
+        # run_job passes no host: it comes from the app's configured workspace.
+        p = mock.patch.object(wfm, "_dbr_host", "https://h")
+        p.start()
+        self.addCleanup(p.stop)
         self.conn = mock.MagicMock()
         self.conn.list_jobs_by_name.return_value = {"success": True, "jobs": [{"job_id": 9}]}
         self.conn.reset_job.return_value = {"success": True, "job_id": 9}
