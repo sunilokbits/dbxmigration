@@ -96,6 +96,20 @@ class TestNotebooks(unittest.TestCase):
         self.assertIn("06_Meta_Cleanup", std)
         self.assertNotIn("07_Meta_SDP_DQMetrics", std)
 
+    def test_table_job_notebooks_never_update_metadata(self):
+        """Insert-only: a run appends to wf_run_history_log and never UPDATEs/MERGEs
+        the job or pipeline metadata, so parallel table jobs can't conflict."""
+        import re
+        write = re.compile(r"\b(UPDATE|MERGE\s+INTO|DELETE\s+FROM)\b[^\n]*(job_tbl|pipe_tbl|wf_job_metadata|wf_pipeline_metadata)")
+        for mode, names in (("dlt", ("01_Meta_Extract", "04_Meta_Reconciliation", "05_Meta_ExecutionLog", "06_Meta_Cleanup",
+                                     "07_Meta_SDP_DQMetrics", "02_Meta_SDP_Pipeline")),
+                            ("standard", ("01_Meta_Extract", "02_Meta_Bronze", "03_Meta_Silver",
+                                          "04_Meta_Reconciliation", "06_Meta_Cleanup"))):
+            nbs = _nbs(mode)
+            for n in names:
+                self.assertIsNone(write.search(nbs[n]), f"{mode}/{n}")
+            self.assertIn("INSERT INTO {run_log_tbl}", nbs["01_Meta_Extract"])
+
     def test_stage_notebooks_fail_their_task(self):
         for mode, names in (("dlt", ("01_Meta_Extract", "04_Meta_Reconciliation")),
                             ("standard", ("01_Meta_Extract", "02_Meta_Bronze", "03_Meta_Silver"))):

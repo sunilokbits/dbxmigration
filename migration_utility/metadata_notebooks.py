@@ -843,20 +843,9 @@ try:
 except Exception as e:
     print(f"⚠️ Run history update failed: {{e}}")
 
-# Update job metadata
-try:
-    spark.sql(f"""
-        UPDATE {{job_tbl}}
-        SET last_run_id = '{{RUN_ID}}',
-            last_run_at = current_timestamp(),
-            last_status = 'success',
-            status = 'success',
-            run_count = run_count + 1,
-            updated_at = current_timestamp()
-        WHERE job_id = '{{JOB_ID}}'
-    """)
-except Exception as e:
-    print(f"⚠️ Job metadata update failed: {{e}}")
+# wf_job_metadata is never updated from a run (insert-only): this run's
+# outcome is the row just appended to wf_run_history_log. Parallel table
+# jobs therefore never write to the same metadata table rows.
 
 # COMMAND ----------
 
@@ -1231,16 +1220,9 @@ try:
 except Exception as e:
     print(f"⚠️ Run history update failed: {{e}}")
 
-try:
-    spark.sql(f"""
-        UPDATE {{job_tbl}}
-        SET last_run_id = '{{RUN_ID}}', last_run_at = current_timestamp(),
-            last_status = 'success', status = 'success',
-            run_count = run_count + 1, updated_at = current_timestamp()
-        WHERE job_id = '{{JOB_ID}}'
-    """)
-except Exception as e:
-    print(f"⚠️ Job update failed: {{e}}")
+# wf_job_metadata is never updated from a run (insert-only): this run's
+# outcome is the row just appended to wf_run_history_log. Parallel table
+# jobs therefore never write to the same metadata table rows.
 
 # COMMAND ----------
 
@@ -1636,17 +1618,9 @@ try:
 except Exception as e:
     print(f"⚠️ Run history update failed: {{e}}")
 
-# Update job metadata
-try:
-    spark.sql(f"""
-        UPDATE {{job_tbl}}
-        SET last_run_id = '{{RUN_ID}}', last_run_at = current_timestamp(),
-            last_status = 'success', status = 'success',
-            run_count = run_count + 1, updated_at = current_timestamp()
-        WHERE job_id = '{{JOB_ID}}'
-    """)
-except Exception as e:
-    print(f"⚠️ Job update failed: {{e}}")
+# wf_job_metadata is never updated from a run (insert-only): this run's
+# outcome is the row just appended to wf_run_history_log. Parallel table
+# jobs therefore never write to the same metadata table rows.
 
 # COMMAND ----------
 
@@ -1895,12 +1869,6 @@ for group in groups:
                 spark.sql(f"""
                     INSERT INTO {{run_log_tbl}} (run_id, status, error_message, completed_at, logged_at)
                     VALUES ('{{run_id}}', 'failed', '{{_sql_esc(e)}}', current_timestamp(), current_timestamp())
-                """)
-                spark.sql(f"""
-                    UPDATE {{job_tbl}}
-                    SET last_status = 'failed', status = 'failed',
-                        fail_count = fail_count + 1, updated_at = current_timestamp()
-                    WHERE job_id = '{{job_id}}'
                 """)
             except Exception:
                 pass
@@ -2691,15 +2659,13 @@ dbutils.notebook.exit(json.dumps({{"status": "COMPLETED", "rows": _written}}))
 def _gen_execution_log(catalog, schema, ts):
     return f'''# Databricks notebook source
 # MAGIC %md
-# MAGIC # 📝 Metadata Execution Logging — Mark SDP Stage Complete
+# MAGIC # 📝 Metadata Execution Logging — Record SDP Stage Outcome
 # MAGIC **Generated:** {ts}
 # MAGIC
 # MAGIC Called by the orchestrator AFTER the Spark Declarative Pipeline finishes.
-# MAGIC The SDP itself never updates these metadata tables, so this marks the
-# MAGIC `dlt_bronze_silver` stage complete:
-# MAGIC - `wf_job_metadata`      — dlt_bronze_silver rows: status / last_status / updated_at
-# MAGIC - `wf_pipeline_metadata` — group status / updated_at
-# MAGIC - `wf_run_history`       — one dlt_bronze_silver run record per group
+# MAGIC Insert-only: appends one `dlt_bronze_silver` run record per group to
+# MAGIC `wf_run_history_log`. `wf_job_metadata` / `wf_pipeline_metadata` are
+# MAGIC never updated from a run.
 # MAGIC ---
 
 # COMMAND ----------
@@ -2751,7 +2717,7 @@ print(f"📝 Logging SDP stage: status={{_st}} groups={{len(GROUPS)}} rows={{_to
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 🗄️ Update Metadata Tables
+# MAGIC ## 🗄️ Record Run History
 
 # COMMAND ----------
 
@@ -2759,8 +2725,6 @@ job_tbl     = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_job_metadata"
 pipe_tbl    = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_pipeline_metadata"
 run_log_tbl = f"`{{CATALOG}}`.`{{SCHEMA}}`.wf_run_history_log"  # append-only -- wf_run_history itself is a view over this
 
-updated_jobs = 0
-updated_pipes = 0
 inserted_runs = 0
 
 if not GROUPS:
@@ -2768,35 +2732,8 @@ if not GROUPS:
 else:
     _in = ", ".join(_esc(g) for g in GROUPS)
 
-    # 1. wf_job_metadata — mark the dlt_bronze_silver jobs for these groups
-    try:
-        spark.sql(f"""
-            UPDATE {{job_tbl}}
-            SET status = {{_esc(_st)}}, last_status = {{_esc(_st)}},
-                last_run_at = current_timestamp(), updated_at = current_timestamp()
-            WHERE stage = 'dlt_bronze_silver' AND group_id IN ({{_in}})
-        """)
-        updated_jobs = spark.sql(f"""
-            SELECT COUNT(*) FROM {{job_tbl}}
-            WHERE stage = 'dlt_bronze_silver' AND group_id IN ({{_in}})
-        """).collect()[0][0]
-        print(f"  ✅ wf_job_metadata: {{updated_jobs}} dlt_bronze_silver row(s) -> {{_st}}")
-    except Exception as e:
-        print(f"  ⚠️ wf_job_metadata update failed: {{e}}")
-
-    # 2. wf_pipeline_metadata — mark the pipeline groups
-    try:
-        spark.sql(f"""
-            UPDATE {{pipe_tbl}}
-            SET status = {{_esc(_st)}}, updated_at = current_timestamp()
-            WHERE group_id IN ({{_in}})
-        """)
-        updated_pipes = spark.sql(f"SELECT COUNT(*) FROM {{pipe_tbl}} WHERE group_id IN ({{_in}})").collect()[0][0]
-        print(f"  ✅ wf_pipeline_metadata: {{updated_pipes}} group(s) -> {{_st}}")
-    except Exception as e:
-        print(f"  ⚠️ wf_pipeline_metadata update failed: {{e}}")
-
-    # 3. wf_run_history — one dlt_bronze_silver run record per group's job
+    # Insert-only: one dlt_bronze_silver run record per group's job. The job
+    # and pipeline metadata rows are read here, never updated.
     try:
         _err = None if _st == "success" else f"SDP pipeline {{DLT_STATUS}}"
         _jobs = spark.sql(f"""
@@ -2852,8 +2789,6 @@ except Exception as e:
 dbutils.notebook.exit(json.dumps({{
     "status":            "COMPLETED",
     "final_status":      _st,
-    "updated_jobs":      updated_jobs,
-    "updated_pipelines": updated_pipes,
     "inserted_runs":     inserted_runs,
     "duplicate_warnings": _dup_warn,
 }}))
