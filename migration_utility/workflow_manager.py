@@ -601,6 +601,9 @@ def _fqn(table: str) -> str:
 
 
 RECON_TABLE = "reconcilationdetails"
+# Fixed schema under the metadata catalog -- exactly where 04_Meta_Reconciliation
+# writes ({metadata_catalog}.reconciliation.reconcilationdetails).
+RECON_SCHEMA_NAME = "reconciliation"
 
 # Centralized data-quality metrics live in a dedicated `dataquality` schema
 # under the SAME metadata catalog as configtables — one durable place the Data
@@ -609,21 +612,22 @@ DQ_SCHEMA_NAME = "dataquality"
 DQ_METRICS_TABLE = "dq_metrics"
 
 
-def _recon_fqn() -> str:
-    """Fully qualified reconciliation results table.
+def _meta_catalog() -> str:
+    """Configured metadata catalog, resolved fresh like _fqn()."""
+    try:
+        from config_cache import get_config as _get_app_cfg
+        return (_get_app_cfg() or {}).get("metadata_catalog") or _dbr_catalog or "main"
+    except Exception:
+        return _dbr_catalog or "main"
 
-    Lives in the exact same catalog.schema as wf_run_history/wf_job_metadata/
-    etc -- resolved the same fully-dynamic way via _fqn(), not a separate
-    hardcoded schema name. Reconciliation previously had its own dedicated,
-    user-configurable catalog+schema in Settings for this single table;
-    giving it its own fixed "reconciliation" schema name would have been
-    just as static/hardcoded in a different way. Piggybacking on whatever
-    metadata_catalog/metadata_schema is currently configured means it always
-    lands wherever the rest of this app's metadata tables land, with no
-    separate schema-creation step and no place for it to drift out of sync.
-    Table name is lowercase, matching bronze/silver elsewhere.
-    """
-    return _fqn(RECON_TABLE)
+
+def _recon_fqn() -> str:
+    """Fully qualified reconciliation results table:
+    {metadata_catalog}.reconciliation.reconcilationdetails -- the same place
+    the 04_Meta_Reconciliation notebook writes, so the report reads what runs
+    actually produced (it used to read an always-empty copy in the metadata
+    schema)."""
+    return f"`{_meta_catalog()}`.`{RECON_SCHEMA_NAME}`.`{RECON_TABLE}`"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -984,11 +988,9 @@ def init_metadata_flow(host: str, token: str, catalog: str = "main",
         ) USING DELTA
         COMMENT 'Scheduler execution history — audit log for all scheduled runs'""",
 
-        # 9. Reconciliation results -- consolidated here from what used to be
-        # its own dedicated, user-configurable catalog for a single table
-        # (see _recon_fqn()). Lands in the same catalog.schema as every
-        # other table in this list (no separate schema needed -- the
-        # CREATE SCHEMA above already covers it).
+        # 9. Reconciliation results -- fixed `reconciliation` schema under the
+        # metadata catalog, where 04_Meta_Reconciliation writes (see _recon_fqn()).
+        f"CREATE SCHEMA IF NOT EXISTS `{_meta_catalog()}`.`{RECON_SCHEMA_NAME}`",
         f"""CREATE TABLE IF NOT EXISTS {_recon_fqn()} (
             recon_run_id    STRING NOT NULL,
             pipeline_run_id STRING NOT NULL,
@@ -1115,7 +1117,7 @@ def init_metadata_flow(host: str, token: str, catalog: str = "main",
 
     _meta_tables = [TBL_PIPELINES, TBL_JOBS, TBL_JOBS_HISTORY, TBL_RUNS,
                     TBL_SOURCES, TBL_SCH_CONFIG, TBL_SCH_HISTORY]
-    _extra_tables = [RECON_TABLE, f"{DQ_SCHEMA_NAME}.{DQ_METRICS_TABLE}"]
+    _extra_tables = [f"{RECON_SCHEMA_NAME}.{RECON_TABLE}", f"{DQ_SCHEMA_NAME}.{DQ_METRICS_TABLE}"]
     _app_tables = ["migration_jobs", "dm_models", "app_config", "audit_log",
                    "job_schedules", "user_roles"]
     _all_tables = _meta_tables + _extra_tables + (_app_tables if _app_tables_ok else [])

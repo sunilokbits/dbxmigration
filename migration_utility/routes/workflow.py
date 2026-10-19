@@ -799,12 +799,11 @@ def wf_recon_data():
         if not dbx_host or not dbx_token:
             return jsonify({"success": False, "rows": [], "error": "Databricks not configured."})
 
-        # Reconciliation results live in the same catalog.schema as every
-        # other metadata table (wf_run_history etc) -- not a separate
-        # catalog/schema (see workflow_manager._recon_fqn).
+        # {metadata_catalog}.reconciliation.reconcilationdetails -- where the
+        # reconciliation notebook writes (see workflow_manager._recon_fqn).
         recon_cat = cfg.get("metadata_catalog", "admin_source") or "admin_source"
-        recon_sch = cfg.get("metadata_schema", "configtables") or "configtables"
-        recon_tbl = "reconcilationdetails"
+        recon_sch = wfm.RECON_SCHEMA_NAME
+        recon_tbl = wfm.RECON_TABLE
 
         uc = UnityCatalogExecutor(dbx_host, dbx_token, recon_cat, recon_sch)
         wh_resp = uc.list_warehouses()

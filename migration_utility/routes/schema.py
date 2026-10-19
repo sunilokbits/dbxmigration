@@ -390,12 +390,12 @@ def get_recon_data():
 
     dbx_host  = cfg.get("databricks_host", "").rstrip("/")
     dbx_token = get_databricks_token()
-    # Reconciliation results live in the same catalog.schema as every other
-    # metadata table (wf_run_history etc) -- not a separate catalog/schema
-    # (see workflow_manager._recon_fqn).
+    # {metadata_catalog}.reconciliation.reconcilationdetails -- where the
+    # reconciliation notebook writes (see workflow_manager._recon_fqn).
+    import workflow_manager as _wfm
     recon_cat = cfg.get("metadata_catalog", "admin_source") or "admin_source"
-    recon_sch = cfg.get("metadata_schema", "configtables") or "configtables"
-    recon_tbl = "reconcilationdetails"
+    recon_sch = _wfm.RECON_SCHEMA_NAME
+    recon_tbl = _wfm.RECON_TABLE
 
     if not dbx_host or not dbx_token:
         return jsonify({"rows": [], "error": "Databricks host/token not configured."}), 400

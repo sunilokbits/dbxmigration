@@ -78,12 +78,11 @@ def resolve_configured_catalogs() -> dict:
     bronze_cat, bronze_sch = _layer("bronze")
     silver_cat, silver_sch = _layer("silver")
 
-    # Reconciliation results live in the same catalog.schema as every other
-    # metadata table (wf_run_history etc) -- not a separate catalog/schema
-    # (see workflow_manager._recon_fqn). The "Logging" layer / ExecutionLog
-    # table was removed entirely -- wf_run_history already captures every
-    # run's status/timing/error detail.
-    recon_cat, recon_sch = (meta_cat, meta_sch) if (meta_cat and meta_sch) else ("", "")
+    # Reconciliation results: fixed `reconciliation` schema under the metadata
+    # catalog (see workflow_manager._recon_fqn). The "Logging" layer /
+    # ExecutionLog table was removed entirely -- wf_run_history already
+    # captures every run's status/timing/error detail.
+    recon_cat, recon_sch = (meta_cat, "reconciliation") if meta_cat else ("", "")
 
     return {
         "metadata": (meta_cat, meta_sch),
@@ -134,7 +133,8 @@ def _render_faq(answer: str) -> str:
     return (answer
             .replace("{META}", _fq("metadata", "your configured metadata catalog/schema (see Settings)"))
             .replace("{BRONZE}", _fq("bronze", "your configured Bronze catalog/schema"))
-            .replace("{SILVER}", _fq("silver", "your configured Silver catalog/schema")))
+            .replace("{SILVER}", _fq("silver", "your configured Silver catalog/schema"))
+            .replace("{RECON}", _fq("reconciliation", "your metadata catalog's reconciliation schema")))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -165,6 +165,10 @@ _METADATA_TABLES = {
         ("wf_scheduler_config",
          "schedule_id, table_name, table_schema, group_id, job_names, type, cron, interval_value, interval_unit, "
          "status, created_at, last_run, next_run"),
+    ],
+    # reconciliation results -> metadata_catalog.reconciliation (fixed schema,
+    # see workflow_manager._recon_fqn)
+    "recon": [
         ("reconcilationdetails",
          "recon_run_id, pipeline_run_id, job_id, source_table, bronze_table, column_name, data_type, "
          "source_value, bronze_value, variance, variance_pct, status, recon_timestamp"),
@@ -209,6 +213,8 @@ def _known_metadata_schema_context() -> str:
              "migration / pipeline / run-history / reconciliation / audit questions):\n"]
     for tbl, cols in _METADATA_TABLES["meta"]:
         lines.append(f"  • `{meta_cat}`.`{meta_sch}`.`{tbl}`  —  {cols}")
+    for tbl, cols in _METADATA_TABLES["recon"]:
+        lines.append(f"  • `{meta_cat}`.`reconciliation`.`{tbl}`  —  {cols}")
     for tbl, cols in _METADATA_TABLES["app"]:
         lines.append(f"  • `{meta_cat}`.`{_APP_ADMIN_SCHEMA}`.`{tbl}`  —  {cols}")
     lines.append("")
@@ -440,8 +446,8 @@ Config stored in `{META}.wf_scheduler_config`.""",
     "reconciliation": """**Reconciliation** — Compare source vs target after migration.
 
 Checks row counts, numeric aggregate sums, NULL differences, and variance %.
-Results in `{META}.reconcilationdetails` (same catalog.schema
-as wf_run_history and this deployment's other metadata tables).""",
+Results in `{RECON}.reconcilationdetails` (the `reconciliation` schema
+under this deployment's metadata catalog).""",
 
     "data_quality": """**Data Quality** — Validate completeness, accuracy, consistency, freshness.
 
