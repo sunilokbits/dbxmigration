@@ -525,7 +525,11 @@ init_db()
 # ── Static asset caching ──────────────────────────────────────────────────────
 @app.after_request
 def add_cache_headers(response):
-    if request.path.startswith("/static/"):
+    if request.path.startswith("/static/video/"):
+        # The accelerator video is large and versioned by file name: let the
+        # browser keep it instead of re-downloading on every open.
+        response.headers["Cache-Control"] = "public, max-age=86400"
+    elif request.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return response
 

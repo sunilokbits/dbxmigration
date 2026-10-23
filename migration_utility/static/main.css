@@ -347,7 +347,7 @@ body {
 /* â”€â”€ VIDEO MODAL â”€â”€ */
 .vid-overlay { display:none; position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,.65); backdrop-filter:blur(8px); align-items:center; justify-content:center; opacity:0; transition:opacity .3s ease; }
 .vid-overlay.open { display:flex; opacity:1; }
-.vid-modal { background:#fff; border-radius:20px; width:92vw; max-width:1100px; max-height:92vh; overflow:hidden; box-shadow:0 25px 80px rgba(0,0,0,.3); display:flex; flex-direction:column; animation:vidSlideUp .35s ease; }
+.vid-modal { background:#fff; border-radius:20px; width:94vw; max-width:1600px; max-height:92vh; overflow:hidden; box-shadow:0 25px 80px rgba(0,0,0,.3); display:flex; flex-direction:column; animation:vidSlideUp .35s ease; }
 @keyframes vidSlideUp { from{transform:translateY(30px);opacity:0} to{transform:translateY(0);opacity:1} }
 .vid-modal-hd { display:flex; align-items:center; justify-content:space-between; padding:20px 28px; border-bottom:1px solid #E5E7EB; }
 .vid-modal-hd h2 { font-size:1.15rem; font-weight:700; color:#1B1F2E; display:flex; align-items:center; gap:10px; }
@@ -357,8 +357,11 @@ body {
 .vid-close svg { width:16px; height:16px; stroke:#6B7280; stroke-width:2.5; fill:none; }
 .vid-body { display:flex; flex:1; min-height:0; overflow:hidden; }
 .vid-player-col { flex:3; background:#000; display:flex; flex-direction:column; }
-.vid-screen { flex:1; display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden; min-height:420px; }
-.vid-screen video { width:100%; height:100%; object-fit:contain; }
+.vid-screen { display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden; aspect-ratio:16/9; width:100%; max-height:calc(92vh - 80px); background:#000; }
+.vid-screen video { width:100%; height:100%; object-fit:contain; display:block; background:#000; }
+.vid-dl { display:inline-flex; align-items:center; gap:6px; padding:7px 14px; border-radius:99px; border:1px solid #E5E7EB; background:#F9FAFB; color:#374151; font-size:12px; font-weight:700; text-decoration:none; transition:all .2s; }
+.vid-dl:hover { background:#FBEAF5; border-color:#F3C1E0; color:#AF1C86; }
+.vid-dl svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
 .vid-placeholder { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; color:#9CA3AF; }
 .vid-placeholder svg { width:72px; height:72px; opacity:.5; }
 .vid-placeholder span { font-size:14px; font-weight:500; }
@@ -370,6 +373,9 @@ body {
 .vid-progress-fill { height:100%; background:linear-gradient(90deg,#6366F1,#8B5CF6); border-radius:99px; width:0%; transition:width .2s; }
 .vid-time { font-size:11px; color:#9CA3AF; font-family:var(--font-mono); min-width:80px; text-align:right; }
 .vid-chapters-col { flex:1.2; background:#F9FAFB; border-left:1px solid #E5E7EB; display:flex; flex-direction:column; min-width:260px; max-width:340px; }
+/* the video sets the row height; the chapter list scrolls within it */
+.vid-chapters-col { position:relative; }
+.vid-chapters-col .vid-ch-list { position:absolute; top:49px; left:0; right:0; bottom:0; }
 .vid-ch-hd { padding:16px 20px; font-size:12px; font-weight:700; color:#5F6B7A; text-transform:uppercase; letter-spacing:.08em; border-bottom:1px solid #E5E7EB; }
 .vid-ch-list { flex:1; overflow-y:auto; padding:8px 12px; }
 .vid-ch-item { display:flex; align-items:flex-start; gap:12px; padding:12px 14px; border-radius:12px; cursor:pointer; transition:all .2s; margin-bottom:4px; }
