@@ -57,12 +57,18 @@ def get_deploy_config():
     plaintext value instead of falling back to the governed secret.
     """
     import copy
-    from secrets_helper import MASKED_VALUE
+    from secrets_helper import MASKED_VALUE, get_secret
+    from source_registry import oauth_client_secret_key
 
     try:
         cfg = copy.deepcopy(get_config())
         if cfg.get("source", {}).get("password"):
             cfg["source"]["password"] = MASKED_VALUE
+        src = cfg.get("source") or {}
+        _sk = oauth_client_secret_key(src.get("source_type", ""))
+        if _sk and src.get("api_auth_type") == "oauth2":
+            # Client ID comes straight from the saved config; the secret is only masked.
+            src["password"] = MASKED_VALUE if get_secret(_sk) else ""
         if cfg.get("databricks_token"):
             cfg["databricks_token"] = MASKED_VALUE
         if cfg.get("devops_pat"):
@@ -94,20 +100,29 @@ def save_deploy_config():
     """
     try:
         from config_cache import save_config, get_config
-        from secrets_helper import is_masked, set_source_password, set_databricks_token, set_devops_token
+        from secrets_helper import is_masked, set_source_password, set_databricks_token, set_devops_token, set_secret
+        from source_registry import oauth_client_secret_key
         data = request.get_json(force=True)
 
         existing = get_config()
         existing_source = existing.get("source", {}) if isinstance(existing.get("source"), dict) else {}
 
-        if isinstance(data.get("source"), dict):
-            pw = data["source"].get("password", "")
+        _src = data.get("source") if isinstance(data.get("source"), dict) else None
+        _sk = oauth_client_secret_key(_src.get("source_type", "")) if _src else None
+        if _sk and _src.get("api_auth_type") == "oauth2":
+            # Client ID stays in the config (username); only the client secret is a secret.
+            _csec = _src.get("password", "")
+            if _csec and not is_masked(_csec):
+                set_secret(_sk, _csec)
+            _src["password"] = ""
+        elif _src is not None:
+            pw = _src.get("password", "")
             if is_masked(pw):
-                data["source"]["password"] = existing_source.get("password", "")
+                _src["password"] = existing_source.get("password", "")
             elif pw:
-                source_type = data["source"].get("source_type", "sqlserver")
+                source_type = _src.get("source_type", "sqlserver")
                 if set_source_password(pw, source_type=source_type):
-                    data["source"]["password"] = ""
+                    _src["password"] = ""
 
         tok = data.get("databricks_token", "")
         if is_masked(tok):

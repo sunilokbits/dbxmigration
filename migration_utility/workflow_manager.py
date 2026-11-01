@@ -2144,6 +2144,45 @@ def create_pipeline_for_table(
         _m = method_for(source_config)
         if _m:
             source_config["ingestion_method"] = _m
+        # Lakeflow Connect already lands the source in Delta; Extract reads that table.
+        if source_config["connector"] == "lakeflow":
+            from enterprise_sources import lakeflow_destination
+            _conn = (source_config.get("server") or "").strip()
+            try:
+                _lf = lakeflow_destination(_conn, table_name)
+            except Exception as _lf_err:
+                return {"success": False, "error": f"Could not look up Lakeflow Connect pipelines: {_lf_err}"}
+            if not _lf:
+                return {"success": False, "error": (
+                    f"No Lakeflow Connect ingestion pipeline found for connection '{_conn}' and "
+                    f"table '{table_name}'. Create and run the ingestion pipeline first, then "
+                    "create this pipeline again.")}
+            source_config["lakeflow_table"] = _lf
+        # REST sources with a registry profile (ServiceNow, Dataverse, SharePoint) are read
+        # by the Extract notebook's API branch. Only secret KEY names are stored.
+        from source_registry import rest_profile
+        _st = source_config.get("source_type", "")
+        if source_config["connector"] in ("api", "sharepoint") and rest_profile(_st):
+            from secrets_helper import _SECRET_SCOPE
+            from source_registry import rest_api_base, rest_oauth_secret_key
+            source_config["connector"] = "api"
+            _auth = (source_config.get("api_auth_type") or "").strip().lower() or rest_profile(_st)["auth_types"][0]
+            source_config["api_auth_type"] = _auth
+            _prof = rest_profile(_st, _auth)
+            if _auth == "oauth2":
+                _cid = (source_config.get("username") or "").strip()
+                if not _cid:
+                    return {"success": False, "error": "Enter the OAuth Client ID in Settings (Source Database Connection) and save, then create the pipeline again."}
+                source_config["oauth_client_id"] = _cid
+                if "{tenant}" in (_prof.get("token_url") or ""):
+                    _tid = (source_config.get("tenant_id") or "").strip()
+                    if not _tid:
+                        return {"success": False, "error": "Enter the Tenant ID in Settings (Source Database Connection) and save, then create the pipeline again."}
+                    source_config["oauth_tenant_id"] = _tid
+            source_config["api_profile"] = _prof
+            source_config["api_base"] = rest_api_base(source_config.get("server", ""), _prof)
+            source_config["secret_scope"] = _SECRET_SCOPE
+            source_config["oauth_client_secret_key"] = rest_oauth_secret_key(_st)
 
     # ── Validate catalogs exist on Databricks before creating pipeline ──
     tc = target_config or {}
@@ -2280,6 +2319,15 @@ def create_pipeline_for_table(
         source_config["cdc_mode"] = cdc_mode
     if primary_keys:
         source_config["primary_keys"] = primary_keys
+
+    _lf_table = source_config.get("lakeflow_table", "")
+    if _lf_table:
+        _lf_cat, _lf_sch = _lf_table.split(".")[:2]
+        _tgt_sch = target_config.get("target_schema") or target_config.get("metadata_schema", "")
+        if (target_config.get("bronze_catalog", "").lower(), _tgt_sch.lower()) == (_lf_cat.lower(), _lf_sch.lower()):
+            return {"success": False, "error": (
+                f"Target Bronze schema {_lf_cat}.{_lf_sch} is where Lakeflow Connect already writes "
+                f"{table_name}; pick a different Default Schema so the pipeline doesn't overwrite it.")}
 
     if pipeline_mode == "dlt":
         stage_list = ["extract", "dlt_bronze_silver"]
@@ -3725,10 +3773,22 @@ _pipeline_jobs = {}                  # {"workspace_path": ..., "jobs": {notebook
 # ─────────────────────────────────────────────────────────────────────────────
 #  ONE DATABRICKS JOB (AND SDP PIPELINE) PER TABLE
 # ─────────────────────────────────────────────────────────────────────────────
+_METHOD_NAME_TAGS = {"rest_api": "REST API", "file": "File Drop", "streaming": "Streaming",
+                     "lakeflow_connect": "Lakeflow", "adls_landing": "ADLS", "jdbc": "JDBC"}
+
+
 def _source_label(source_config: dict) -> str:
-    from source_registry import get as _src_get
-    st = (source_config or {}).get("source_type") or "sqlserver"
-    return (_src_get(st) or {}).get("label") or st
+    from source_registry import ENTERPRISE, get as _src_get
+    sc = source_config or {}
+    st = sc.get("source_type") or "sqlserver"
+    label = (_src_get(st) or {}).get("label") or st
+    # A non-default ingestion method gets its own job/pipeline names, so the same
+    # table loaded two ways (e.g. Lakeflow vs REST) never overwrites the other.
+    methods = (ENTERPRISE.get(st) or {}).get("methods") or []
+    m = sc.get("ingestion_method")
+    if len(methods) > 1 and m in methods and m != methods[0]:
+        label = f"{label} {_METHOD_NAME_TAGS.get(m, m)}"
+    return label
 
 
 def _sdp_table_names(table_name: str, bronze_cat: str, silver_cat: str, target_schema: str):
@@ -4407,6 +4467,9 @@ def run_pipeline_on_databricks(
     params["bronze_catalog"]  = tgt_cfg.get("bronze_catalog", "")
     params["silver_catalog"]  = tgt_cfg.get("silver_catalog", "")
     params["target_schema"]   = tgt_cfg.get("target_schema", "")
+    # The Extract notebook lands to the group's own volumes_catalog/target_schema
+    # when both are set, so the run must not re-point them via the Layer Mapping.
+    _grp_has_landing = bool(tgt_cfg.get("volumes_catalog") and tgt_cfg.get("target_schema"))
 
     # Override landing_path: use UC Volumes path when volumes_catalog is set
     # (must match where the extract notebook writes data)
@@ -4435,14 +4498,14 @@ def run_pipeline_on_databricks(
         _run_silver = _lm.get("silver", {})
         _run_recon = _lm.get("reconciliation", {})
         _run_log = _lm.get("loggingdetails", {})
-        # Override with Layer Mapping values (always takes priority)
-        if _run_landing.get("catalog"):
+        # Override with Layer Mapping values, except the group's own landing/targets
+        if _run_landing.get("catalog") and not _grp_has_landing:
             params["volumes_catalog"] = _run_landing["catalog"]
-        if _run_bronze.get("catalog"):
+        if _run_bronze.get("catalog") and not (_grp_has_landing and params.get("bronze_catalog")):
             params["bronze_catalog"] = _run_bronze["catalog"]
-        if _run_silver.get("catalog"):
+        if _run_silver.get("catalog") and not (_grp_has_landing and params.get("silver_catalog")):
             params["silver_catalog"] = _run_silver["catalog"]
-        if _run_landing.get("schema") or _run_bronze.get("schema"):
+        if (_run_landing.get("schema") or _run_bronze.get("schema")) and not _grp_has_landing:
             params["target_schema"] = _run_landing.get("schema") or _run_bronze.get("schema")
         if _run_recon.get("catalog"):
             params["recon_catalog"] = _run_recon["catalog"]

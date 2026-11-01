@@ -59,7 +59,11 @@ class TestSecretsSettingsRoutes(unittest.TestCase):
         import source_registry
         for src in source_registry.ENTERPRISE:
             self.assertIn(source_registry.secret_key(src), keys)
-        self.assertEqual(len(keys), 10 + len(source_registry.ENTERPRISE))
+        # Plus the OAuth client secret for REST sources with an OAuth profile.
+        oauth = [k for k in (source_registry.oauth_client_secret_key(s) for s in source_registry.ENTERPRISE) if k]
+        self.assertEqual(oauth, ["source-servicenow-client-secret", "source-ms-dynamics-crm-client-secret"])
+        self.assertNotIn("source-servicenow-client-id", keys)
+        self.assertEqual(len(keys), 10 + len(source_registry.ENTERPRISE) + len(oauth))
         self.assertNotIn("value", str(data))
 
     @patch("routes.auth.get_current_user", return_value={"email": "admin@test.com", "role": "Admin", "display_name": "A"})

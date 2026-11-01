@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Enterprise Source Connection Status — Project Bedrock Phase I (17 systems)</title>
+<style>
+  :root{
+    --bg:#f6f7fb; --card:#ffffff; --border:#e3e6ee; --head:#1e293b;
+    --t1:#0f172a; --t2:#475569; --t3:#94a3b8;
+    --green-bg:#dcfce7; --green-fg:#15803d;
+    --amber-bg:#fef3c7; --amber-fg:#b45309;
+    --blue-bg:#dbeafe;  --blue-fg:#1d4ed8;
+    --gray-bg:#f1f5f9;  --gray-fg:#64748b;
+    --red-bg:#fee2e2;   --red-fg:#b91c1c;
+  }
+  body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--t1);margin:0;padding:28px;}
+  h1{font-size:21px;margin:0 0 4px;}
+  .sub{color:var(--t2);font-size:12.5px;margin-bottom:18px;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:auto;box-shadow:0 1px 4px rgba(15,23,42,.06);}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;min-width:1150px;}
+  thead th{background:var(--head);color:#fff;text-align:left;padding:10px 12px;font-weight:600;white-space:nowrap;position:sticky;top:0;}
+  tbody td{padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:top;}
+  tbody tr:nth-child(even){background:#fafbfe;}
+  tbody tr:hover{background:#f0f4ff;}
+  td.num{color:var(--t3);font-weight:600;}
+  td.sys{font-weight:600;white-space:nowrap;}
+  .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;white-space:nowrap;}
+  .ok{background:var(--green-bg);color:var(--green-fg);}
+  .pend{background:var(--amber-bg);color:var(--amber-fg);}
+  .ready{background:var(--blue-bg);color:var(--blue-fg);}
+  .na{background:var(--gray-bg);color:var(--gray-fg);}
+  .blocked{background:var(--red-bg);color:var(--red-fg);}
+  .note{display:block;color:var(--t2);font-size:11px;margin-top:3px;font-weight:400;}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin:14px 2px 0;font-size:11.5px;color:var(--t2);}
+  .legend .pill{margin-right:4px;}
+  .footnotes{margin-top:16px;font-size:11.5px;color:var(--t2);line-height:1.7;}
+  .footnotes code{background:#eef1f8;padding:1px 5px;border-radius:4px;font-size:11px;}
+  .updated{color:var(--t3);font-size:11px;margin-top:10px;}
+</style>
+</head>
+<body>
+
+<h1>Enterprise Source Connection Status — 17 Systems</h1>
+<div class="sub">Migration Studio · Project Bedrock Phase I · tested locally against <code>http://localhost:5000</code></div>
+
+<div class="card">
+<table>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>System</th>
+      <th>API Method (connect + discover)</th>
+      <th>File Drop (ADLS / Volume)</th>
+      <th>Pipeline (Extract → Bronze → Silver)</th>
+      <th>Real Testing</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="num">1</td><td class="sys">🟦 SAP ECC</td>
+      <td><span class="pill na">N/A</span><span class="note">Ingests via SNP Glue → ADLS, not API</span></td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">3 tables seeded: MARA, VBAK, BSEG (50 rows each)</span></td>
+      <td><span class="pill ok">✅ Ran SUCCESS</span><span class="note">Runs labeled price_navigator.* — recreate under SAP ECC if labeling matters</span></td>
+      <td><span class="pill pend">🟡 Pending</span><span class="note">Needs real SNP Glue feed into client ADLS landing</span></td>
+    </tr>
+    <tr>
+      <td class="num">2</td><td class="sys">🟩 ServiceNow</td>
+      <td><span class="pill ok">✅ Real UC connection + REST API</span><span class="note">Lakeflow: servicenow_dev405660 (SERVICENOW, OAuth M2M). REST API: https://dev405660.service-now.com, OAuth 2.0 client credentials from secret scope — Test Connection + Discover with live counts</span></td>
+      <td><span class="pill na">N/A</span></td>
+      <td><span class="pill ok">✅ Ran SUCCESS</span><span class="note">Lakeflow Connect → dbx_bronze.servicenow (11 tables: incident, change_request, cmdb_ci, problem, sc_request, sc_req_item, task, sys_user, sys_user_group, cmdb_ci_server, cmdb_ci_computer — all counts match ServiceNow). App Extract → Bronze → Silver run for incident 67, change_request 105, cmdb_ci 2,784. REST API pipelines SUCCESS: incident 67, problem 24, sys_user 637, kb_knowledge 53, cmdb_rel_ci 220, alm_asset 2,817</span></td>
+      <td><span class="pill ok">✅ Real instance end-to-end</span><span class="note">Live PDI dev405660.service-now.com → real UC connection → Lakeflow ingestion → Delta; row counts match source</span></td>
+    </tr>
+    <tr>
+      <td class="num">3</td><td class="sys">📄 SharePoint</td>
+      <td><span class="pill ok">✅ REST API</span><span class="note">OAuth 2.0 = Microsoft Graph (/sites/{host}:/{path}:/lists/{list}/items, Entra client credentials: Tenant ID + Client ID in config, Client Secret in source-sharepoint-password; Graph accepts client secrets, unlike SPO _api app-only). No Auth = SharePoint-style OData v3 feed. Tested with public Northwind OData V3 (No Auth): Test Connection + Discover with live counts</span></td>
+      <td><span class="pill na">N/A</span></td>
+      <td><span class="pill ok">✅ Ran SUCCESS</span><span class="note">REST API → landing → Bronze → Silver (dbx_*.sharepoint_src), relative odata.nextLink paging: Customers 91, Orders 830, Products 77, Order_Details 2,155 — Bronze &amp; Silver counts match source</span></td>
+      <td><span class="pill pend">🟡 Public demo API</span><span class="note">End-to-end proven on public OData V3 stand-in (No Auth). Real SharePoint needs an Entra app with Graph Sites.Read.All (application) + admin consent</span></td>
+    </tr>
+    <tr>
+      <td class="num">4</td><td class="sys">🟪 MS Dynamics CRM</td>
+      <td><span class="pill ok">✅ REST API (OData v4)</span><span class="note">Lakeflow: UC connection 'ms_dynamics_crm' verified. REST API: Dataverse Web API profile — OAuth 2.0 (Entra ID client credentials: Tenant ID + Client ID in config, Client Secret in secret scope) or No Auth. Tested with public Northwind OData (No Auth): Test Connection + Discover with live counts via @odata.count</span></td>
+      <td><span class="pill na">N/A</span></td>
+      <td><span class="pill ok">✅ Ran SUCCESS</span><span class="note">REST API → landing → Bronze → Silver (dbx_*.dynamics_crm), @odata.nextLink paging: Customers 91, Orders 830, Products 77, Order_Details 2,155 — Bronze &amp; Silver counts match source</span></td>
+      <td><span class="pill pend">🟡 Public demo API</span><span class="note">End-to-end proven on public Northwind OData (No Auth). Real Dataverse needs an Entra app registration (tenant, client ID, secret) + Dataverse application user</span></td>
+    </tr>
+    <tr>
+      <td class="num">5</td><td class="sys">👥 SuccessFactors</td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">4 OData endpoints · 25 rows / 6 cols sampled</span></td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">User, EmpJob, EmpCompensation, PerPersonal landed</span></td>
+      <td><span class="pill pend">🟡 Created, run pending</span></td>
+      <td><span class="pill ok">✅ Public API verified</span><span class="note">Live HTTPS discovery vs fakerestapi.azurewebsites.net; vendor API needs real creds</span></td>
+    </tr>
+    <tr>
+      <td class="num">6</td><td class="sys">🛡️ MS Defender for Endpoint</td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">4 endpoints: alerts, machines, vulnerabilities, recommendations</span></td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">4 tables · 25 rows / 6 cols</span></td>
+      <td><span class="pill ready">🔲 Ready, not run</span></td>
+      <td><span class="pill pend">🟡 Pending</span><span class="note">Needs Defender API app registration + token</span></td>
+    </tr>
+    <tr>
+      <td class="num">7</td><td class="sys">📈 Arkieva (via NDP, JDBC)</td>
+      <td><span class="pill na">N/A (JDBC)</span></td>
+      <td><span class="pill na">N/A</span></td>
+      <td><span class="pill ready">🔲 Ready, not run</span></td>
+      <td><span class="pill ok">✅ Real DB tested</span><span class="note">Live Azure SQL: poc-az-sqlserver-rksandbox-db / master / sqladminuser</span></td>
+    </tr>
+    <tr>
+      <td class="num">8</td><td class="sys">🚚 Project44</td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">4 endpoints: shipments, locations, carriers, eta</span></td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">4 tables · 25 rows / 6 cols</span></td>
+      <td><span class="pill ready">🔲 Ready, not run</span></td>
+      <td><span class="pill pend">🟡 Pending</span><span class="note">Needs Movement API key</span></td>
+    </tr>
+    <tr>
+      <td class="num">9</td><td class="sys">🔐 Outpost24</td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">3 endpoints: assets, findings, scans</span></td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">3 tables · 25 rows / 6 cols</span></td>
+      <td><span class="pill ready">🔲 Ready, not run</span></td>
+      <td><span class="pill pend">🟡 Pending</span><span class="note">Needs REST token</span></td>
+    </tr>
+    <tr>
+      <td class="num">10</td><td class="sys">🧰 Onapsis</td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">3 endpoints: assets, issues, assessments</span></td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">3 tables · 25 rows / 6 cols</span></td>
+      <td><span class="pill ready">🔲 Ready, not run</span></td>
+      <td><span class="pill pend">🟡 Pending</span><span class="note">Needs platform API key</span></td>
+    </tr>
+    <tr>
+      <td class="num">11</td><td class="sys">📡 EPI Historian</td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">3 endpoints: tags, timeseries, events (streaming method)</span></td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">3 tables · 25 rows / 6 cols</span></td>
+      <td><span class="pill ready">🔲 Ready, not run</span></td>
+      <td><span class="pill pend">🟡 Pending</span><span class="note">Needs historian endpoint; true streaming (5-min) is roadmap</span></td>
+    </tr>
+    <tr>
+      <td class="num">12</td><td class="sys">🛒 SAP Ariba</td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">Mock: orders, suppliers, events · Public API: 5 tables w/ live counts</span></td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">3 tables · 25 rows / 6 cols</span></td>
+      <td><span class="pill ready">🔲 Ready, not run</span></td>
+      <td><span class="pill ok">✅ Public API verified</span><span class="note">Live HTTPS test + discovery vs fakerestapi.azurewebsites.net; vendor API needs OAuth creds</span></td>
+    </tr>
+    <tr>
+      <td class="num">13</td><td class="sys">📊 Anaplan</td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">3 endpoints: workspaces, models, exports</span></td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">3 tables · 25 rows / 6 cols</span></td>
+      <td><span class="pill ready">🔲 Ready, not run</span></td>
+      <td><span class="pill pend">🟡 Pending</span><span class="note">Needs Anaplan basic/cert auth</span></td>
+    </tr>
+    <tr>
+      <td class="num">14</td><td class="sys">🟦 SAP TMS</td>
+      <td><span class="pill na">N/A</span><span class="note">SNP Glue → ADLS</span></td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">2 tables seeded: shipments, freight_orders (40 rows each)</span></td>
+      <td><span class="pill ready">🔲 Ready, not run</span></td>
+      <td><span class="pill pend">🟡 Pending</span><span class="note">Needs real SNP Glue feed</span></td>
+    </tr>
+    <tr>
+      <td class="num">15</td><td class="sys">💲 Price Navigator</td>
+      <td><span class="pill ok">✅ Available</span><span class="note">rest_api method option; mock endpoints live</span></td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">2 tables seeded: price_lists, products (30 rows each)</span></td>
+      <td><span class="pill ok">✅ Ran SUCCESS</span></td>
+      <td><span class="pill pend">🟡 Pending</span><span class="note">Needs vendor file feed or API key</span></td>
+    </tr>
+    <tr>
+      <td class="num">16</td><td class="sys">🟦 SAP EHS</td>
+      <td><span class="pill na">N/A</span><span class="note">SNP Glue → ADLS</span></td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">2 tables seeded: incidents, safety_data_sheets (30 rows each)</span></td>
+      <td><span class="pill ready">🔲 Ready, not run</span></td>
+      <td><span class="pill pend">🟡 Pending</span><span class="note">Needs real SNP Glue feed</span></td>
+    </tr>
+    <tr>
+      <td class="num">17</td><td class="sys">🅰️ Adobe</td>
+      <td><span class="pill ok">✅ Available</span><span class="note">rest_api method option; mock endpoints live</span></td>
+      <td><span class="pill ok">✅ Tested</span><span class="note">2 tables seeded: analytics_reports (40), campaigns (25)</span></td>
+      <td><span class="pill ok">✅ Ran SUCCESS</span></td>
+      <td><span class="pill pend">🟡 Pending</span><span class="note">Needs Adobe I/O credentials</span></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="legend">
+  <span><span class="pill ok">✅</span> Tested &amp; passed in the app</span>
+  <span><span class="pill ready">🔲</span> Everything in place, not executed yet</span>
+  <span><span class="pill pend">🟡</span> Pending real credentials / feed</span>
+  <span><span class="pill na">N/A / 🚫</span> Not applicable or intentionally not supported</span>
+  <span><span class="pill blocked">⛔</span> Blocked</span>
+</div>
+
+<div class="footnotes">
+  <strong>Environment:</strong> App <code>http://localhost:5000</code> · Mock APIs <code>http://127.0.0.1:9900/&lt;source&gt;</code> (25 rows per endpoint, all 8 API sources) ·
+  Landing volume <code>/Volumes/dev_volumes/default/landing/&lt;source&gt;</code> · Public API for pipeline runs <code>https://fakerestapi.azurewebsites.net</code> (Databricks-reachable).<br>
+  <strong>Totals:</strong> Connection tests 16/17 PASS (SharePoint blocked) · API method tested on all 9 API-tier systems · File drop tested on all 13 file-capable systems ·
+  Pipelines run green on Adobe, Price Navigator, and the 3 SAP ECC tables.<br>
+  <strong>Re-run harness:</strong> <code>python local_mocks/test_all_sources.py</code> · <code>python local_mocks/verify_api_filedrop.py</code> · reseed data: <code>python local_mocks/land_api_data.py all</code>.
+</div>
+
+<div class="updated">Last updated: 2026-10-31 · Session: local testing of all 17 Bedrock Phase I sources</div>
+
+</body>
+</html>

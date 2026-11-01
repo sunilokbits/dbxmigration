@@ -34,7 +34,8 @@ def wf_list_tables():
     try:
         d = request.get_json()
         raw_type = d.get("source_type", "sqlserver")
-        from source_registry import connector_type
+        from source_registry import connector_type, merge_saved_source
+        d = merge_saved_source(d)
         source_type = connector_type(d)
         server = d.get("server", "").strip()
         database = d.get("database", "").strip()
@@ -91,6 +92,13 @@ def wf_list_tables():
             except Exception as e:
                 return jsonify({"success": False, "error": str(e)}), 500
 
+        # ── REST sources with a registry profile (ServiceNow, MS Dynamics CRM, SharePoint) ──
+        from source_registry import rest_profile
+        if source_type in ("api", "sharepoint") and rest_profile(raw_type):
+            from enterprise_sources import rest_profile_tables
+            result = rest_profile_tables(d)
+            return jsonify(result) if result.get("success") else (jsonify(result), 500)
+
         # ── SharePoint path — lists surface as tables ──
         if source_type == "sharepoint":
             site_url = server  # server field holds the site URL
@@ -124,23 +132,47 @@ def wf_list_tables():
             if not base_url:
                 return jsonify({"success": False, "error": "API Base URL required"}), 400
             try:
-                from api_source_client import load_objects as api_load
+                import re as _re
+                from api_source_client import load_objects as api_load, build_auth_headers, endpoint_stats
+                auth_type = (d.get("api_auth_type") or "none").strip().lower()
+                api_key_header = (d.get("api_key_header") or "").strip()
                 result = api_load(server=base_url, username=username, password=password,
                                   database=database,
-                                  auth_type=(d.get("api_auth_type") or "none").strip().lower(),
-                                  api_key_header=(d.get("api_key_header") or "").strip())
+                                  auth_type=auth_type, api_key_header=api_key_header)
                 if not result.get("success"):
                     return jsonify({"success": False, "error": result.get("error", "API load failed")}), 500
-                tables = [
-                    {
+                hdrs = build_auth_headers(auth_type, password, api_key_header, username)
+                # Table name = sanitized last path segment (matches the landing
+                # folder the Extract notebook writes, and is a valid UC name);
+                # collisions keep one more parent segment until unique.
+                def _entity(path, depth=1):
+                    segs = [s for s in path.strip("/").split("/") if s]
+                    return _re.sub(r"[^A-Za-z0-9_]", "_", "_".join(segs[-depth:]) or "root")
+                paths = [o["name"].removeprefix("GET ").strip()
+                         for o in result.get("grouped", {}).get("view", [])]
+                # Parameterised endpoints (/{id}) can't be extracted without a value
+                paths = [p for p in paths if "{" not in p]
+                names = {}
+                for p in paths:
+                    depth = 1
+                    n = _entity(p, depth)
+                    while n in names and depth < 5:
+                        depth += 1
+                        n = _entity(p, depth)
+                    names[n] = p
+                tables = []
+                for i, (name, path) in enumerate(names.items()):
+                    cols = rows = 0
+                    if i < 15:  # cap sampling round-trips
+                        cols, rows = endpoint_stats(base_url, path, hdrs)
+                    tables.append({
                         "schema":       raw_type,
-                        "table":        o["name"],
-                        "full_name":    f"{raw_type}.{o['name']}",
-                        "col_count":    0,
-                        "row_estimate": 0,
-                    }
-                    for o in result.get("grouped", {}).get("view", [])
-                ]
+                        "table":        name,
+                        "full_name":    f"{raw_type}.{name}",
+                        "endpoint":     path,
+                        "col_count":    cols,
+                        "row_estimate": rows,
+                    })
                 return jsonify({"success": True, "tables": tables, "total": len(tables)})
             except Exception as e:
                 return jsonify({"success": False, "error": str(e)}), 500

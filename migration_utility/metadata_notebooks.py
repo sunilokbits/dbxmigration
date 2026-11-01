@@ -657,12 +657,126 @@ print(f"🔧 Load Type: {{LOAD_TYPE}}")
 # COMMAND ----------
 
 # "adls" = files landed by SNP Glue or dropped in ADLS / a UC Volume: each
-# source object is a sub-folder of the configured landing folder. Everything
-# else is a database read through the shared native connector.
+# source object is a sub-folder of the configured landing folder. "api" =
+# REST endpoints: each source object is one GET endpoint, pulled with
+# requests and normalised to a DataFrame. Everything else is a database
+# read through the shared native connector.
 _CONNECTOR     = source_config.get("connector") or SRC_TYPE
 IS_FILE_SOURCE = (_CONNECTOR == "adls")
+IS_API_SOURCE  = (_CONNECTOR == "api")
+# Lakeflow Connect already ingested the source into Delta; read that table.
+IS_LAKEFLOW_SOURCE = (_CONNECTOR == "lakeflow")
+_LF_TABLE      = source_config.get("lakeflow_table", "")
 _FILE_FORMAT   = (source_config.get("file_format") or "parquet").lower()
 _SRC_OBJECT_PATH = f"{{SERVER.rstrip('/')}}/{{TABLE_NAME}}" if IS_FILE_SOURCE else ""
+
+if IS_API_SOURCE:
+    import requests as _requests
+    from requests.adapters import HTTPAdapter as _HTTPAdapter
+    from urllib3.util.retry import Retry as _Retry
+    _api_rq = _requests.Session()
+    _api_rq.mount("https://", _HTTPAdapter(max_retries=_Retry(total=3, connect=3, read=3, backoff_factor=2)))
+    _API_BASE  = (source_config.get("api_base") or SERVER).rstrip("/")
+    _AUTH_TYPE = (source_config.get("api_auth_type") or "none").strip().lower()
+    _KEY_HDR   = (source_config.get("api_key_header") or "").strip() or "X-API-Key"
+    # Registry REST profile (e.g. ServiceNow): table path, paging, OAuth token path/scope
+    _API_PROFILE = source_config.get("api_profile") or {{}}
+    _API_HEADERS = {{"Accept": "application/json", **(_API_PROFILE.get("headers") or {{}})}}
+    if _AUTH_TYPE == "api_key" and PASSWORD:
+        _API_HEADERS[_KEY_HDR] = PASSWORD
+    elif _AUTH_TYPE == "bearer" and PASSWORD:
+        _API_HEADERS["Authorization"] = PASSWORD if PASSWORD.lower().startswith("bearer ") else f"Bearer {{PASSWORD}}"
+    elif _AUTH_TYPE == "basic" and (USERNAME or PASSWORD):
+        _API_HEADERS["Authorization"] = "Basic " + base64.b64encode(f"{{USERNAME}}:{{PASSWORD}}".encode()).decode()
+
+    def _api_oauth_login():
+        """OAuth 2.0 client credentials; the client ID comes from the pipeline's source
+        config, the client secret from the secret scope."""
+        _scope = source_config.get("secret_scope") or "migration-studio"
+        _cid = source_config.get("oauth_client_id") or USERNAME
+        if not _cid:
+            raise RuntimeError("OAuth Client ID missing -- enter it in Settings and re-create the pipeline")
+        # token_url may be templated: {{tenant}} = Entra tenant, {{origin}} = scheme://host of the API
+        _origin = "/".join(_API_BASE.split("/", 3)[:3])
+        _tok_url = (_API_PROFILE.get("token_url") or (_API_BASE + _API_PROFILE.get("token_path", "/oauth/token")))
+        _tok_url = _tok_url.replace("{{tenant}}", source_config.get("oauth_tenant_id", "")).replace("{{origin}}", _origin)
+        _tok = _api_rq.post(_tok_url, timeout=(30, 90), data={{
+            "grant_type": "client_credentials",
+            "client_id": _cid,
+            "client_secret": dbutils.secrets.get(_scope, source_config.get("oauth_client_secret_key", "")),
+            "scope": (_API_PROFILE.get("scope") or "").replace("{{origin}}", _origin),
+        }})
+        if not (_tok.ok and "access_token" in _tok.text):
+            raise RuntimeError(f"OAuth token request failed (HTTP {{_tok.status_code}})")
+        _API_HEADERS["Authorization"] = "Bearer " + _tok.json()["access_token"]
+
+    def _api_endpoint_for_table():
+        """GET path for TABLE_NAME: the profile's table_path when set, else the
+        OpenAPI path whose sanitized trailing segment(s) match, else /TABLE_NAME."""
+        if _API_PROFILE.get("table_path"):
+            return _API_PROFILE["table_path"].replace("{{table}}", TABLE_NAME)
+        _san = lambda s: _re.sub(r"[^A-Za-z0-9_]", "_", s)
+        for _sp in ("openapi.json", "swagger/v1/swagger.json", "v2/swagger.json",
+                    "v3/swagger.json", "swagger.json"):
+            try:
+                _r = _api_rq.get(f"{{_API_BASE}}/{{_sp}}", headers=_API_HEADERS, timeout=30)
+                if _r.status_code != 200:
+                    continue
+                for _p, _m in (_r.json().get("paths") or {{}}).items():
+                    if not (isinstance(_m, dict) and "get" in _m):
+                        continue
+                    _segs = [s for s in _p.strip("/").split("/") if s]
+                    for _d in range(1, len(_segs) + 1):
+                        if _san("_".join(_segs[-_d:])) == TABLE_NAME:
+                            return _p
+            except Exception:
+                continue
+        return "/" + TABLE_NAME
+
+    def _api_page(_path, _params):
+        return _api_page_doc(_path, _params)[0]
+
+    def _api_page_doc(_path, _params):
+        """(records, raw_doc, request_url) for one GET; _path may also be an absolute (next) link."""
+        _url = _path if _path.startswith("http") else f"{{_API_BASE}}{{_path}}"
+        _r = _api_rq.get(_url, headers=_API_HEADERS, params=_params, timeout=(30, 180))
+        _r.raise_for_status()
+        _doc = _r.json()
+        _recs = _doc if isinstance(_doc, list) else None
+        if _recs is None and isinstance(_doc, dict):
+            for _k in ("result", "items", "value", "results", "data", "records", "entries", "elements"):
+                if isinstance(_doc.get(_k), list):
+                    _recs = _doc[_k]
+                    break
+            if _recs is None and isinstance(_doc.get("d"), dict) and isinstance(_doc["d"].get("results"), list):
+                _recs = _doc["d"]["results"]  # OData v2 envelope
+        if _recs is None:
+            _recs = [_doc] if isinstance(_doc, dict) else []
+        return _recs, _doc, _r.url
+
+    def _api_records(_path):
+        _params = dict(_API_PROFILE.get("params") or {{}})
+        if _API_PROFILE.get("paging") == "next_link":
+            # OData: follow the next link (absolute in Dataverse/Graph, relative to the request in v3)
+            from urllib.parse import urljoin as _urljoin
+            _all, _next, _p = [], _path, _params
+            while _next:
+                _pg, _doc, _req_url = _api_page_doc(_next, _p)
+                _all.extend(_pg)
+                _nl = (_doc.get("@odata.nextLink") or _doc.get("odata.nextLink")) if isinstance(_doc, dict) else None
+                _next = _urljoin(_req_url, _nl) if _nl else None
+                _p = None
+            return _all
+        _lp, _op = _API_PROFILE.get("limit_param"), _API_PROFILE.get("offset_param")
+        if not (_lp and _op):
+            return _api_page(_path, _params)
+        _size, _off, _all = int(_API_PROFILE.get("page_size") or 1000), 0, []
+        while True:
+            _pg = _api_page(_path, {{**_params, _lp: _size, _op: _off}})
+            _all.extend(_pg)
+            if len(_pg) < _size:
+                return _all
+            _off += _size
 
 def _read_source(sql_query=None, table=None):
     return _read_source_with(_SRC_FORMAT, _SRC_OPTIONS, sql_query=sql_query, table=table)
@@ -672,6 +786,19 @@ try:
     if IS_FILE_SOURCE:
         print(f"🔧 Source: {{_FILE_FORMAT}} files at {{_SRC_OBJECT_PATH}}")
         dbutils.fs.ls(_SRC_OBJECT_PATH)
+    elif IS_API_SOURCE:
+        print(f"🔧 Source: REST API {{_API_BASE}} (auth={{_AUTH_TYPE}})")
+        if _AUTH_TYPE == "oauth2":
+            _api_oauth_login()
+            print("🔐 OAuth 2.0 token acquired (client credentials)")
+        _ping = _api_rq.get(_API_BASE, headers=_API_HEADERS, timeout=(30, 60))
+        if _ping.status_code in (401, 403):
+            raise RuntimeError(f"API authentication failed (HTTP {{_ping.status_code}})")
+    elif IS_LAKEFLOW_SOURCE:
+        if not _LF_TABLE:
+            raise RuntimeError("No Lakeflow Connect destination table recorded -- re-create the pipeline")
+        print(f"🔧 Source: Lakeflow Connect table {{_LF_TABLE}}")
+        spark.table(_LF_TABLE).limit(0).collect()
     else:
         # Native serverless-supported connector + source-dialect quoting,
         # shared with Reconciliation via _Meta_CommonFunctions.
@@ -742,6 +869,15 @@ if IS_FILE_SOURCE:
     _qualified_table, _query_sql = _SRC_OBJECT_PATH, None
     print(f"📥 {{'Incremental' if (use_incremental and watermark) else 'Full'}} read of "
           f"{{_FILE_FORMAT}} files from {{_qualified_table}}")
+elif IS_API_SOURCE:
+    _API_PATH = _api_endpoint_for_table()
+    _qualified_table, _query_sql = f"{{_API_BASE}}{{_API_PATH}}", None
+    print(f"📥 {{'Incremental' if (use_incremental and watermark) else 'Full'}} read of "
+          f"REST endpoint {{_qualified_table}}")
+elif IS_LAKEFLOW_SOURCE:
+    _qualified_table, _query_sql = _LF_TABLE, None
+    print(f"📥 {{'Incremental' if (use_incremental and watermark) else 'Full'}} read of "
+          f"Lakeflow Connect table {{_qualified_table}}")
 else:
     _qualified_table = _qtbl(TABLE_SCHEMA, TABLE_NAME)
     if use_incremental and watermark:
@@ -760,6 +896,37 @@ try:
     # since numPartitions isn't a guaranteed option on these connectors).
     if IS_FILE_SOURCE:
         df = _read_files_with(_SRC_OBJECT_PATH, _FILE_FORMAT)
+        if use_incremental and watermark:
+            df = df.filter(F.col(WM_COL) > F.lit(watermark))
+    elif IS_API_SOURCE:
+        import pandas as _pd
+        _recs = _api_records(_API_PATH)
+        if not _recs:
+            raise RuntimeError(f"API endpoint {{_API_PATH}} returned no records")
+        # Graph list items carry the columns under "fields"
+        _rk = _API_PROFILE.get("record_key")
+        if _rk:
+            _recs = [_r[_rk] if isinstance(_r, dict) and isinstance(_r.get(_rk), dict) else _r for _r in _recs]
+        # OData control annotations (@odata.etag, odata.type, ...) are not data columns
+        _recs = [{{_k: _v for _k, _v in _r.items() if not str(_k).startswith(("@odata.", "odata."))}}
+                 if isinstance(_r, dict) else _r for _r in _recs]
+        _pdf = _pd.json_normalize(_recs)
+        try:
+            df = spark.createDataFrame(_pdf)
+        except Exception:
+            # Mixed/ragged JSON types -- fall back to all-string columns
+            df = spark.createDataFrame(_pdf.astype(str))
+        print(f"📊 Records fetched from API: {{len(_recs):,}}")
+        # Delta/parquet-safe column names (json_normalize yields dotted names)
+        df = df.toDF(*[_re.sub(r"[^A-Za-z0-9_]", "_", c) for c in df.columns])
+        # Fields null in every record infer as VOID, which parquet can't store
+        from pyspark.sql.types import NullType as _NullType
+        df = df.select(*[F.col(c).cast("string").alias(c) if isinstance(df.schema[c].dataType, _NullType)
+                         else F.col(c) for c in df.columns])
+        if use_incremental and watermark:
+            df = df.filter(F.col(WM_COL) > F.lit(watermark))
+    elif IS_LAKEFLOW_SOURCE:
+        df = spark.table(_LF_TABLE)
         if use_incremental and watermark:
             df = df.filter(F.col(WM_COL) > F.lit(watermark))
     else:
@@ -2881,7 +3048,9 @@ all_dlt_jobs = []
 for _j in _all_rows:
     if PIPELINE_SCOPE == "group" and _j.get("group_id") != GROUP_ID:
         continue
-    if not _targets_this_pipeline(_j.get("target_config")):
+    # A group-scoped pipeline was built from its group's own targets, so only
+    # the shared per-schema pipeline needs the target match.
+    if PIPELINE_SCOPE != "group" and not _targets_this_pipeline(_j.get("target_config")):
         continue
     _tn = (_j.get("table_name") or "").lower()
     if not _tn or _tn in _seen:

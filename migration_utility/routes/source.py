@@ -96,6 +96,8 @@ def source_test_connection():
         data = request.get_json(silent=True) or {}
         raw_type = data.get("source_type", "sqlserver")
         # Branch on HOW to connect; built-in types map to themselves.
+        from source_registry import merge_saved_source
+        data = merge_saved_source(data)
         source_type = connector_type(data)
         server = (data.get("server") or "").strip()
         database = (data.get("database") or "").strip()
@@ -141,6 +143,12 @@ def source_test_connection():
             result = rs_test(server=server, username=username, password=password, database=database)
             return jsonify(result)
 
+        # ── REST sources with a registry profile (ServiceNow, MS Dynamics CRM, SharePoint) ──
+        from source_registry import rest_profile
+        if source_type in ("api", "sharepoint") and rest_profile(raw_type):
+            from enterprise_sources import rest_profile_test
+            return jsonify(rest_profile_test(data))
+
         # ── SharePoint path ──
         if source_type == "sharepoint":
             site_url = server
@@ -165,6 +173,8 @@ def source_test_connection():
             api_key_header = (data.get("api_key_header") or "").strip()
             if not base_url:
                 return jsonify({"success": False, "error": "API Base URL is required"}), 400
+            if auth_type == "oauth2":
+                return jsonify({"success": False, "error": "OAuth 2.0 is configured for ServiceNow / MS Dynamics CRM / SharePoint only — pick another auth type"}), 400
             if auth_type == "basic" and not username:
                 return jsonify({"success": False, "error": "Username is required for Basic Auth"}), 400
             if auth_type in ("api_key", "bearer", "basic") and not password:
@@ -242,6 +252,8 @@ def source_load_objects():
     try:
         data = request.get_json()
         raw_type = data.get("source_type", "sqlserver")
+        from source_registry import merge_saved_source
+        data = merge_saved_source(data)
         source_type = connector_type(data)
         server = data.get("server", "").strip()
         database = data.get("database", "").strip()
@@ -284,6 +296,13 @@ def source_load_objects():
                 return jsonify(result)
             else:
                 return jsonify(result), 500
+
+        # ── REST sources with a registry profile (ServiceNow, MS Dynamics CRM, SharePoint) ──
+        from source_registry import rest_profile
+        if source_type in ("api", "sharepoint") and rest_profile(raw_type):
+            from enterprise_sources import rest_profile_objects
+            result = rest_profile_objects(data)
+            return jsonify(result) if result.get("success") else (jsonify(result), 500)
 
         # ── SharePoint path ──
         if source_type == "sharepoint":

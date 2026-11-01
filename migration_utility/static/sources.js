@@ -30,15 +30,24 @@
   /* Extra source_config keys an enterprise source needs (none for built-ins). */
   function srcRegistryExtras(k){
     const s = BY_KEY[k];
-    if(!s || s.builtin) return {};
-    const ex = {ingestion_method: srcMethod(k, ($('cfgSrcMethod')||{}).value)};
+    if(!s) return {};
     const ui = srcUi(k);
+    // Built-ins with a REST profile (SharePoint) take the same auth / object fields
+    if(s.builtin){
+      if(!s.rest_objects) return {};
+      const ex = {objects: (($('cfgSrcObjects')||{}).value || '').trim(),
+                  api_auth_type: ($('cfgSrcApiAuthType')||{}).value || 'oauth2'};
+      if(s.rest_tenant) ex.tenant_id = (($('cfgSrcSpTenantId')||{}).value || '').trim();
+      return ex;
+    }
+    const ex = {ingestion_method: srcMethod(k, ($('cfgSrcMethod')||{}).value)};
     if(ex.ingestion_method === 'jdbc') ex.engine = ($('cfgSrcEngine')||{}).value || s.engine || 'sqlserver';
     if(ui === 'adls') ex.file_format = ($('cfgSrcFileFormat')||{}).value || 'parquet';
-    if(ui === 'lakeflow') ex.objects = (($('cfgSrcObjects')||{}).value || '').trim();
+    if(ui === 'lakeflow' || (ui === 'api' && s.rest_objects)) ex.objects = (($('cfgSrcObjects')||{}).value || '').trim();
     if(ui === 'api'){
       ex.api_auth_type = ($('cfgSrcApiAuthType')||{}).value || 'none';
       ex.api_key_header = (($('cfgSrcApiKeyHeader')||{}).value || '').trim();
+      if(s.rest_tenant) ex.tenant_id = (($('cfgSrcSpTenantId')||{}).value || '').trim();
     }
     return ex;
   }

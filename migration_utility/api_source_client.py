@@ -88,6 +88,33 @@ def test_connection(server: str, username: str, password: str,
         return {"success": False, "error": msg + hint}
 
 
+def endpoint_stats(base_url: str, path: str, headers: dict, timeout: int = 10) -> tuple[int, int]:
+    """Best-effort (col_count, row_count) by sampling one GET endpoint.
+    Row count is the first page/response only — an estimate, not a full scan."""
+    try:
+        resp = requests.get(f"{_normalise_base_url(base_url)}{path}", headers=headers,
+                            timeout=timeout)
+        if resp.status_code != 200:
+            return 0, 0
+        doc = resp.json()
+        recs = None
+        if isinstance(doc, list):
+            recs = doc
+        elif isinstance(doc, dict):
+            for k in ("items", "value", "results", "data", "records", "entries", "elements"):
+                if isinstance(doc.get(k), list):
+                    recs = doc[k]
+                    break
+            if recs is None and isinstance(doc.get("d"), dict) and isinstance(doc["d"].get("results"), list):
+                recs = doc["d"]["results"]  # OData v2 envelope
+        if recs is None:
+            return (len(doc), 1) if isinstance(doc, dict) else (0, 0)
+        cols = len(recs[0]) if recs and isinstance(recs[0], dict) else 0
+        return cols, len(recs)
+    except Exception:
+        return 0, 0
+
+
 def _fetch_swagger_paths(base_url: str, headers: dict) -> list:
     """Try common OpenAPI/Swagger locations; return sorted GET paths."""
     for p in _SWAGGER_PATHS:

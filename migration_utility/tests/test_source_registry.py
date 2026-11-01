@@ -57,6 +57,10 @@ class TestConnectorMapping(unittest.TestCase):
             self.assertEqual(reg.connector_type(st), conn, st)
 
     def test_method_and_engine_choices(self):
+        self.assertEqual(reg.connector_type({"source_type": "servicenow", "ingestion_method": "rest_api"}), "api")
+        sn = next(s for s in reg.client_payload()["sources"] if s["key"] == "servicenow")
+        self.assertEqual(sn["methods"], ["lakeflow_connect", "rest_api"])
+        self.assertTrue(sn["rest_objects"])
         self.assertEqual(reg.connector_type({"source_type": "adobe", "ingestion_method": "rest_api"}), "api")
         self.assertEqual(reg.connector_type({"source_type": "adobe", "ingestion_method": "bogus"}), "adls")
         self.assertEqual(reg.connector_type({"source_type": "arkieva", "engine": "azuresql"}), "azuresql")
@@ -67,12 +71,14 @@ class TestConnectorMapping(unittest.TestCase):
         self.assertTrue(reg.can_extract({"source_type": "api"})[0])  # built-in behaviour unchanged
         self.assertTrue(reg.can_extract({"source_type": "sap_ecc"})[0])
         self.assertTrue(reg.can_extract({"source_type": "arkieva"})[0])
-        ok, why = reg.can_extract({"source_type": "servicenow"})
-        self.assertFalse(ok)
-        self.assertIn("planned", why)
-        self.assertEqual(reg.readiness("epi_historian"), "planned")
-        self.assertEqual(reg.readiness("successfactors"), "configure")
-        self.assertEqual(reg.readiness("price_navigator", "rest_api"), "configure")
+        # Lakeflow Connect: Extract reads the Lakeflow-ingested Delta table
+        self.assertTrue(reg.can_extract({"source_type": "servicenow"})[0])
+        self.assertEqual(reg.readiness("servicenow"), "ready")
+        # rest_api / streaming are extract-capable now (API → landing → Bronze/Silver)
+        self.assertTrue(reg.can_extract({"source_type": "successfactors"})[0])
+        self.assertEqual(reg.readiness("epi_historian"), "ready")
+        self.assertEqual(reg.readiness("successfactors"), "ready")
+        self.assertEqual(reg.readiness("price_navigator", "rest_api"), "ready")
 
     def test_client_payload_is_json_and_secret_free(self):
         payload = reg.client_payload()
@@ -127,6 +133,175 @@ class TestEnterpriseSources(unittest.TestCase):
         self.assertFalse(es.test_connection("lakeflow", {"server": "bad name!"})["success"])
 
 
+class _Resp:
+    def __init__(self, doc, status=200):
+        self._doc, self.status_code, self.ok = doc, status, status < 400
+        self.text = json.dumps(doc)
+
+    def json(self):
+        return self._doc
+
+    def raise_for_status(self):
+        if not self.ok:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+class TestSharePointRest(unittest.TestCase):
+    SITE = "https://contoso.sharepoint.com/sites/Finance"
+
+    def test_profile_by_auth_and_graph_site_base(self):
+        none = reg.rest_profile("sharepoint", "none")
+        oa = reg.rest_profile("sharepoint", "oauth2")
+        self.assertEqual(none["table_path"], "/{table}")
+        self.assertNotIn("by_auth", none)
+        self.assertEqual((oa["table_path"], oa["record_key"]), ("/lists/{table}/items", "fields"))
+        self.assertEqual(reg.rest_api_base(self.SITE, oa),
+                         "https://graph.microsoft.com/v1.0/sites/contoso.sharepoint.com:/sites/Finance:")
+        self.assertEqual(reg.rest_api_base("https://contoso.sharepoint.com/", oa),
+                         "https://graph.microsoft.com/v1.0/sites/contoso.sharepoint.com")
+        self.assertEqual(reg.rest_api_base(self.SITE + "/", none), self.SITE)
+        self.assertEqual(reg.rest_oauth_secret_key("sharepoint"), "source-sharepoint-password")
+        self.assertIsNone(reg.oauth_client_secret_key("sharepoint"))
+        sp = next(s for s in reg.client_payload()["sources"] if s["key"] == "sharepoint")
+        self.assertTrue(sp["rest_objects"] and sp["rest_tenant"] and sp["builtin"])
+        self.assertEqual(reg.connector_type("sharepoint"), "sharepoint")
+
+    def test_no_auth_odata_v3_stats(self):
+        import enterprise_sources as es
+        sess = mock.MagicMock()
+        sess.headers = {}
+        sess.get.return_value = _Resp({"odata.count": "91", "value": [{"A": 1, "B": 2, "C": 3}]})
+        with mock.patch.object(es, "_retry_session", return_value=sess):
+            t = es.rest_profile_tables({"source_type": "sharepoint", "api_auth_type": "none",
+                                        "server": "https://services.odata.org/V3/Northwind/Northwind.svc",
+                                        "objects": "Customers"})
+        self.assertEqual([(x["full_name"], x["col_count"], x["row_estimate"]) for x in t["tables"]],
+                         [("sharepoint.Customers", 3, 91)])
+        self.assertEqual(sess.get.call_args[1]["params"], {"$top": 1, "$inlinecount": "allpages"})
+        self.assertEqual(sess.headers["Accept"], "application/json;odata=nometadata")
+
+    def test_graph_oauth_stats_flatten_fields_and_count_by_paging(self):
+        import enterprise_sources as es
+        sess = mock.MagicMock()
+        sess.headers = {}
+        sess.post.return_value = _Resp({"access_token": "tok"})
+        g = "https://graph.microsoft.com/v1.0/sites/contoso.sharepoint.com:/sites/Finance:"
+        sess.get.side_effect = [
+            _Resp({"value": [{"id": "1", "fields": {"@odata.etag": "e", "Title": "a", "Amount": 1}}]}),
+            _Resp({"value": [{"id": "1"}, {"id": "2"}], "@odata.nextLink": g + "/next"}),
+            _Resp({"value": [{"id": "3"}]}),
+        ]
+        with mock.patch.object(es, "_retry_session", return_value=sess), \
+             mock.patch.object(es, "_saved_source", return_value={}):
+            t = es.rest_profile_tables({"source_type": "sharepoint", "api_auth_type": "oauth2", "server": self.SITE,
+                                        "username": "cid", "password": "sec", "tenant_id": "tid",
+                                        "objects": "Invoices"})
+        self.assertTrue(t["success"], t)
+        self.assertEqual((t["tables"][0]["col_count"], t["tables"][0]["row_estimate"]), (2, 3))
+        self.assertEqual(sess.post.call_args[1]["data"]["scope"], "https://graph.microsoft.com/.default")
+        self.assertEqual(sess.get.call_args_list[0][0][0], g + "/lists/Invoices/items")
+        self.assertEqual(sess.get.call_args_list[2][0][0], g + "/next")
+
+    def test_graph_lists_are_discovered_when_no_objects_given(self):
+        import enterprise_sources as es
+        sess = mock.MagicMock()
+        sess.headers = {}
+        sess.post.return_value = _Resp({"access_token": "tok"})
+        sess.get.return_value = _Resp({"value": [{"displayName": "Invoices", "list": {"hidden": False}},
+                                                 {"displayName": "Secret", "list": {"hidden": True}}]})
+        with mock.patch.object(es, "_retry_session", return_value=sess), \
+             mock.patch.object(es, "_saved_source", return_value={}):
+            r = es.rest_profile_objects({"source_type": "sharepoint", "api_auth_type": "oauth2", "server": self.SITE,
+                                         "username": "cid", "password": "sec", "tenant_id": "tid"})
+        self.assertEqual([o["name"] for o in r["grouped"]["view"]], ["Invoices"])
+
+    def _create(self, **src):
+        import workflow_manager as wfm
+        with mock.patch.object(wfm, "_sync_pipeline_to_dbr", return_value=True), \
+             mock.patch.object(wfm, "_sync_job_to_dbr", return_value=True):
+            r = wfm.create_pipeline_for_table(
+                "sharepoint", "Invoices", source_config={"source_type": "sharepoint", "server": self.SITE, **src},
+                target_config={"bronze_catalog": "b", "silver_catalog": "s", "target_schema": "x"},
+                pipeline_mode="dlt")
+        self.addCleanup(wfm.PIPELINE_GROUPS.pop, r.get("group_id"), None)
+        return r
+
+    def test_pipeline_oauth_uses_graph_base_and_sharepoint_secret(self):
+        r = self._create(username="cid", tenant_id="tid")  # older configs: no auth type -> OAuth
+        self.assertTrue(r["success"], r)
+        sc = r["group"]["source_config"]
+        self.assertEqual((sc["connector"], sc["api_auth_type"], sc["oauth_tenant_id"]), ("api", "oauth2", "tid"))
+        self.assertTrue(sc["api_base"].startswith("https://graph.microsoft.com/v1.0/sites/"))
+        self.assertEqual(sc["oauth_client_secret_key"], "source-sharepoint-password")
+
+    def test_pipeline_no_auth_reads_the_url_directly(self):
+        r = self._create(api_auth_type="none")
+        self.assertTrue(r["success"], r)
+        sc = r["group"]["source_config"]
+        self.assertEqual((sc["connector"], sc["api_base"]), ("api", self.SITE))
+        self.assertEqual(sc["api_profile"]["table_path"], "/{table}")
+
+
+class TestRestProfiles(unittest.TestCase):
+    BASE = "https://services.odata.org/V4/Northwind/Northwind.svc"
+
+    def test_dynamics_has_rest_profile_and_tenant_flag(self):
+        self.assertEqual(reg.connector_type({"source_type": "ms_dynamics_crm", "ingestion_method": "rest_api"}), "api")
+        d = next(s for s in reg.client_payload()["sources"] if s["key"] == "ms_dynamics_crm")
+        self.assertEqual(d["methods"], ["lakeflow_connect", "rest_api"])
+        self.assertTrue(d["rest_objects"] and d["rest_tenant"])
+        sn = next(s for s in reg.client_payload()["sources"] if s["key"] == "servicenow")
+        self.assertFalse(sn["rest_tenant"])
+        self.assertEqual(reg.oauth_client_secret_key("ms_dynamics_crm"), "source-ms-dynamics-crm-client-secret")
+
+    def test_odata_no_auth_stats_use_odata_count(self):
+        import enterprise_sources as es
+        sess = mock.MagicMock()
+        sess.headers = {}
+        sess.get.return_value = _Resp({"@odata.count": 91, "value": [{"@odata.etag": "x", "A": 1, "B": 2}]})
+        with mock.patch.object(es, "_retry_session", return_value=sess):
+            t = es.rest_profile_tables({"source_type": "ms_dynamics_crm", "server": self.BASE,
+                                        "api_auth_type": "none", "objects": "Customers, Orders"})
+        self.assertTrue(t["success"])
+        self.assertEqual([(x["full_name"], x["col_count"], x["row_estimate"]) for x in t["tables"]],
+                         [("ms_dynamics_crm.Customers", 2, 91), ("ms_dynamics_crm.Orders", 2, 91)])
+        self.assertEqual(sess.get.call_args[0][0], f"{self.BASE}/Orders")
+        self.assertEqual(sess.get.call_args[1]["params"], {"$top": 1, "$count": "true"})
+        sess.post.assert_not_called()
+
+    def test_dynamics_oauth_uses_entra_token_url_and_origin_scope(self):
+        import enterprise_sources as es
+        sess = mock.MagicMock()
+        sess.headers = {}
+        sess.post.return_value = _Resp({"access_token": "tok"})
+        sess.get.return_value = _Resp({"@odata.count": 5, "value": [{"name": "a"}]})
+        with mock.patch.object(es, "_retry_session", return_value=sess), \
+             mock.patch.object(es, "_saved_source", return_value={}):
+            r = es.rest_profile_test({"source_type": "ms_dynamics_crm", "api_auth_type": "oauth2",
+                                      "server": "https://org.crm.dynamics.com/api/data/v9.2",
+                                      "username": "cid", "password": "sec", "tenant_id": "tid",
+                                      "objects": "accounts"})
+        self.assertTrue(r["success"], r)
+        self.assertEqual(sess.post.call_args[0][0], "https://login.microsoftonline.com/tid/oauth2/v2.0/token")
+        self.assertEqual(sess.post.call_args[1]["data"]["scope"], "https://org.crm.dynamics.com/.default")
+        self.assertEqual(sess.headers["Authorization"], "Bearer tok")
+        self.assertIn("accounts: 5 rows", r["server_version"])
+
+    def test_dynamics_oauth_without_tenant_and_servicenow_without_oauth_fail(self):
+        import enterprise_sources as es
+        with mock.patch.object(es, "_saved_source", return_value={}):
+            r = es.rest_profile_test({"source_type": "ms_dynamics_crm", "api_auth_type": "oauth2",
+                                      "server": self.BASE, "username": "c", "password": "s"})
+        self.assertIn("Tenant ID", r["error"])
+        r = es.rest_profile_test({"source_type": "servicenow", "api_auth_type": "none",
+                                  "server": "https://x.service-now.com"})
+        self.assertFalse(r["success"])
+        self.assertIn("OAuth", r["error"])
+        r = es.rest_profile_test({"source_type": "ms_dynamics_crm", "api_auth_type": "none",
+                                  "server": "http://insecure"})
+        self.assertFalse(r["success"])
+
+
 class TestRoutes(unittest.TestCase):
     def setUp(self):
         from flask import Flask
@@ -178,13 +353,107 @@ class TestRoutes(unittest.TestCase):
                                    "api_auth_type": "none"})
         t.assert_called_once()
 
+    def test_rest_profile_sources_route_to_profile_client(self):
+        with mock.patch("enterprise_sources.rest_profile_test", return_value={"success": True}) as t:
+            self.client.post("/api/v1/source/test-connection",
+                             json={"source_type": "ms_dynamics_crm", "ingestion_method": "rest_api",
+                                   "server": "https://o.crm.dynamics.com/api/data/v9.2", "api_auth_type": "none"})
+        t.assert_called_once()
+        with mock.patch("enterprise_sources.rest_profile_test", return_value={"success": True}) as t:
+            self.client.post("/api/v1/source/test-connection",
+                             json={"source_type": "sharepoint", "server": "https://c.sharepoint.com/sites/x",
+                                   "api_auth_type": "none"})
+        t.assert_called_once()
+        with mock.patch("enterprise_sources.rest_profile_tables",
+                        return_value={"success": True, "tables": [], "total": 0}) as t:
+            self.client.post("/api/v1/workflow/list-tables",
+                             json={"source_type": "servicenow", "ingestion_method": "rest_api",
+                                   "server": "https://x.service-now.com"})
+        t.assert_called_once()
+
 
 class TestPipelineCreation(unittest.TestCase):
-    def test_planned_method_is_blocked(self):
+    def test_lakeflow_without_ingestion_pipeline_is_blocked(self):
         import workflow_manager as wfm
-        r = wfm.create_pipeline_for_table("servicenow", "incident", source_config={"source_type": "servicenow"})
+        with mock.patch("enterprise_sources.lakeflow_destination", return_value=""):
+            r = wfm.create_pipeline_for_table("servicenow", "incident",
+                                              source_config={"source_type": "servicenow", "server": "sn"})
         self.assertFalse(r["success"])
-        self.assertIn("planned", r["error"])
+        self.assertIn("Lakeflow Connect ingestion pipeline", r["error"])
+
+    def test_lakeflow_source_is_stamped_with_destination_table(self):
+        import workflow_manager as wfm
+        with mock.patch("enterprise_sources.lakeflow_destination", return_value="lf.sn.incident"), \
+             mock.patch.object(wfm, "_sync_pipeline_to_dbr", return_value=True), \
+             mock.patch.object(wfm, "_sync_job_to_dbr", return_value=True):
+            r = wfm.create_pipeline_for_table(
+                "servicenow", "incident", source_config={"source_type": "servicenow", "server": "sn"},
+                target_config={"bronze_catalog": "b", "silver_catalog": "s", "target_schema": "x"},
+                pipeline_mode="dlt")
+        self.addCleanup(wfm.PIPELINE_GROUPS.pop, r.get("group_id"), None)
+        self.assertTrue(r["success"])
+        sc = r["group"]["source_config"]
+        self.assertEqual((sc["connector"], sc["lakeflow_table"]), ("lakeflow", "lf.sn.incident"))
+
+    def test_servicenow_rest_is_stamped_with_profile_and_secret_keys(self):
+        import workflow_manager as wfm
+        with mock.patch.object(wfm, "_sync_pipeline_to_dbr", return_value=True), \
+             mock.patch.object(wfm, "_sync_job_to_dbr", return_value=True):
+            r = wfm.create_pipeline_for_table(
+                "servicenow", "incident",
+                source_config={"source_type": "servicenow", "ingestion_method": "rest_api",
+                               "server": "https://x.service-now.com", "api_auth_type": "oauth2",
+                               "username": "my-client-id"},
+                target_config={"bronze_catalog": "b", "silver_catalog": "s", "target_schema": "x"},
+                pipeline_mode="dlt")
+        self.addCleanup(wfm.PIPELINE_GROUPS.pop, r.get("group_id"), None)
+        self.assertTrue(r["success"])
+        sc = r["group"]["source_config"]
+        self.assertEqual(sc["connector"], "api")
+        self.assertEqual(sc["api_profile"]["table_path"], "/api/now/table/{table}")
+        self.assertEqual(sc["oauth_client_secret_key"], "source-servicenow-client-secret")
+        self.assertEqual(sc["oauth_client_id"], "my-client-id")
+        self.assertNotIn("oauth_client_id_key", sc)
+        self.assertNotIn("client_secret", json.dumps(sc).replace("oauth_client_secret_key", ""))
+
+    def _dyn(self, **src):
+        import workflow_manager as wfm
+        with mock.patch.object(wfm, "_sync_pipeline_to_dbr", return_value=True), \
+             mock.patch.object(wfm, "_sync_job_to_dbr", return_value=True):
+            r = wfm.create_pipeline_for_table(
+                "ms_dynamics_crm", "accounts",
+                source_config={"source_type": "ms_dynamics_crm", "ingestion_method": "rest_api",
+                               "server": "https://org.crm.dynamics.com/api/data/v9.2", **src},
+                target_config={"bronze_catalog": "b", "silver_catalog": "s", "target_schema": "x"},
+                pipeline_mode="dlt")
+        self.addCleanup(wfm.PIPELINE_GROUPS.pop, r.get("group_id"), None)
+        return r
+
+    def test_dynamics_rest_oauth_needs_tenant_and_stamps_it(self):
+        r = self._dyn(api_auth_type="oauth2", username="cid")
+        self.assertFalse(r["success"])
+        self.assertIn("Tenant ID", r["error"])
+        r = self._dyn(api_auth_type="oauth2", username="cid", tenant_id="tid")
+        self.assertTrue(r["success"])
+        sc = r["group"]["source_config"]
+        self.assertEqual((sc["connector"], sc["oauth_client_id"], sc["oauth_tenant_id"]), ("api", "cid", "tid"))
+        self.assertEqual(sc["api_profile"]["paging"], "next_link")
+        self.assertEqual(sc["oauth_client_secret_key"], "source-ms-dynamics-crm-client-secret")
+
+    def test_dynamics_rest_no_auth_needs_no_credentials(self):
+        r = self._dyn(api_auth_type="none")
+        self.assertTrue(r["success"])
+        self.assertNotIn("oauth_client_id", r["group"]["source_config"])
+
+    def test_lakeflow_target_colliding_with_ingested_schema_is_blocked(self):
+        import workflow_manager as wfm
+        with mock.patch("enterprise_sources.lakeflow_destination", return_value="b.sn.incident"):
+            r = wfm.create_pipeline_for_table(
+                "servicenow", "incident", source_config={"source_type": "servicenow", "server": "sn"},
+                target_config={"bronze_catalog": "b", "silver_catalog": "s", "target_schema": "sn"},
+                pipeline_mode="dlt")
+        self.assertFalse(r["success"])
+        self.assertIn("Default Schema", r["error"])
 
     def test_ready_source_is_stamped_with_connector(self):
         import workflow_manager as wfm

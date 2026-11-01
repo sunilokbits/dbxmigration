@@ -24,9 +24,9 @@ METHODS = {
     "jdbc":             {"label": "JDBC connector",             "connector": None,       "extract": True},
     "adls_landing":     {"label": "SNP Glue → ADLS landing",    "connector": "adls",     "extract": True},
     "file":             {"label": "File drop (ADLS / Volume)",  "connector": "adls",     "extract": True},
-    "rest_api":         {"label": "REST API",                   "connector": "api",      "extract": False},
-    "streaming":        {"label": "API / streaming",            "connector": "api",      "extract": False},
-    "lakeflow_connect": {"label": "Lakeflow Connect",           "connector": "lakeflow", "extract": False},
+    "rest_api":         {"label": "REST API",                   "connector": "api",      "extract": True},
+    "streaming":        {"label": "API / streaming",            "connector": "api",      "extract": True},
+    "lakeflow_connect": {"label": "Lakeflow Connect",           "connector": "lakeflow", "extract": True},
 }
 
 # Database engines a "jdbc" enterprise source can run on. Limited to the SQL
@@ -51,7 +51,21 @@ BUILTIN = {
     "synapse":    {"label": "Azure Synapse", "icon": "🟪", "category": "database", "secret_key": "source-synapse-password"},
     "snowflake":  {"label": "Snowflake",     "icon": "❄️", "category": "database", "secret_key": "source-snowflake-password"},
     "redshift":   {"label": "Redshift",      "icon": "🟥", "category": "database", "secret_key": "source-redshift-password"},
-    "sharepoint": {"label": "SharePoint",    "icon": "📄", "category": "files",    "secret_key": "source-sharepoint-password"},
+    "sharepoint": {"label": "SharePoint",    "icon": "📄", "category": "files",    "secret_key": "source-sharepoint-password",
+                   # REST per list. OAuth = Microsoft Graph (accepts Entra client secrets, unlike
+                   # SharePoint's own _api for app-only); No Auth = an OData v3 feed in SharePoint's format.
+                   "rest": {"table_path": "/{table}", "paging": "next_link",
+                            "headers": {"Accept": "application/json;odata=nometadata"},
+                            "sample_params": {"$top": 1, "$inlinecount": "allpages"},
+                            "auth_types": ["oauth2", "none"],
+                            "token_url": "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
+                            "scope": "https://graph.microsoft.com/.default",
+                            "by_auth": {"oauth2": {
+                                "api_base": "https://graph.microsoft.com/v1.0/sites/{site}",
+                                "table_path": "/lists/{table}/items", "params": {"expand": "fields"},
+                                "record_key": "fields", "headers": {"Accept": "application/json"},
+                                "sample_params": {"$top": 1, "expand": "fields"},
+                                "count": "paging", "discover_path": "/lists"}}}},
     "api":        {"label": "REST API",      "icon": "🌐", "category": "saas",     "secret_key": "source-api-password"},
 }
 
@@ -69,28 +83,45 @@ _SNP = "SNP Glue (transactional) + direct connection (static) → ADLS (retained
 ENTERPRISE = {
     "sap_ecc": {"label": "SAP ECC", "icon": "🟦", "category": "sap", "methods": ["adls_landing"],
                 "rfp": _rfp(1, "500", "2 TB", "High", True, "10 min", _SNP, "High")},
-    "servicenow": {"label": "ServiceNow", "icon": "🟩", "category": "lakeflow", "methods": ["lakeflow_connect"],
-                   "rfp": _rfp(2, "50", "500 GB", "High", True, "1 hour", "Lakeflow Connect", "Medium")},
-    "ms_dynamics_crm": {"label": "MS Dynamics CRM", "icon": "🟪", "category": "lakeflow", "methods": ["lakeflow_connect"],
-                        "rfp": _rfp(4, "200", "500 GB", "High", True, "1 hour", "Lakeflow Connect", "Medium")},
-    "successfactors": {"label": "SuccessFactors", "icon": "👥", "category": "saas", "methods": ["rest_api"],
+    "servicenow": {"label": "ServiceNow", "icon": "🟩", "category": "lakeflow", "methods": ["lakeflow_connect", "rest_api"],
+                   "rfp": _rfp(2, "50", "500 GB", "High", True, "1 hour", "Lakeflow Connect", "Medium"),
+                   # REST: Table API per object, OAuth client credentials from the secret scope
+                   "rest": {"token_path": "/oauth_token.do", "scope": "useraccount",
+                            "table_path": "/api/now/table/{table}", "limit_param": "sysparm_limit",
+                            "offset_param": "sysparm_offset", "page_size": 1000,
+                            "params": {"sysparm_exclude_reference_link": "true"},
+                            "sample_params": {"sysparm_limit": 1},
+                            "count_path": "/api/now/stats/{table}", "count_params": {"sysparm_count": "true"},
+                            "auth_types": ["oauth2"], "test_table": "incident"}},
+    "ms_dynamics_crm": {"label": "MS Dynamics CRM", "icon": "🟪", "category": "lakeflow", "methods": ["lakeflow_connect", "rest_api"],
+                        "rfp": _rfp(4, "200", "500 GB", "High", True, "1 hour", "Lakeflow Connect", "Medium"),
+                        # REST: Dataverse Web API (OData v4) per entity set, base URL
+                        # https://<org>.crm.dynamics.com/api/data/v9.2; Entra ID client credentials.
+                        "rest": {"token_url": "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
+                                 "scope": "{origin}/.default", "table_path": "/{table}",
+                                 "paging": "next_link",
+                                 "headers": {"OData-Version": "4.0", "OData-MaxVersion": "4.0",
+                                             "Prefer": "odata.maxpagesize=5000"},
+                                 "sample_params": {"$top": 1, "$count": "true"},
+                                 "auth_types": ["oauth2", "none"]}},
+    "successfactors": {"label": "SuccessFactors", "icon": "👥", "category": "saas", "methods": ["rest_api", "file"],
                        "rfp": _rfp(5, "100", "100 GB", "Medium", True, "1 hour", "API", "Medium")},
-    "ms_defender": {"label": "MS Defender for Endpoint", "icon": "🛡️", "category": "saas", "methods": ["rest_api"],
+    "ms_defender": {"label": "MS Defender for Endpoint", "icon": "🛡️", "category": "saas", "methods": ["rest_api", "file"],
                     "rfp": _rfp(6, "100", "100 GB", "Medium", True, "1 day", "API", "Medium")},
     "arkieva": {"label": "Arkieva (via NDP)", "icon": "📈", "category": "database", "methods": ["jdbc"],
                 "engine": "sqlserver",
                 "rfp": _rfp(7, "200", "500 GB", "Medium", False, "12× per day", "JDBC connector", "High")},
-    "project44": {"label": "Project44", "icon": "🚚", "category": "saas", "methods": ["rest_api"],
+    "project44": {"label": "Project44", "icon": "🚚", "category": "saas", "methods": ["rest_api", "file"],
                   "rfp": _rfp(8, "100", "50 GB", "High", True, "1 hour", "API", "High")},
-    "outpost24": {"label": "Outpost24", "icon": "🔐", "category": "saas", "methods": ["rest_api"],
+    "outpost24": {"label": "Outpost24", "icon": "🔐", "category": "saas", "methods": ["rest_api", "file"],
                   "rfp": _rfp(9, "100", "50 GB", "Low", False, "1 day", "API", "Medium")},
-    "onapsis": {"label": "Onapsis", "icon": "🧰", "category": "saas", "methods": ["rest_api"],
+    "onapsis": {"label": "Onapsis", "icon": "🧰", "category": "saas", "methods": ["rest_api", "file"],
                 "rfp": _rfp(10, "100", "50 GB", "Low", False, "1 day", "API", "Medium")},
-    "epi_historian": {"label": "EPI Historian", "icon": "📡", "category": "saas", "methods": ["streaming"],
+    "epi_historian": {"label": "EPI Historian", "icon": "📡", "category": "saas", "methods": ["streaming", "file"],
                       "rfp": _rfp(11, "TBD", "5 TB*", "High", True, "5 min", "API / streaming", "High")},
-    "sap_ariba": {"label": "SAP Ariba", "icon": "🛒", "category": "saas", "methods": ["rest_api"],
+    "sap_ariba": {"label": "SAP Ariba", "icon": "🛒", "category": "saas", "methods": ["rest_api", "file"],
                   "rfp": _rfp(12, "100", "100 GB", "High", True, "1 hour", "API", "High")},
-    "anaplan": {"label": "Anaplan", "icon": "📊", "category": "saas", "methods": ["rest_api"],
+    "anaplan": {"label": "Anaplan", "icon": "📊", "category": "saas", "methods": ["rest_api", "file"],
                 "rfp": _rfp(13, "50", "500 GB", "High", False, "1 hour", "API", "High")},
     "sap_tms": {"label": "SAP TMS", "icon": "🟦", "category": "sap", "methods": ["adls_landing"],
                 "rfp": _rfp(14, "100", "100 GB", "High", True, "10 min", _SNP, "Medium")},
@@ -143,6 +174,28 @@ def connector_type(cfg) -> str:
     return METHODS[method]["connector"]
 
 
+def merge_saved_source(data: dict) -> dict:
+    """Fill enterprise-only keys missing from a request payload from the saved
+    Settings source config. Screens like Pipeline Studio have no fields for
+    ingestion_method / engine / file_format / objects, so payloads built there
+    would otherwise silently lose them (e.g. a Lakeflow source 'discovering'
+    0 tables because objects never reached the backend)."""
+    st = (data or {}).get("source_type", "")
+    if st not in ENTERPRISE and not rest_profile(st):
+        return data
+    try:
+        from config_cache import get_config
+        saved = (get_config() or {}).get("source") or {}
+    except Exception:
+        return data
+    if saved.get("source_type") != st:
+        return data
+    for k in ("ingestion_method", "engine", "file_format", "objects", "tenant_id", "api_auth_type"):
+        if not data.get(k) and saved.get(k):
+            data[k] = saved[k]
+    return data
+
+
 def can_extract(cfg: dict):
     """(ok, reason). Built-in types keep their existing behaviour (always allowed)."""
     st = (cfg or {}).get("source_type") or "sqlserver"
@@ -168,10 +221,49 @@ def secret_key(source_type: str) -> str:
     return "source-sql-password"
 
 
+def rest_profile(source_type: str, auth: str = ""):
+    """REST API profile (table path, paging, OAuth) of a source, else None. With `auth`,
+    the profile's per-auth overrides (by_auth) are applied."""
+    prof = (ENTERPRISE.get(source_type) or BUILTIN.get(source_type) or {}).get("rest")
+    if not prof:
+        return None
+    eff = {k: v for k, v in prof.items() if k != "by_auth"}
+    eff.update((prof.get("by_auth") or {}).get(auth) or {})
+    return eff
+
+
+def rest_api_base(server: str, prof: dict) -> str:
+    """API root for a source URL: the URL itself, or the profile's api_base with {site}
+    = Graph site address (host:/server-relative-path: or just host for a root site)."""
+    base = (server or "").strip().rstrip("/")
+    if not (prof or {}).get("api_base"):
+        return base
+    host, _, path = base.split("//", 1)[-1].partition("/")
+    site = f"{host}:/{path}:" if path else host
+    return prof["api_base"].replace("{site}", site)
+
+
+def oauth_client_secret_key(source_type: str):
+    """Secret key holding the OAuth client secret for REST sources with an OAuth
+    profile, else None. The client ID is not secret and lives in the source config."""
+    if not (ENTERPRISE.get(source_type) or {}).get("rest"):
+        return None
+    return f"source-{source_type.replace('_', '-')}-client-secret"
+
+
+def rest_oauth_secret_key(source_type: str) -> str:
+    """Secret holding a REST source's OAuth client secret (SharePoint keeps its source password key)."""
+    return oauth_client_secret_key(source_type) or secret_key(source_type)
+
+
 def all_secret_keys() -> dict:
     """{secret_key: description} for every source (used to whitelist Settings writes)."""
     keys = {v["secret_key"]: f"{v['label']} source password" for v in BUILTIN.values()}
     keys.update({_secret_key_for(k): f"{v['label']} source secret" for k, v in ENTERPRISE.items()})
+    for k, v in ENTERPRISE.items():
+        sk = oauth_client_secret_key(k)
+        if sk:
+            keys[sk] = f"{v['label']} OAuth client secret"
     return keys
 
 
@@ -194,11 +286,15 @@ def client_payload() -> dict:
     for k, v in BUILTIN.items():
         sources.append({"key": k, "label": v["label"], "icon": v["icon"], "category": v["category"],
                         "builtin": True, "methods": [], "connector": k, "secret_key": v["secret_key"],
-                        "readiness": "ready", "rfp": SHAREPOINT_RFP if k == "sharepoint" else None})
+                        "readiness": "ready", "rfp": SHAREPOINT_RFP if k == "sharepoint" else None,
+                        "rest_objects": bool(v.get("rest")),
+                        "rest_tenant": "{tenant}" in (v.get("rest") or {}).get("token_url", "")})
     for k, v in ENTERPRISE.items():
         sources.append({"key": k, "label": v["label"], "icon": v["icon"], "category": v["category"],
                         "builtin": False, "methods": list(v["methods"]), "engine": v.get("engine", ""),
                         "connector": connector_type(k), "secret_key": _secret_key_for(k),
+                        "rest_objects": bool(v.get("rest")),
+                        "rest_tenant": "{tenant}" in (v.get("rest") or {}).get("token_url", ""),
                         "readiness": {m: readiness(k, m) for m in v["methods"]}, "rfp": v["rfp"]})
     return {
         "categories": CATEGORIES,

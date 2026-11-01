@@ -1864,6 +1864,7 @@ async function _wfSaveSourceToConfig(){
     const lr=await fetch('/api/v1/deploy-config');
     const ld=await lr.json();
     const cfg=ld.success?ld.config:{};
+    const _prevSrc=(cfg.source&&typeof cfg.source==='object')?{...cfg.source}:{};
     const _st=(G('wfSrcType')||{}).value||'sqlserver';
     cfg.source={
       source_type: _st,
@@ -1885,7 +1886,15 @@ async function _wfSaveSourceToConfig(){
       cfg.source.api_key_header=(G('wfSrcApiKeyHeader')||{}).value?.trim()||'';
     }
     // Keep enterprise-only keys (ingestion method, file format, objects, ...)
-    if(typeof srcRegistryExtras==='function') Object.assign(cfg.source, srcRegistryExtras(_st));
+    // but never clobber a saved non-empty value with an empty field from a
+    // screen that doesn't render those inputs (e.g. Pipeline Studio).
+    if(typeof srcRegistryExtras==='function'){
+      const _ex=srcRegistryExtras(_st);
+      Object.keys(_ex).forEach(k=>{
+        if((_ex[k]===''||_ex[k]==null)&&_prevSrc.source_type===_st&&_prevSrc[k]) _ex[k]=_prevSrc[k];
+      });
+      Object.assign(cfg.source, _ex);
+    }
     await fetch('/api/v1/deploy-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
   }catch(e){console.warn('Could not save source to config:',e);}
 }
@@ -1895,7 +1904,7 @@ async function wfTestConnection(){
   const _nonSqlTc=_NON_SQL_SRC(c.source_type);
   if(_nonSqlTc){
     if(!c.server){toast('Enter the source URL','terr');return;}
-    if(c.source_type==='sharepoint'&&(!c.tenant_id||!c.username)){toast('Enter Tenant ID and Client ID for SharePoint','terr');return;}
+    if(c.source_type==='sharepoint'&&c.api_auth_type!=='none'&&(!c.tenant_id||!c.username)){toast('Enter Tenant ID and Client ID for SharePoint','terr');return;}
   }
   else if(!c.server||!c.database||!c.username){toast('Enter server, database and username','terr');return;}
   const btn=G('btnWfTest');btn.disabled=true;btn.textContent='Testing…';
@@ -1940,7 +1949,7 @@ async function wfFetchTables(){
   if(_isSf){if(!c.account||!c.username){toast('Enter account and username','terr');return;}}
   else if(_isNonSqlFt){
     if(!c.server){toast('Enter the source URL','terr');return;}
-    if(c.source_type==='sharepoint'&&(!c.tenant_id||!c.username)){toast('Enter Tenant ID and Client ID for SharePoint','terr');return;}
+    if(c.source_type==='sharepoint'&&c.api_auth_type!=='none'&&(!c.tenant_id||!c.username)){toast('Enter Tenant ID and Client ID for SharePoint','terr');return;}
   }
   else{if(!c.server||!c.database||!c.username){toast('Enter server, database and username','terr');return;}}
   const schemaFilter=(G('wfSrcSchemaSelect')||{}).value||'';
@@ -2580,6 +2589,9 @@ function _wfRenderFilteredPipelines(){
     const sf=((G('wfPipelineStatusFilter')||{}).value||'');
     if(q) groups=groups.filter(g=>(g.full_table||'').toLowerCase().includes(q)||(g.table_name||'').toLowerCase().includes(q));
     if(sf) groups=groups.filter(g=>g.status===sf);
+    // Newest first: latest activity (the 🕐 time shown), else creation time
+    const _ts=g=>Date.parse(g.last_activity||g.created_at||'')||0;
+    groups=[...groups].sort((a,b)=>_ts(b)-_ts(a));
 
     if(!groups.length){
       el.innerHTML='<div class="empty" style="padding:24px;"><div class="empty-ico">🔗</div><div class="empty-t">'+(q||sf?'No pipelines match filter':'No pipelines yet — use Quick Create to get started')+'</div></div>';
@@ -3261,7 +3273,8 @@ function cfgOnSrcTypeChange(selectEl){
   _show('cfgSrcMethodRow',_isEnt);
   _show('cfgSrcEngineRow',_isEnt&&typeof srcMethod==='function'&&srcMethod(raw,(G('cfgSrcMethod')||{}).value)==='jdbc');
   _show('cfgSrcFormatRow',isFile);
-  _show('cfgSrcObjectsRow',isLf);
+  // REST sources with a table-API profile (ServiceNow, Dynamics, SharePoint) take an object list too
+  _show('cfgSrcObjectsRow',isLf||((v==='api'||v==='sharepoint')&&!!(_info&&_info.rest_objects)));
   // File and Lakeflow sources carry no username/password here (ADLS access is
   // via the workspace; Lakeflow credentials live in the UC connection).
   [G('cfgSrcUser'),G('cfgSrcPass')].forEach(el=>{if(el&&el.parentElement)el.parentElement.style.display=(isFile||isLf)?'none':'';});
@@ -3280,10 +3293,11 @@ function cfgOnSrcTypeChange(selectEl){
   // SharePoint fields
   const spTenantRow=G('cfgSrcSpTenantRow');if(spTenantRow)spTenantRow.style.display=isSp?'':'none';
   // REST API fields
-  const apiAuthRow=G('cfgSrcApiAuthRow');if(apiAuthRow)apiAuthRow.style.display=isApi?'':'none';
-  if(typeof cfgOnApiAuthChange==='function')cfgOnApiAuthChange();
+  const apiAuthRow=G('cfgSrcApiAuthRow');if(apiAuthRow)apiAuthRow.style.display=(isApi||(isSp&&!!(_info&&_info.rest_objects)))?'':'none';
   // Dynamic labels
   _applySrcLabels('cfgSrc', v);
+  // After the labels: OAuth relabels Username/Secret as Client ID/Secret
+  if(typeof cfgOnApiAuthChange==='function')cfgOnApiAuthChange();
 }
 window.cfgOnSrcTypeChange=cfgOnSrcTypeChange;
 
@@ -3292,6 +3306,17 @@ function cfgOnApiAuthChange(){
   const sel=G('cfgSrcApiAuthType');if(!sel)return;
   const row=G('cfgSrcApiKeyHeaderRow');
   if(row)row.style.display=sel.value==='api_key'?'':'none';
+  // OAuth client id/secret are entered here and saved to the secret scope
+  const apiRow=G('cfgSrcApiAuthRow');
+  if(apiRow&&apiRow.style.display!=='none'){
+    const oa=sel.value==='oauth2';
+    _setLbl('cfgSrcUserLabel', oa?'Client ID':'Username');
+    _setLbl('cfgSrcPassLabel', oa?'Client Secret':'Secret / Token');
+    // Entra ID OAuth (MS Dynamics CRM / Dataverse) also needs the Tenant ID
+    const _raw=(G('cfgSrcType')||{}).value;
+    const _inf=(typeof srcInfo==='function')?srcInfo(_raw):null;
+    const tr=G('cfgSrcSpTenantRow');if(tr)tr.style.display=(oa&&_inf&&_inf.rest_tenant)?'':'none';
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -3827,7 +3852,7 @@ function _populateConfig(c){
   if(G('cfgSrcSnowDb'))    G('cfgSrcSnowDb').value=src.database||'';
   // SharePoint / REST API fields
   if(G('cfgSrcSpTenantId'))    G('cfgSrcSpTenantId').value=src.tenant_id||'';
-  if(G('cfgSrcApiAuthType'))   G('cfgSrcApiAuthType').value=src.api_auth_type||'none';
+  if(G('cfgSrcApiAuthType'))   G('cfgSrcApiAuthType').value=src.api_auth_type||(src.source_type==='sharepoint'?'oauth2':'none');
   if(G('cfgSrcApiKeyHeader'))  G('cfgSrcApiKeyHeader').value=src.api_key_header||'';
   if(typeof cfgSyncSourceExtras==='function') cfgSyncSourceExtras(src);
   // Toggle visibility based on source type
@@ -3848,7 +3873,7 @@ function _populateConfig(c){
   if(G('wfSrcSnowDb'))    G('wfSrcSnowDb').value=src.database||'';
   // SharePoint / REST API Pipeline Studio fields
   if(G('wfSrcTenantId'))     G('wfSrcTenantId').value=src.tenant_id||'';
-  if(G('wfSrcApiAuthType'))  G('wfSrcApiAuthType').value=src.api_auth_type||'none';
+  if(G('wfSrcApiAuthType'))  G('wfSrcApiAuthType').value=src.api_auth_type||(src.source_type==='sharepoint'?'oauth2':'none');
   if(G('wfSrcApiKeyHeader')) G('wfSrcApiKeyHeader').value=src.api_key_header||'';
   if(typeof onWfSrcTypeChange==='function') onWfSrcTypeChange(G('wfSrcType'));
   // Show source info in Pipeline Studio compact card
@@ -3901,7 +3926,7 @@ window.cfgUpdateStatus=function(){
   if(_stCfg==='adls')           _srcOk=filled('cfgSrcServer');
   else if(_stCfg==='lakeflow')  _srcOk=filled('cfgSrcServer')&&filled('cfgSrcObjects');
   else if(_stCfg==='snowflake') _srcOk=filled('cfgSrcAccount');
-  else if(_stCfg==='sharepoint')_srcOk=filled('cfgSrcServer')&&filled('cfgSrcSpTenantId')&&filled('cfgSrcUser');
+  else if(_stCfg==='sharepoint')_srcOk=filled('cfgSrcServer')&&(((G('cfgSrcApiAuthType')||{}).value==='none')||(filled('cfgSrcSpTenantId')&&filled('cfgSrcUser')));
   else if(_stCfg==='api')       _srcOk=filled('cfgSrcServer');
   else                          _srcOk=filled('cfgSrcServer')&&filled('cfgSrcDb');
   dot('cfgStatSrc',_srcOk);
@@ -4088,12 +4113,12 @@ async function cfgTestSourceConn(){
   } else if(srcType==='sharepoint'){
     const tenantId=G('cfgSrcSpTenantId')?.value?.trim();
     if(!server){toast('Fill in the SharePoint Site URL','terr');return;}
-    if(!tenantId||!user){toast('Fill in Tenant ID and Client ID','terr');return;}
+    if((G('cfgSrcApiAuthType')||{}).value!=='none'&&(!tenantId||!user)){toast('Fill in Tenant ID and Client ID','terr');return;}
   } else if(_ui==='api'){
     if(!server){toast('Fill in the API Base URL','terr');return;}
     const at=(G('cfgSrcApiAuthType')||{}).value||'none';
     if(at==='basic'&&!user){toast('Fill in a username for Basic Auth','terr');return;}
-    if(at!=='none'&&!pwd){toast('Fill in the secret for '+at+' auth','terr');return;}
+    if(at!=='none'&&at!=='oauth2'&&!pwd){toast('Fill in the secret for '+at+' auth','terr');return;}
   } else {
     if(!server||!db||!user){toast('Fill in server, database and username','terr');return;}
   }
