@@ -20,7 +20,7 @@ class TestAcceleratorVideo(unittest.TestCase):
         html = open(os.path.join(HERE, "templates", "index.html"), encoding="utf-8").read()
         modal = html[html.index("ACCELERATOR VIDEO MODAL"):html.index('<script src="/static/supplementary.js')]
         self.assertIn('<video id="accelVideo" controls', modal)
-        self.assertIn('src="/static/video/insight_migration_studio_showcase.mp4"', modal)
+        self.assertRegex(modal, r'<source src="/static/video/insight_migration_studio_showcase\.mp4(\?v=\w+)?" type="video/mp4">')
         self.assertIn('download="Insight_Migration_Studio_Showcase.mp4"', modal)
         self.assertNotIn("vidVoiceToggle", modal)
 
